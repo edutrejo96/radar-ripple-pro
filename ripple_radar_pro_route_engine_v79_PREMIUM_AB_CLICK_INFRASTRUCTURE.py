@@ -171,8 +171,8 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v86_2026_05_12_RADAR_FM_GITHUB_RAW_STATIC_FIX"
-BUILD_NOTE = "Cinemática tipo video con velas XRP por escenarios + Radar FM JS persistente sin modo seguro + A-B premium deduplicado"
+BUILD_ID = "v87_2026_05_12_CINEMATIC_SAFE_FLOAT_FIX_RADAR_FM_OK"
+BUILD_NOTE = "Fix cinematica _safe_float + Radar FM funcionando con GitHub Raw/static + A-B premium deduplicado"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
 import os as _os
@@ -7852,15 +7852,23 @@ _MAX_IOU = 50_000_000.0
 _MAX_DISPLAY_VOL = 999_999_999.0   # >999 M → mostrar como overflow
 
 
-def _safe_float(raw) -> float:
-    """Convierte a float con capping anti-overflow para valores XRPL."""
+def _safe_float(raw, default: float = 0.0) -> float:
+    """Convierte a float de forma segura.
+
+    Acepta un segundo parámetro `default` porque varios módulos nuevos
+    de Cinemática llaman `_safe_float(valor, 0.0)`. La versión antigua
+    solo aceptaba un argumento y provocaba error al abrir Cinemática.
+    """
     try:
         v = float(raw)
         if v != v or v == float("inf") or v == float("-inf"):
-            return 0.0
+            return float(default)
         return v
     except (ValueError, TypeError, OverflowError):
-        return 0.0
+        try:
+            return float(default)
+        except Exception:
+            return 0.0
 
 
 def _cur_display(cur: str) -> str:
