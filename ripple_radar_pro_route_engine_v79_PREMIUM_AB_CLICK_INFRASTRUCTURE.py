@@ -171,7 +171,7 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v85_2026_05_12_RADAR_FM_JS_PERSISTENT_NO_SAFE_CINEMATIC_AB"
+BUILD_ID = "v86_2026_05_12_RADAR_FM_GITHUB_RAW_STATIC_FIX"
 BUILD_NOTE = "Cinemática tipo video con velas XRP por escenarios + Radar FM JS persistente sin modo seguro + A-B premium deduplicado"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
@@ -15993,6 +15993,7 @@ def inject_music_player() -> None:
                     f"/static/musica/{name}",
                     f"static/musica/{name}",
                     f"./static/musica/{name}",
+                    f"https://raw.githubusercontent.com/edutrejo96/radar-ripple-pro/main/static/musica/{name}",
                 ],
             })
 
@@ -16031,7 +16032,7 @@ def inject_music_player() -> None:
 <body>
 <div class="box">
   <div class="top">
-    <div class="title">🎧 RADAR FM · reproductor persistente</div>
+    <div class="title">🎧 RADAR FM · reproductor persistente v86</div>
     <div class="pill"><span id="count"></span> tracks · sin modo seguro</div>
   </div>
 
@@ -16059,13 +16060,13 @@ def inject_music_player() -> None:
     <div class="s"><b>Modo</b><span id="stMode">secuencial</span></div>
   </div>
 
-  <div class="log" id="log">Pulsa “Activar / Play” una vez. Desde ese mismo reproductor, el final de canción y el arrastre al final deberían pasar al siguiente track.</div>
+  <div class="log" id="log">Pulsa “Activar / Play” una vez. v86 prueba rutas Streamlit y GitHub Raw; el final de canción y el arrastre al final deberían pasar al siguiente track.</div>
 </div>
 <script>
 const playlist = {playlist_json};
-let idx = parseInt(localStorage.getItem('rrp_fm_idx_v85') || '0', 10);
-let shuffle = (localStorage.getItem('rrp_fm_shuffle_v85') || '0') === '1';
-let unlocked = (localStorage.getItem('rrp_fm_unlocked_v85') || '0') === '1';
+let idx = parseInt(localStorage.getItem('rrp_fm_idx_v86') || '0', 10);
+let shuffle = (localStorage.getItem('rrp_fm_shuffle_v86') || '0') === '1';
+let unlocked = (localStorage.getItem('rrp_fm_unlocked_v86') || '0') === '1';
 let currentObjectUrl = null;
 let currentCandidate = null;
 let loading = false;
@@ -16081,8 +16082,36 @@ const stMode = document.getElementById('stMode');
 document.getElementById('count').textContent = playlist.length;
 
 function log(msg, cls='') {{ logEl.className = 'log ' + cls; logEl.textContent = msg; }}
-function clamp() {{ if (!playlist.length) idx = 0; else idx = ((idx % playlist.length) + playlist.length) % playlist.length; localStorage.setItem('rrp_fm_idx_v85', String(idx)); }}
+function clamp() {{ if (!playlist.length) idx = 0; else idx = ((idx % playlist.length) + playlist.length) % playlist.length; localStorage.setItem('rrp_fm_idx_v86', String(idx)); }}
 function status() {{ stAudio.textContent = unlocked ? 'desbloqueado' : 'bloqueado'; stRoute.textContent = currentCandidate || 'pendiente'; stMode.textContent = shuffle ? 'aleatorio' : 'secuencial'; }}
+function parentOrigin() {{
+  try {{ if (document.referrer) return new URL(document.referrer).origin; }} catch(e) {{}}
+  try {{ return window.location.origin; }} catch(e) {{ return ''; }}
+}}
+function expandedCandidates(t) {{
+  const base = parentOrigin();
+  const arr = [];
+  if (base) {{
+    arr.push(base + '/app/static/musica/' + encodeURIComponent(t.file));
+    arr.push(base + '/static/musica/' + encodeURIComponent(t.file));
+  }}
+  for (const u of t.candidates) arr.push(u);
+  return [...new Set(arr)];
+}}
+function waitForPlayable(timeoutMs=3500) {{
+  return new Promise((resolve) => {{
+    if (audio.readyState >= 2) return resolve(true);
+    let done = false;
+    const cleanup = () => {{ audio.removeEventListener('canplay', onok); audio.removeEventListener('loadeddata', onok); audio.removeEventListener('error', onerr); }};
+    const finish = (v) => {{ if (done) return; done = true; cleanup(); resolve(v); }};
+    const onok = () => finish(true);
+    const onerr = () => finish(false);
+    audio.addEventListener('canplay', onok, {{once:true}});
+    audio.addEventListener('loadeddata', onok, {{once:true}});
+    audio.addEventListener('error', onerr, {{once:true}});
+    setTimeout(() => finish(audio.readyState >= 2), timeoutMs);
+  }});
+}}
 function updateUi() {{
   clamp();
   const t = playlist[idx];
@@ -16115,11 +16144,17 @@ async function loadTrack(i) {{
   let lastErr = '';
 
   // Estrategia 1: fetch -> Blob -> objectURL, mantiene control dentro del iframe.
-  for (const url of t.candidates) {{
+  for (const url of expandedCandidates(t)) {{
     try {{
       const res = await fetch(url, {{ cache:'force-cache' }});
       if (!res.ok) {{ lastErr = url + ' HTTP ' + res.status; continue; }}
+      const ctype = (res.headers.get('content-type') || '').toLowerCase();
       const blob = await res.blob();
+      const btype = (blob.type || '').toLowerCase();
+      if (!(ctype.startsWith('audio/') || btype.startsWith('audio/') || url.includes('raw.githubusercontent.com'))) {{
+        lastErr = url + ' no parece audio: ' + (ctype || btype || 'sin content-type');
+        continue;
+      }}
       const okBlob = await testDecode(blob);
       if (!okBlob) {{ lastErr = url + ' blob inválido: ' + (blob ? blob.size : 0); continue; }}
       currentObjectUrl = URL.createObjectURL(blob);
@@ -16134,7 +16169,7 @@ async function loadTrack(i) {{
   }}
 
   // Estrategia 2: fuente directa por si fetch queda sandboxed pero <audio> sí puede leer.
-  for (const url of t.candidates) {{
+  for (const url of expandedCandidates(t)) {{
     try {{
       currentCandidate = url + ' directo';
       audio.src = url;
@@ -16153,9 +16188,11 @@ async function loadTrack(i) {{
 }}
 async function playLoaded(reason='play') {{
   try {{
+    const ready = await waitForPlayable(4500);
+    if (!ready) throw new Error('audio no listo: readyState=' + audio.readyState + ' ruta=' + (currentCandidate || 'n/a'));
     await audio.play();
     unlocked = true;
-    localStorage.setItem('rrp_fm_unlocked_v85','1');
+    localStorage.setItem('rrp_fm_unlocked_v86','1');
     updateUi();
     log(reason + ': ' + playlist[idx].title, 'ok');
     return true;
@@ -16167,7 +16204,7 @@ async function playLoaded(reason='play') {{
 }}
 async function playCurrent() {{
   unlocked = true;
-  localStorage.setItem('rrp_fm_unlocked_v85','1');
+  localStorage.setItem('rrp_fm_unlocked_v86','1');
   if (!audio.src) {{ const ok = await loadTrack(idx); if (!ok) return; }}
   await playLoaded('Reproduciendo');
 }}
@@ -16186,10 +16223,10 @@ document.getElementById('activate').onclick = playCurrent;
 document.getElementById('next').onclick = () => goNext(false);
 document.getElementById('prev').onclick = goPrev;
 document.getElementById('stop').onclick = () => {{ audio.pause(); log('Pausado.'); }};
-document.getElementById('shuffle').onclick = () => {{ shuffle = !shuffle; localStorage.setItem('rrp_fm_shuffle_v85', shuffle?'1':'0'); updateUi(); }};
+document.getElementById('shuffle').onclick = () => {{ shuffle = !shuffle; localStorage.setItem('rrp_fm_shuffle_v86', shuffle?'1':'0'); updateUi(); }};
 select.onchange = async () => {{ await goTo(parseInt(select.value,10), false); }};
 
-audio.addEventListener('play', () => {{ unlocked = true; localStorage.setItem('rrp_fm_unlocked_v85','1'); updateUi(); }});
+audio.addEventListener('play', () => {{ unlocked = true; localStorage.setItem('rrp_fm_unlocked_v86','1'); updateUi(); }});
 audio.addEventListener('ended', () => goNext(true));
 audio.addEventListener('timeupdate', () => {{
   try {{
