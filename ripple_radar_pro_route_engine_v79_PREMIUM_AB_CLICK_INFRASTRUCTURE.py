@@ -171,7 +171,7 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v83_2026_05_12_CINEMATIC_FIX_SAFE_FM_AB_DEDUP"
+BUILD_ID = "v84_2026_05_12_RADAR_FM_AUTONEXT_REAL_CINEMATIC_AB"
 BUILD_NOTE = "Cinemática tipo video con velas XRP por escenarios + Radar FM modo seguro + A-B premium deduplicado"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
@@ -15908,20 +15908,19 @@ def purge_legacy_preconfigured_routes(conn: sqlite3.Connection) -> int:
 
 
 def inject_music_player() -> None:
-    """Radar FM estable dentro de Streamlit.
+    """Radar FM dentro de la app con auto-next real.
 
-    Se elimina el reproductor HTML problemático. La reproducción principal usa st.audio
-    leyendo los MP3 desde static/musica. Incluye anterior, siguiente, aleatorio y un
-    auto-siguiente aproximado mediante temporizador cuando el usuario activa Cargar/Play.
+    Esta versión usa un reproductor HTML interno SOLO para Radar FM, porque st.audio
+    no expone a Python el evento real ended ni detecta si el usuario arrastra el cursor
+    al final. El componente HTML sí escucha ended, así que puede pasar a la siguiente
+    aunque el usuario mueva manualmente la barra al final.
 
-    Nota honesta: st.audio no emite a Python el evento real "ended" del navegador, por eso
-    el auto-siguiente perfecto solo es posible con un componente HTML propio. Aquí se usa
-    un avance estimado por duración/temporizador para mantenerlo robusto en Streamlit Cloud.
+    Debajo queda un modo seguro con st.audio como diagnóstico/fallback.
     """
     try:
         import os as _os
+        import json as _json
         import random as _random
-        import time as _time_local
         from pathlib import Path as _Path
 
         exts = (".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac")
@@ -15968,7 +15967,7 @@ def inject_music_player() -> None:
                         box-shadow:0 10px 32px rgba(0,212,255,.10);">
               <div style="display:flex;align-items:center;justify-content:space-between;gap:.8rem;">
                 <div style="font-weight:900;color:#67E8F9;">🎧 Radar FM</div>
-                <div style="font-size:.72rem;color:#94A3B8;border:1px solid rgba(148,163,184,.28);border-radius:999px;padding:.12rem .55rem;">modo seguro · st.audio</div>
+                <div style="font-size:.72rem;color:#94A3B8;border:1px solid rgba(148,163,184,.28);border-radius:999px;padding:.12rem .55rem;">auto-next real · dentro de la app</div>
               </div>
             """,
             unsafe_allow_html=True,
@@ -15985,103 +15984,178 @@ def inject_music_player() -> None:
             st.markdown("</div>", unsafe_allow_html=True)
             return
 
-        if "rrp_fm_idx" not in st.session_state:
-            st.session_state["rrp_fm_idx"] = 0
-        if "rrp_fm_shuffle" not in st.session_state:
-            st.session_state["rrp_fm_shuffle"] = False
-        if "rrp_fm_autonext" not in st.session_state:
-            st.session_state["rrp_fm_autonext"] = False
-        if "rrp_fm_started_at" not in st.session_state:
-            st.session_state["rrp_fm_started_at"] = None
+        # Playlist servida por la ruta estática de Streamlit. Si /app/static no funciona,
+        # el JS prueba también /static y rutas relativas.
+        playlist = []
+        for i, p in enumerate(tracks):
+            name = p.name
+            stem = p.stem
+            playlist.append({
+                "title": f"{i+1:02d} · {stem}",
+                "file": name,
+                "candidates": [
+                    f"/app/static/musica/{name}",
+                    f"/static/musica/{name}",
+                    f"static/musica/{name}",
+                    f"./static/musica/{name}",
+                ],
+            })
 
-        idx = int(st.session_state.get("rrp_fm_idx", 0))
-        idx = max(0, min(idx, len(tracks)-1))
-        st.session_state["rrp_fm_idx"] = idx
-        current = tracks[idx]
+        playlist_json = _json.dumps(playlist, ensure_ascii=False)
+        html_doc = f"""
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {{ color-scheme: dark; }}
+  body {{ margin:0; font-family: Inter, Segoe UI, Arial, sans-serif; background:transparent; color:#e5e7eb; }}
+  .box {{ border:1px solid rgba(56,189,248,.35); border-radius:18px; padding:14px; background:linear-gradient(135deg,rgba(2,6,23,.96),rgba(15,23,42,.92)); box-shadow:0 18px 50px rgba(0,212,255,.12); }}
+  .top {{ display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap; }}
+  .title {{ font-weight:900; color:#67e8f9; font-size:16px; }}
+  .pill {{ border:1px solid rgba(148,163,184,.32); color:#cbd5e1; border-radius:999px; padding:4px 10px; font-size:12px; }}
+  .now {{ margin:12px 0; padding:12px; border-radius:14px; background:rgba(15,23,42,.82); border:1px solid rgba(51,65,85,.75); }}
+  .now b {{ color:#fff; }}
+  .btns {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin:10px 0; }}
+  button {{ background:#0f172a; color:#e5e7eb; border:1px solid rgba(56,189,248,.45); border-radius:12px; padding:10px 8px; cursor:pointer; font-weight:800; }}
+  button:hover {{ background:#172554; border-color:#67e8f9; }}
+  .primary {{ background:linear-gradient(135deg,#0891b2,#2563eb); color:white; }}
+  select {{ width:100%; background:#020617; color:#e5e7eb; border:1px solid rgba(56,189,248,.35); border-radius:12px; padding:10px; margin:8px 0; }}
+  audio {{ width:100%; margin:8px 0 4px 0; }}
+  .log {{ font-size:12px; color:#94a3b8; margin-top:8px; line-height:1.45; white-space:pre-wrap; }}
+  .warn {{ color:#fbbf24; }}
+  .ok {{ color:#86efac; }}
+  @media(max-width:640px) {{ .btns {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} }}
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="top">
+    <div class="title">RADAR FM · reproductor interno</div>
+    <div class="pill"><span id="count"></span> tracks · auto-next real</div>
+  </div>
+  <div class="now"><b>Ahora:</b> <span id="nowTitle">—</span><br><span style="color:#94a3b8" id="nowFile">—</span></div>
+  <audio id="audio" controls preload="metadata" playsinline></audio>
+  <div class="btns">
+    <button id="prev">⏮️ Anterior</button>
+    <button id="play" class="primary">▶️ Play / desbloquear</button>
+    <button id="next">⏭️ Siguiente</button>
+    <button id="shuffle">🎲 Aleatorio: OFF</button>
+  </div>
+  <select id="select"></select>
+  <div class="log" id="log">Pulsa Play una vez. Después, si arrastras el cursor al final o termina la canción, pasará a la siguiente.</div>
+</div>
+<script>
+const playlist = {playlist_json};
+let idx = parseInt(localStorage.getItem('rrp_fm_idx') || '0', 10);
+let shuffle = (localStorage.getItem('rrp_fm_shuffle') || '0') === '1';
+let unlocked = false;
+let currentObjectUrl = null;
+const audio = document.getElementById('audio');
+const nowTitle = document.getElementById('nowTitle');
+const nowFile = document.getElementById('nowFile');
+const logEl = document.getElementById('log');
+const select = document.getElementById('select');
+const shuffleBtn = document.getElementById('shuffle');
+document.getElementById('count').textContent = playlist.length;
 
-        def _fmt(path):
-            ext = path.suffix.lower()
-            return {".mp3":"audio/mp3", ".wav":"audio/wav", ".ogg":"audio/ogg", ".m4a":"audio/mp4", ".aac":"audio/aac", ".flac":"audio/flac"}.get(ext, "audio/mp3")
+function log(msg, cls='') {{
+  logEl.className = 'log ' + cls;
+  logEl.textContent = msg;
+}}
+function clamp() {{ if (!playlist.length) idx = 0; else idx = ((idx % playlist.length) + playlist.length) % playlist.length; localStorage.setItem('rrp_fm_idx', String(idx)); }}
+function updateUi() {{
+  clamp();
+  const t = playlist[idx];
+  nowTitle.textContent = t.title;
+  nowFile.textContent = t.file;
+  select.value = String(idx);
+  shuffleBtn.textContent = shuffle ? '🎲 Aleatorio: ON' : '🎲 Aleatorio: OFF';
+}}
+function fillSelect() {{
+  select.innerHTML = '';
+  playlist.forEach((t, i) => {{
+    const opt = document.createElement('option'); opt.value = String(i); opt.textContent = t.title; select.appendChild(opt);
+  }});
+}}
+async function loadTrack(i) {{
+  idx = i; clamp(); updateUi();
+  const t = playlist[idx];
+  if (currentObjectUrl) {{ try {{ URL.revokeObjectURL(currentObjectUrl); }} catch(e) {{}} currentObjectUrl = null; }}
+  let lastErr = '';
+  for (const url of t.candidates) {{
+    try {{
+      const res = await fetch(url, {{cache:'force-cache'}});
+      if (!res.ok) {{ lastErr = url + ' -> HTTP ' + res.status; continue; }}
+      const blob = await res.blob();
+      if (!blob || blob.size < 4096) {{ lastErr = url + ' -> blob demasiado pequeño'; continue; }}
+      currentObjectUrl = URL.createObjectURL(blob);
+      audio.src = currentObjectUrl;
+      audio.load();
+      log('Track cargado dentro de la app: ' + t.file, 'ok');
+      return true;
+    }} catch(e) {{ lastErr = url + ' -> ' + e; }}
+  }}
+  log('Error de audio: no pude cargar este track. Último intento: ' + lastErr, 'warn');
+  return false;
+}}
+async function playCurrent() {{
+  unlocked = true;
+  if (!audio.src) {{ const ok = await loadTrack(idx); if (!ok) return; }}
+  try {{ await audio.play(); log('Reproduciendo: ' + playlist[idx].title, 'ok'); }}
+  catch(e) {{ log('El navegador bloqueó el play (' + (e.name || e) + '). Pulsa el botón ▶ nativo del reproductor una vez.', 'warn'); }}
+}}
+async function goNext(auto=false) {{
+  idx = shuffle ? Math.floor(Math.random()*playlist.length) : idx + 1;
+  const ok = await loadTrack(idx);
+  if (ok && (unlocked || auto)) {{ try {{ await audio.play(); log((auto?'Auto-next → ':'Siguiente → ') + playlist[idx].title, 'ok'); }} catch(e) {{ log('Track cargado. Pulsa play si el navegador lo pide: ' + (e.name || e), 'warn'); }} }}
+}}
+async function goPrev() {{
+  idx = shuffle ? Math.floor(Math.random()*playlist.length) : idx - 1;
+  const ok = await loadTrack(idx);
+  if (ok && unlocked) {{ try {{ await audio.play(); }} catch(e) {{ log('Track cargado. Pulsa play si el navegador lo pide: ' + (e.name || e), 'warn'); }} }}
+}}
+fillSelect(); updateUi(); loadTrack(idx);
+document.getElementById('play').onclick = playCurrent;
+document.getElementById('next').onclick = () => goNext(false);
+document.getElementById('prev').onclick = goPrev;
+document.getElementById('shuffle').onclick = () => {{ shuffle = !shuffle; localStorage.setItem('rrp_fm_shuffle', shuffle?'1':'0'); updateUi(); }};
+select.onchange = async () => {{ idx = parseInt(select.value,10); const ok = await loadTrack(idx); if (ok && unlocked) {{ try {{ await audio.play(); }} catch(e) {{}} }} }};
+audio.addEventListener('ended', () => goNext(true));
+</script>
+</body>
+</html>
+"""
+        _st_components.html(html_doc, height=365, scrolling=False)
 
-        def _guess_duration_seconds(path):
-            # Estimación ligera: tamaño / bitrate medio. Evita dependencias extra.
-            try:
-                size = max(1, path.stat().st_size)
-                # 160 kbps aprox -> 20 KB/s. Limitado a un rango razonable.
-                return int(max(90, min(420, size / 20000)))
-            except Exception:
-                return 210
-
-        # Auto-siguiente aproximado: si el usuario activó auto-next y la app rerunea, avanza al vencimiento.
-        dur = _guess_duration_seconds(current)
-        started_at = st.session_state.get("rrp_fm_started_at")
-        if st.session_state.get("rrp_fm_autonext") and started_at:
-            try:
-                if (_time_local.time() - float(started_at)) >= max(30, dur - 2):
-                    st.session_state["rrp_fm_idx"] = (_random.randrange(len(tracks)) if st.session_state["rrp_fm_shuffle"] else (idx + 1) % len(tracks))
-                    st.session_state["rrp_fm_started_at"] = _time_local.time()
-                    st.rerun()
-            except Exception:
-                pass
-
-        st.markdown(
-            f"""
-            <div style="padding:12px 14px;border-radius:14px;border:1px solid rgba(56,189,248,.35);
-                        background:rgba(15,23,42,.85);color:#E5E7EB;margin-bottom:10px;">
-                <b>Ahora:</b> {idx + 1:02d} · {html.escape(current.stem)}<br>
-                <span style="color:#94A3B8;">{len(tracks)} tracks · modo seguro nativo · duración estimada {dur//60}:{dur%60:02d}</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            if st.button("⏮️ Anterior", key="rrp_fm_prev_safe_v82"):
-                st.session_state["rrp_fm_idx"] = (_random.randrange(len(tracks)) if st.session_state["rrp_fm_shuffle"] else (idx - 1) % len(tracks))
-                st.session_state["rrp_fm_started_at"] = _time_local.time()
-                st.rerun()
-        with c2:
-            if st.button("▶️ Cargar / Play", key="rrp_fm_play_safe_v82"):
-                st.session_state["rrp_fm_started_at"] = _time_local.time()
-                st.rerun()
-        with c3:
-            if st.button("⏭️ Siguiente", key="rrp_fm_next_safe_v82"):
-                st.session_state["rrp_fm_idx"] = (_random.randrange(len(tracks)) if st.session_state["rrp_fm_shuffle"] else (idx + 1) % len(tracks))
-                st.session_state["rrp_fm_started_at"] = _time_local.time()
-                st.rerun()
-        with c4:
-            if st.button("🎲 Aleatorio: ON" if st.session_state["rrp_fm_shuffle"] else "🎲 Aleatorio: OFF", key="rrp_fm_shuffle_safe_v82"):
-                st.session_state["rrp_fm_shuffle"] = not st.session_state["rrp_fm_shuffle"]
-                st.rerun()
-
-        names = [f"{i+1:02d} · {p.stem}" for i, p in enumerate(tracks)]
-        selected = st.selectbox("Canción", names, index=idx, key="rrp_fm_select_safe_v82")
-        new_idx = names.index(selected)
-        if new_idx != idx:
-            st.session_state["rrp_fm_idx"] = new_idx
-            st.session_state["rrp_fm_started_at"] = None
-            st.rerun()
-
-        auto_col1, auto_col2 = st.columns([1, 3])
-        with auto_col1:
-            st.session_state["rrp_fm_autonext"] = st.toggle("Auto-siguiente", value=bool(st.session_state["rrp_fm_autonext"]), key="rrp_fm_autonext_toggle_v82")
-        with auto_col2:
-            st.caption("Auto-siguiente estimado (no detecta arrastre manual del cursor): con st.audio no existe evento real de fin de canción; avanza cuando la app hace rerun y vence la duración estimada.")
-
-        try:
-            st.audio(current.read_bytes(), format=_fmt(current))
+        with st.expander("🛟 Modo seguro st.audio / diagnóstico", expanded=False):
+            st.caption("Este modo confirma que los MP3 funcionan en Streamlit. No detecta el evento de fin ni el arrastre manual; el reproductor superior sí lo intenta con HTML/JS.")
+            if "rrp_fm_safe_idx" not in st.session_state:
+                st.session_state["rrp_fm_safe_idx"] = 0
+            safe_names = [f"{i+1:02d} · {p.stem}" for i, p in enumerate(tracks)]
+            safe_idx = int(st.session_state.get("rrp_fm_safe_idx", 0))
+            safe_idx = max(0, min(safe_idx, len(tracks)-1))
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                if st.button("⏮️ Seguro anterior", key="rrp_safe_prev_v84"):
+                    st.session_state["rrp_fm_safe_idx"] = (safe_idx - 1) % len(tracks); st.rerun()
+            with c2:
+                if st.button("⏭️ Seguro siguiente", key="rrp_safe_next_v84"):
+                    st.session_state["rrp_fm_safe_idx"] = (safe_idx + 1) % len(tracks); st.rerun()
+            with c3:
+                if st.button("🎲 Seguro aleatorio", key="rrp_safe_rand_v84"):
+                    st.session_state["rrp_fm_safe_idx"] = _random.randrange(len(tracks)); st.rerun()
+            selected = st.selectbox("Canción modo seguro", safe_names, index=safe_idx, key="rrp_safe_select_v84")
+            new_safe_idx = safe_names.index(selected)
+            if new_safe_idx != safe_idx:
+                st.session_state["rrp_fm_safe_idx"] = new_safe_idx; st.rerun()
+            current = tracks[int(st.session_state.get("rrp_fm_safe_idx", 0))]
+            fmt = {".mp3":"audio/mp3", ".wav":"audio/wav", ".ogg":"audio/ogg", ".m4a":"audio/mp4", ".aac":"audio/aac", ".flac":"audio/flac"}.get(current.suffix.lower(), "audio/mp3")
+            st.audio(current.read_bytes(), format=fmt)
             st.caption(f"Archivo local servido por Streamlit: `{current}`")
-        except Exception as e:
-            st.error(f"No pude cargar la canción: {current.name}")
-            st.exception(e)
-
-        with st.expander("🔎 Diagnóstico Radar FM", expanded=False):
             st.write("Carpeta usada:", str(music_dir))
             st.write("Tracks detectados:", len(tracks))
-            st.write("Track actual:", str(current))
-            for row_path, exists, n in debug_rows:
-                st.write(f"- `{row_path}` · existe={exists} · audios={n}")
 
         st.markdown("</div>", unsafe_allow_html=True)
     except Exception as e:
