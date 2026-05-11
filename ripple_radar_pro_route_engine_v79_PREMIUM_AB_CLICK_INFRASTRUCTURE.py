@@ -171,7 +171,7 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v87_2026_05_12_CINEMATIC_SAFE_FLOAT_FIX_RADAR_FM_OK"
+BUILD_ID = "v88_2026_05_12_CINEMATIC_CLIP_FIX_RADAR_FM_OK"
 BUILD_NOTE = "Fix cinematica _safe_float + Radar FM funcionando con GitHub Raw/static + A-B premium deduplicado"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
@@ -7870,6 +7870,23 @@ def _safe_float(raw, default: float = 0.0) -> float:
         except Exception:
             return 0.0
 
+
+
+
+def _clip(value, lo: float = 0.0, hi: float = 100.0) -> float:
+    """Limita un valor numérico entre `lo` y `hi` de forma segura.
+
+    La Cinemática usa `_clip()` para normalizar liquidez, presión,
+    probabilidad y calidad. Algunas ramas antiguas no lo tenían definido,
+    provocando NameError al abrir la pestaña Cinemática.
+    """
+    try:
+        v = float(value)
+        if v != v or v == float("inf") or v == float("-inf"):
+            return float(lo)
+        return max(float(lo), min(float(hi), v))
+    except Exception:
+        return float(lo)
 
 def _cur_display(cur: str) -> str:
     """
