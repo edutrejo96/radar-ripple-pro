@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Radar FM</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at top,#0b3b57 0,#020617 45%,#000 100%);color:#e5e7eb;font-family:Inter,Segoe UI,Arial,sans-serif;display:flex;align-items:center;justify-content:center;padding:22px}.box{width:min(760px,100%);border:1px solid rgba(103,232,249,.32);border-radius:24px;background:linear-gradient(135deg,rgba(2,6,23,.96),rgba(15,23,42,.94));padding:22px;box-shadow:0 20px 80px rgba(0,0,0,.45)}h1{margin:0 0 6px;color:#67e8f9;font-size:26px}.sub{color:#94a3b8;margin-bottom:18px}audio{width:100%;margin:12px 0 14px;accent-color:#22d3ee}.controls{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:12px 0}button,select{background:#0f172a;color:#e5e7eb;border:1px solid rgba(103,232,249,.38);border-radius:14px;padding:12px 14px;font-weight:900;cursor:pointer}button:hover{background:#122036;border-color:#67e8f9}select{width:100%;font-weight:700;margin-top:8px}.status{margin-top:12px;color:#cbd5e1;font-size:14px;line-height:1.45}.ok{color:#86efac}.warn{color:#fbbf24}.small{color:#94a3b8;font-size:12px;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="box">
+<h1>🎧 Radar FM</h1>
+<div class="sub">Reproductor externo · Play una vez y después auto-next.</div>
+<div id="title" style="font-weight:900;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Cargando...</div>
+<audio id="audio" controls preload="auto" controlsList="nodownload"></audio>
+<div class="controls"><button id="prev">⏮️ Anterior</button><button id="play">▶️ Play</button><button id="next">⏭️ Siguiente</button></div>
+<button id="random" style="width:100%">🎲 Aleatorio: OFF</button>
+<select id="picker"></select>
+<div id="status" class="status">Pulsa Play una vez. Al terminar, pasará a la siguiente automáticamente.</div>
+<div class="small">Si una canción no carga, revisa que exista en <code>static/musica/track_XX.mp3</code>.</div>
+</div>
+<script>
+const tracks=[{"title": "01 · track_01", "url": "musica/track_01.mp3"}, {"title": "02 · track_02", "url": "musica/track_02.mp3"}, {"title": "03 · track_03", "url": "musica/track_03.mp3"}, {"title": "04 · track_04", "url": "musica/track_04.mp3"}, {"title": "05 · track_05", "url": "musica/track_05.mp3"}, {"title": "06 · track_06", "url": "musica/track_06.mp3"}, {"title": "07 · track_07", "url": "musica/track_07.mp3"}, {"title": "08 · track_08", "url": "musica/track_08.mp3"}, {"title": "09 · track_09", "url": "musica/track_09.mp3"}, {"title": "10 · track_10", "url": "musica/track_10.mp3"}, {"title": "11 · track_11", "url": "musica/track_11.mp3"}, {"title": "12 · track_12", "url": "musica/track_12.mp3"}, {"title": "13 · track_13", "url": "musica/track_13.mp3"}, {"title": "14 · track_14", "url": "musica/track_14.mp3"}, {"title": "15 · track_15", "url": "musica/track_15.mp3"}, {"title": "16 · track_16", "url": "musica/track_16.mp3"}, {"title": "17 · track_17", "url": "musica/track_17.mp3"}, {"title": "18 · track_18", "url": "musica/track_18.mp3"}, {"title": "19 · track_19", "url": "musica/track_19.mp3"}, {"title": "20 · track_20", "url": "musica/track_20.mp3"}, {"title": "21 · track_21", "url": "musica/track_21.mp3"}, {"title": "22 · track_22", "url": "musica/track_22.mp3"}, {"title": "23 · track_23", "url": "musica/track_23.mp3"}, {"title": "24 · track_24", "url": "musica/track_24.mp3"}, {"title": "25 · track_25", "url": "musica/track_25.mp3"}, {"title": "26 · track_26", "url": "musica/track_26.mp3"}, {"title": "27 · track_27", "url": "musica/track_27.mp3"}, {"title": "28 · track_28", "url": "musica/track_28.mp3"}, {"title": "29 · track_29", "url": "musica/track_29.mp3"}];
+const audio=document.getElementById('audio'), title=document.getElementById('title'), picker=document.getElementById('picker'), statusEl=document.getElementById('status'), playBtn=document.getElementById('play'), randomBtn=document.getElementById('random');
+let idx=parseInt(localStorage.getItem('rrp_fm_ext_idx')||'0',10); if(!Number.isFinite(idx)||idx<0||idx>=tracks.length) idx=0;
+let randomMode=localStorage.getItem('rrp_fm_ext_random')==='1';
+let unlocked=false;
+tracks.forEach((t,i)=>{const o=document.createElement('option');o.value=i;o.textContent=t.title;picker.appendChild(o);});
+function setStatus(msg,cls=''){statusEl.textContent=msg;statusEl.className='status '+cls;}
+function save(){localStorage.setItem('rrp_fm_ext_idx',idx);localStorage.setItem('rrp_fm_ext_random',randomMode?'1':'0');}
+function updateRandom(){randomBtn.textContent='🎲 Aleatorio: '+(randomMode?'ON':'OFF');}
+function load(){const t=tracks[idx];audio.src=t.url;audio.load();title.textContent='Ahora: '+t.title;picker.value=idx;save();}
+async function play(reason='Reproduciendo.'){try{await audio.play();unlocked=true;playBtn.textContent='⏸️ Pausa';setStatus(reason,'ok');}catch(e){setStatus('El navegador bloqueó el autoplay. Pulsa Play directamente en el control de audio una vez.','warn');}}
+function nextIndex(){if(randomMode&&tracks.length>1){let n=idx;while(n===idx)n=Math.floor(Math.random()*tracks.length);return n;}return (idx+1)%tracks.length;}
+async function go(delta,force=true){const shouldPlay=force||!audio.paused||unlocked;if(delta>0)idx=nextIndex();else idx=(idx-1+tracks.length)%tracks.length;load(); if(shouldPlay) setTimeout(()=>play('Reproduciendo automáticamente.'),80);}
+document.getElementById('prev').onclick=()=>go(-1,true);
+document.getElementById('next').onclick=()=>go(1,true);
+playBtn.onclick=async()=>{if(audio.paused) await play('Reproduciendo.'); else {audio.pause();playBtn.textContent='▶️ Play';setStatus('Pausado.');}};
+randomBtn.onclick=()=>{randomMode=!randomMode;updateRandom();save();};
+picker.onchange=()=>{idx=parseInt(picker.value,10)||0;load();setTimeout(()=>play('Canción seleccionada.'),80);};
+audio.onended=()=>go(1,true);
+audio.onplay=()=>{unlocked=true;playBtn.textContent='⏸️ Pausa';};
+audio.onpause=()=>{if(!audio.ended)playBtn.textContent='▶️ Play';};
+audio.onerror=()=>setStatus('No se pudo cargar el audio actual. Revisa el archivo en static/musica.','warn');
+updateRandom();load();
+</script>
+</body>
+</html>
