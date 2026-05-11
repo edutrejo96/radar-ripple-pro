@@ -9,3 +9,4 @@ textColor = "#E5E7EB"
 headless = true
 enableCORS = false
 enableXsrfProtection = false
+enableStaticServing = true
