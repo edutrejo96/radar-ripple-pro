@@ -1,6 +1,6 @@
 from pathlib import Path
 
-NEXT_FILE = "ripple_radar_pro_route_engine_v75_RADAR_FM_EXTERNAL_PLAYER_AUTONEXT.py"
+NEXT_FILE = "ripple_radar_pro_route_engine_v76_RADAR_FM_IN_APP_LOCKED_PLAYER_ROUTE_LIVE.py"
 
 current_dir = Path(__file__).resolve().parent
 next_path = current_dir / NEXT_FILE
