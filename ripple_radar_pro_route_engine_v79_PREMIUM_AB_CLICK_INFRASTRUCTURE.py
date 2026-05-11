@@ -171,7 +171,7 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v82_2026_05_12_CINEMATIC_CANDLES_SAFE_FM_AB_DEDUP"
+BUILD_ID = "v83_2026_05_12_CINEMATIC_FIX_SAFE_FM_AB_DEDUP"
 BUILD_NOTE = "Cinemática tipo video con velas XRP por escenarios + Radar FM modo seguro + A-B premium deduplicado"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
@@ -4699,6 +4699,12 @@ def _safe_count_table(conn: Optional[sqlite3.Connection], table: str, where: str
     except Exception:
         return 0
 
+
+
+# Compatibilidad para módulos/pestañas antiguas que llaman a _safe_count().
+# En versiones anteriores solo existía _safe_count_table().
+def _safe_count(conn: Optional[sqlite3.Connection], table: str, where: str = "", params: Tuple[Any, ...] = ()) -> int:
+    return _safe_count_table(conn, table, where, params)
 
 def data_quality_snapshot(conn: Optional[sqlite3.Connection], row: Any) -> Dict[str, Any]:
     """Radiografía honesta de calidad de datos usada por gráficos y fase Flip."""
@@ -16061,7 +16067,7 @@ def inject_music_player() -> None:
         with auto_col1:
             st.session_state["rrp_fm_autonext"] = st.toggle("Auto-siguiente", value=bool(st.session_state["rrp_fm_autonext"]), key="rrp_fm_autonext_toggle_v82")
         with auto_col2:
-            st.caption("Auto-siguiente estimado: con st.audio no existe evento real de fin de canción; avanza cuando la app hace rerun y vence la duración estimada.")
+            st.caption("Auto-siguiente estimado (no detecta arrastre manual del cursor): con st.audio no existe evento real de fin de canción; avanza cuando la app hace rerun y vence la duración estimada.")
 
         try:
             st.audio(current.read_bytes(), format=_fmt(current))
