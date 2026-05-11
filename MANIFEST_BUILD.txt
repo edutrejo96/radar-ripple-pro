@@ -1,0 +1,22 @@
+RIPPLE RADAR PRO v69 - PUBLIC SECRET READY
+==========================================
+BUILD interno visible en app:
+v69_2026_05_11_DEDUCTIVE_ENGINE_PROOFS
+
+Paquete:
+Ripple_Radar_Pro_v69_PUBLICO_SECRET_READY.zip
+
+Seguridad:
+- Sin .env real.
+- Sin API key real.
+- Sin .streamlit/secrets.toml real.
+- API preparada para leerse desde ANTHROPIC_API_KEY o Streamlit Secrets.
+
+Incluye:
+- App v69 deductiva.
+- Base SQLite limpia/lista para datos.
+- Requirements.
+- BAT de ejecución.
+- BAT de reinstalación.
+- BAT de reset.
+- README de despliegue público seguro.
