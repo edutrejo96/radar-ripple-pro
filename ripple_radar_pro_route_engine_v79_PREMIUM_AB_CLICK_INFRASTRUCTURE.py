@@ -171,8 +171,8 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v79_2026_05_11_PREMIUM_AB_CLICK_INFRASTRUCTURE_SAFE_RADAR_FM"
-BUILD_NOTE = "Infraestructura Ripple completa + gráfico A-B premium clicable con ficha completa por línea"
+BUILD_ID = "v81_2026_05_11_CINEMATIC_PRICE_SCENARIOS_AB_DEDUP"
+BUILD_NOTE = "Cinemática con escenarios de precio + A-B premium único deduplicado + infraestructura Ripple completa"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
 import os as _os
@@ -7740,12 +7740,9 @@ def render_route_path_graph_and_fichas(paths: pd.DataFrame, key_prefix: str = "l
     st.caption("Pincha directamente una línea para abrir la ficha completa de esa conexión, con fuentes, deducción, nodos e IDs internos.")
     render_premium_clickable_ab_graph(chart, key_prefix=key_prefix)
 
-    with st.expander("Ver Sankey clásico de respaldo", expanded=False):
-        fig = make_route_path_sankey(paths)
-        try:
-            st.plotly_chart(fig, width="stretch", key=f"{key_prefix}_route_sankey", on_select="rerun", selection_mode="points")
-        except TypeError:
-            st.plotly_chart(fig, width="stretch", key=f"{key_prefix}_route_sankey")
+    # v81: evitamos sensación de gráficos duplicados.
+    # El gráfico premium es el único principal; el Sankey clásico queda reservado para diagnóstico interno.
+    st.caption("Vista única premium: las rutas equivalentes se agregan y las líneas son auditables desde su ficha.")
 
     if chart.empty:
         st.info("El gráfico está fijo y preparado, pero aún no hay rutas aprobadas para pintar.")
@@ -15905,25 +15902,22 @@ def purge_legacy_preconfigured_routes(conn: sqlite3.Connection) -> int:
 
 
 def inject_music_player() -> None:
-    """Radar FM modo seguro: reproductor nativo de Streamlit.
+    """Radar FM integrado dentro de la app.
 
-    Se elimina el reproductor HTML/JS anterior porque algunos navegadores/iframes
-    bloquean el play programático. Este modo usa st.audio, que es el que ya se ha
-    confirmado que funciona en Streamlit Cloud.
+    Versión v80:
+    - reproductor HTML interno para poder capturar el evento ended y pasar a la siguiente canción;
+    - primer Play manual obligatorio por política del navegador;
+    - después de ese gesto, siguiente/anterior/fin de canción funcionan dentro del componente;
+    - fallback nativo con st.audio en un expander por si el navegador bloquea el componente.
 
-    Incluye:
-    - Anterior / Siguiente / Aleatorio.
-    - Selector de canción.
-    - Intento de autoplay al cambiar de track si la versión de Streamlit lo permite.
-    - Auto-avance experimental calculado por duración estimada del MP3/WAV/OGG/M4A.
-      Nota honesta: si el navegador bloquea autoplay, puede requerir pulsar Play en
-      el control nativo. No hay forma fiable de saltarse esa política desde una web.
+    Nota honesta: ningún navegador moderno permite autoplay sin gesto humano. El primer Play es
+    obligatorio. Lo que sí hace esta versión es auto-next después de ese primer desbloqueo.
     """
     try:
         import os as _os
-        import time as _time
+        import json as _json
+        import html as _html
         import random as _random
-        import inspect as _inspect
         from pathlib import Path as _Path
 
         exts = (".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac")
@@ -15931,7 +15925,6 @@ def inject_music_player() -> None:
         cwd = _Path(_os.getcwd()).resolve()
 
         candidate_dirs = []
-
         def _add_candidate(p):
             try:
                 rp = _Path(p).resolve()
@@ -15971,7 +15964,7 @@ def inject_music_player() -> None:
                         box-shadow:0 10px 32px rgba(0,212,255,.10);">
               <div style="display:flex;align-items:center;justify-content:space-between;gap:.8rem;">
                 <div style="font-weight:900;color:#67E8F9;">🎧 Radar FM</div>
-                <div style="font-size:.72rem;color:#94A3B8;border:1px solid rgba(148,163,184,.28);border-radius:999px;padding:.12rem .55rem;">modo seguro · st.audio · v79</div>
+                <div style="font-size:.72rem;color:#94A3B8;border:1px solid rgba(148,163,184,.28);border-radius:999px;padding:.12rem .55rem;">v80 · in-app · auto-next</div>
               </div>
             """,
             unsafe_allow_html=True,
@@ -15988,232 +15981,205 @@ def inject_music_player() -> None:
             st.markdown("</div>", unsafe_allow_html=True)
             return
 
-        def _audio_format(path: _Path) -> str:
-            ext = path.suffix.lower()
-            if ext == ".mp3":
-                return "audio/mp3"
-            if ext == ".wav":
-                return "audio/wav"
-            if ext == ".ogg":
-                return "audio/ogg"
-            if ext in (".m4a", ".aac"):
-                return "audio/mp4"
-            if ext == ".flac":
-                return "audio/flac"
-            return "audio/mp3"
+        # Para el reproductor HTML usamos rutas estáticas públicas.
+        # Streamlit Cloud sirve static/ bajo /app/static cuando enableStaticServing=true.
+        js_tracks = []
+        for p in tracks:
+            fname = p.name
+            safe_name = p.stem
+            js_tracks.append({
+                "name": safe_name,
+                "file": fname,
+                "urls": [
+                    f"/app/static/musica/{fname}",
+                    f"/static/musica/{fname}",
+                    f"static/musica/{fname}",
+                    f"./app/static/musica/{fname}",
+                ],
+            })
 
-        def _estimate_mp3_duration_seconds(path: _Path):
-            """Estimación ligera de duración para auto-avance.
-            No necesita librerías externas. Funciona bien con muchos MP3 CBR/VBR simples.
-            Si no puede calcular, devuelve None.
-            """
-            try:
-                data = path.read_bytes()
-                size = len(data)
-                if size < 4096:
-                    return None
+        tracks_json = _json.dumps(js_tracks, ensure_ascii=False)
+        html_doc = f"""
+<div id="rrp-fm-v80" class="rrp-fm-v80">
+  <div class="fm-row fm-top">
+    <div>
+      <div class="fm-kicker">RADAR FM · reproductor interno</div>
+      <div class="fm-title" id="fmTitle">Cargando...</div>
+      <div class="fm-sub" id="fmSub">{len(js_tracks)} tracks detectados en static/musica</div>
+    </div>
+    <div class="fm-pill" id="fmState">bloqueado hasta primer Play</div>
+  </div>
 
-                # Saltar ID3v2 si existe.
-                pos = 0
-                if data[:3] == b"ID3" and size >= 10:
-                    tag_size = ((data[6] & 0x7F) << 21) | ((data[7] & 0x7F) << 14) | ((data[8] & 0x7F) << 7) | (data[9] & 0x7F)
-                    pos = 10 + tag_size
+  <audio id="fmAudio" controls preload="metadata" playsinline></audio>
 
-                # Buscar primer frame MPEG.
-                end = min(size - 4, pos + 200000)
-                frame = None
-                for i in range(pos, end):
-                    if data[i] == 0xFF and (data[i + 1] & 0xE0) == 0xE0:
-                        frame = data[i:i+4]
-                        pos = i
-                        break
-                if not frame:
-                    return None
+  <div class="fm-row fm-controls">
+    <button id="prevBtn">⏮️ Anterior</button>
+    <button id="playBtn" class="primary">▶️ Play / desbloquear</button>
+    <button id="nextBtn">⏭️ Siguiente</button>
+    <button id="shuffleBtn">🎲 Aleatorio: OFF</button>
+  </div>
 
-                b1, b2, b3, b4 = frame
-                version_id = (b2 >> 3) & 0x03
-                layer = (b2 >> 1) & 0x03
-                bitrate_idx = (b3 >> 4) & 0x0F
-                sample_idx = (b3 >> 2) & 0x03
+  <div class="fm-row">
+    <label class="fm-label">Canción</label>
+    <select id="trackSelect"></select>
+  </div>
 
-                # Solo necesitamos una estimación. Tablas MPEG Layer III/II comunes.
-                if bitrate_idx in (0, 15) or sample_idx == 3:
-                    return None
+  <div class="fm-msg" id="fmMsg">Pulsa Play una vez. Después, al acabar una canción pasará a la siguiente dentro de la app.</div>
+</div>
+<style>
+.rrp-fm-v80{{font-family:Inter,Segoe UI,Arial,sans-serif;background:linear-gradient(135deg,#020617,#0f172a);border:1px solid rgba(56,189,248,.35);border-radius:18px;padding:14px;color:#E5E7EB;}}
+.fm-row{{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0;}}
+.fm-top{{justify-content:space-between;}}
+.fm-kicker{{color:#67E8F9;font-size:11px;font-weight:900;letter-spacing:.12em;text-transform:uppercase;}}
+.fm-title{{font-size:17px;font-weight:950;color:white;margin-top:2px;}}
+.fm-sub{{font-size:12px;color:#94A3B8;margin-top:3px;}}
+.fm-pill{{font-size:12px;color:#CBD5E1;border:1px solid rgba(148,163,184,.3);border-radius:999px;padding:5px 9px;background:rgba(15,23,42,.8);}}
+#fmAudio{{width:100%;margin:8px 0 4px;}}
+button{{background:#0f172a;color:#E5E7EB;border:1px solid rgba(148,163,184,.35);border-radius:12px;padding:9px 12px;font-weight:800;cursor:pointer;}}
+button:hover{{border-color:#38BDF8;}}
+button.primary{{background:linear-gradient(135deg,#0284c7,#0ea5e9);border-color:#38BDF8;color:white;}}
+select{{background:#0f172a;color:#E5E7EB;border:1px solid rgba(148,163,184,.35);border-radius:12px;padding:9px;min-width:240px;}}
+.fm-label{{color:#94A3B8;font-size:12px;font-weight:800;}}
+.fm-msg{{font-size:12px;color:#94A3B8;line-height:1.45;border-top:1px solid rgba(148,163,184,.18);padding-top:9px;}}
+</style>
+<script>
+(function(){{
+  const tracks = {tracks_json};
+  const audio = document.getElementById('fmAudio');
+  const title = document.getElementById('fmTitle');
+  const sub = document.getElementById('fmSub');
+  const state = document.getElementById('fmState');
+  const msg = document.getElementById('fmMsg');
+  const sel = document.getElementById('trackSelect');
+  const prevBtn = document.getElementById('prevBtn');
+  const playBtn = document.getElementById('playBtn');
+  const nextBtn = document.getElementById('nextBtn');
+  const shuffleBtn = document.getElementById('shuffleBtn');
+  let idx = Number(localStorage.getItem('rrp_fm_v80_idx') || '0');
+  let shuffle = localStorage.getItem('rrp_fm_v80_shuffle') === '1';
+  let unlocked = false;
+  let currentObjectUrl = null;
 
-                # MPEG Version: 3=v1, 2=v2, 0=v2.5
-                # Layer: 1=Layer III, 2=Layer II, 3=Layer I
-                bitrates = {
-                    (3, 1): [None,32,40,48,56,64,80,96,112,128,160,192,224,256,320,None],
-                    (2, 1): [None,8,16,24,32,40,48,56,64,80,96,112,128,144,160,None],
-                    (0, 1): [None,8,16,24,32,40,48,56,64,80,96,112,128,144,160,None],
-                    (3, 2): [None,32,48,56,64,80,96,112,128,160,192,224,256,320,384,None],
-                    (2, 2): [None,8,16,24,32,40,48,56,64,80,96,112,128,144,160,None],
-                    (0, 2): [None,8,16,24,32,40,48,56,64,80,96,112,128,144,160,None],
-                    (3, 3): [None,32,64,96,128,160,192,224,256,288,320,352,384,416,448,None],
-                }
-                bitrate_kbps = bitrates.get((version_id, layer), bitrates.get((3,1)))[bitrate_idx]
-                if not bitrate_kbps:
-                    return None
+  if (!tracks.length) {{
+    title.textContent = 'Sin tracks';
+    msg.textContent = 'No hay tracks en static/musica.';
+    return;
+  }}
+  idx = Math.max(0, Math.min(idx, tracks.length - 1));
 
-                audio_bytes = max(1, size - pos)
-                seconds = (audio_bytes * 8) / (bitrate_kbps * 1000)
-                if seconds < 5 or seconds > 60*60*4:
-                    return None
-                return float(seconds)
-            except Exception:
-                return None
+  function setMsg(t, ok) {{ msg.textContent = t; msg.style.color = ok ? '#86EFAC' : '#FCA5A5'; }}
+  function updateUI() {{
+    const tr = tracks[idx];
+    title.textContent = String(idx+1).padStart(2,'0') + ' · ' + tr.name;
+    sub.textContent = tracks.length + ' tracks · ' + tr.file;
+    state.textContent = unlocked ? 'audio desbloqueado' : 'pulsa Play una vez';
+    shuffleBtn.textContent = shuffle ? '🎲 Aleatorio: ON' : '🎲 Aleatorio: OFF';
+    sel.value = String(idx);
+    localStorage.setItem('rrp_fm_v80_idx', String(idx));
+    localStorage.setItem('rrp_fm_v80_shuffle', shuffle ? '1' : '0');
+  }}
+  tracks.forEach((t,i)=>{{ const opt=document.createElement('option'); opt.value=String(i); opt.textContent=String(i+1).padStart(2,'0')+' · '+t.name; sel.appendChild(opt); }});
 
-        def _estimate_audio_duration(path: _Path):
-            if path.suffix.lower() == ".mp3":
-                return _estimate_mp3_duration_seconds(path)
-            return None
+  async function fetchFirstWorkingUrl(tr) {{
+    let lastErr = null;
+    for (const url of tr.urls) {{
+      try {{
+        const r = await fetch(url, {{cache:'force-cache'}});
+        if (!r.ok) throw new Error('HTTP '+r.status+' en '+url);
+        const blob = await r.blob();
+        if (!blob || blob.size < 1024) throw new Error('Blob vacío en '+url);
+        return {{url, blob}};
+      }} catch(e) {{ lastErr = e; }}
+    }}
+    throw lastErr || new Error('No se pudo cargar ninguna URL para '+tr.file);
+  }}
 
-        def _streamlit_audio(audio_bytes: bytes, fmt: str, autoplay: bool = False):
-            kwargs = {"format": fmt}
-            try:
-                params = _inspect.signature(st.audio).parameters
-                if "autoplay" in params:
-                    kwargs["autoplay"] = autoplay
-            except Exception:
-                pass
-            st.audio(audio_bytes, **kwargs)
+  async function loadTrack(autoplay=false) {{
+    const tr = tracks[idx];
+    updateUI();
+    try {{
+      if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
+      setMsg('Cargando '+tr.file+'...', true);
+      const got = await fetchFirstWorkingUrl(tr);
+      currentObjectUrl = URL.createObjectURL(got.blob);
+      audio.src = currentObjectUrl;
+      audio.load();
+      setMsg('Track cargado desde '+got.url, true);
+      if (autoplay) {{
+        await audio.play();
+        unlocked = true;
+        updateUI();
+        setMsg('Reproduciendo dentro de la app. Auto-next activo.', true);
+      }}
+    }} catch(e) {{
+      setMsg('No pude cargar/reproducir: '+(e && e.message ? e.message : e), false);
+      console.error(e);
+    }}
+  }}
 
-        # Estado del reproductor.
-        if "rrp_fm_idx" not in st.session_state:
-            st.session_state["rrp_fm_idx"] = 0
-        if "rrp_fm_shuffle" not in st.session_state:
-            st.session_state["rrp_fm_shuffle"] = False
-        if "rrp_fm_auto_next" not in st.session_state:
-            st.session_state["rrp_fm_auto_next"] = True
-        if "rrp_fm_nonce" not in st.session_state:
-            st.session_state["rrp_fm_nonce"] = 0
+  async function playCurrent() {{
+    try {{
+      if (!audio.src) await loadTrack(false);
+      await audio.play();
+      unlocked = true;
+      updateUI();
+      setMsg('Reproduciendo dentro de la app. Auto-next activo.', true);
+    }} catch(e) {{
+      setMsg('El navegador bloqueó el play. Pulsa el botón ▶ nativo del reproductor una vez.', false);
+      console.error(e);
+    }}
+  }}
+  function chooseNext() {{
+    if (shuffle && tracks.length > 1) {{ let n=idx; while(n===idx) n=Math.floor(Math.random()*tracks.length); idx=n; }}
+    else idx = (idx + 1) % tracks.length;
+  }}
+  async function next(autoplay=true) {{ chooseNext(); await loadTrack(autoplay && unlocked); }}
+  async function prev(autoplay=true) {{ idx = (idx - 1 + tracks.length) % tracks.length; await loadTrack(autoplay && unlocked); }}
 
-        idx = int(st.session_state.get("rrp_fm_idx", 0))
-        idx = max(0, min(idx, len(tracks) - 1))
-        st.session_state["rrp_fm_idx"] = idx
+  playBtn.onclick = playCurrent;
+  nextBtn.onclick = () => next(true);
+  prevBtn.onclick = () => prev(true);
+  shuffleBtn.onclick = () => {{ shuffle=!shuffle; updateUI(); }};
+  sel.onchange = async () => {{ idx = Number(sel.value || '0'); await loadTrack(false); }};
+  audio.onplay = () => {{ unlocked = true; updateUI(); setMsg('Reproduciendo. Auto-next activo.', true); }};
+  audio.onended = () => next(true);
+  audio.onerror = () => setMsg('Error de audio: el navegador no pudo leer este track.', false);
+  updateUI();
+  loadTrack(false);
+}})();
+</script>
+"""
+        _st_components.html(html_doc, height=355, scrolling=False)
 
-        current = tracks[idx]
-        now = _time.time()
-
-        # Auto-avance experimental: si el usuario activó reproducción y ya pasó la duración estimada,
-        # se cambia al siguiente track. Necesita rerun; usamos st_autorefresh si está instalado.
-        auto_next = bool(st.session_state.get("rrp_fm_auto_next", True))
-        started_at = st.session_state.get("rrp_fm_started_at")
-        expected_duration = st.session_state.get("rrp_fm_expected_duration")
-        playing_flag = bool(st.session_state.get("rrp_fm_playing_flag", False))
-        if auto_next and playing_flag and started_at and expected_duration:
-            try:
-                if now - float(started_at) >= max(8.0, float(expected_duration) - 1.5):
-                    if st.session_state.get("rrp_fm_shuffle"):
-                        st.session_state["rrp_fm_idx"] = _random.randrange(len(tracks))
-                    else:
-                        st.session_state["rrp_fm_idx"] = (idx + 1) % len(tracks)
-                    st.session_state["rrp_fm_nonce"] += 1
-                    st.session_state["rrp_fm_autoplay_once"] = True
-                    st.session_state["rrp_fm_started_at"] = _time.time()
+        with st.expander("🛟 Modo seguro nativo st.audio", expanded=False):
+            st.caption("Fallback estable. Aquí no hay auto-next perfecto, pero confirma que los MP3 funcionan dentro de Streamlit.")
+            if "rrp_fm_safe_idx" not in st.session_state:
+                st.session_state["rrp_fm_safe_idx"] = 0
+            safe_names = [p.stem for p in tracks]
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                if st.button("⏮️ Anterior seguro", key="rrp_fm_safe_prev_v80"):
+                    st.session_state["rrp_fm_safe_idx"] = (int(st.session_state["rrp_fm_safe_idx"]) - 1) % len(tracks)
                     st.rerun()
-            except Exception:
-                pass
-
-        current = tracks[int(st.session_state["rrp_fm_idx"])]
-        idx = int(st.session_state["rrp_fm_idx"])
-        duration = _estimate_audio_duration(current)
-
-        st.markdown(
-            f"""
-            <div style="padding:12px 14px;border-radius:14px;border:1px solid rgba(56,189,248,.35);
-                        background:rgba(15,23,42,.85);color:#E5E7EB;margin:10px 0;">
-              <b>Ahora:</b> {idx + 1:02d} · {current.stem}<br>
-              <span style="color:#94A3B8;">{len(tracks)} tracks · modo seguro nativo</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        c1, c2, c3, c4 = st.columns([1, 1.1, 1, 1.2])
-        with c1:
-            if st.button("⏮️ Anterior", key="rrp_fm_prev_safe"):
-                if st.session_state["rrp_fm_shuffle"]:
-                    st.session_state["rrp_fm_idx"] = _random.randrange(len(tracks))
-                else:
-                    st.session_state["rrp_fm_idx"] = (idx - 1) % len(tracks)
-                st.session_state["rrp_fm_autoplay_once"] = True
-                st.session_state["rrp_fm_playing_flag"] = True
-                st.session_state["rrp_fm_started_at"] = _time.time()
-                st.session_state["rrp_fm_nonce"] += 1
-                st.rerun()
-        with c2:
-            if st.button("▶️ Cargar / Play", key="rrp_fm_play_safe"):
-                st.session_state["rrp_fm_autoplay_once"] = True
-                st.session_state["rrp_fm_playing_flag"] = True
-                st.session_state["rrp_fm_started_at"] = _time.time()
-                st.session_state["rrp_fm_expected_duration"] = duration or 180.0
-                st.session_state["rrp_fm_nonce"] += 1
-                st.rerun()
-        with c3:
-            if st.button("⏭️ Siguiente", key="rrp_fm_next_safe"):
-                if st.session_state["rrp_fm_shuffle"]:
-                    st.session_state["rrp_fm_idx"] = _random.randrange(len(tracks))
-                else:
-                    st.session_state["rrp_fm_idx"] = (idx + 1) % len(tracks)
-                st.session_state["rrp_fm_autoplay_once"] = True
-                st.session_state["rrp_fm_playing_flag"] = True
-                st.session_state["rrp_fm_started_at"] = _time.time()
-                st.session_state["rrp_fm_nonce"] += 1
-                st.rerun()
-        with c4:
-            if st.button("🎲 Aleatorio: ON" if st.session_state["rrp_fm_shuffle"] else "🎲 Aleatorio: OFF", key="rrp_fm_shuffle_safe"):
-                st.session_state["rrp_fm_shuffle"] = not st.session_state["rrp_fm_shuffle"]
-                st.rerun()
-
-        st.session_state["rrp_fm_auto_next"] = st.toggle(
-            "Auto-siguiente al terminar canción",
-            value=bool(st.session_state.get("rrp_fm_auto_next", True)),
-            key="rrp_fm_auto_next_toggle",
-            help="Usa duración estimada del archivo y un refresco ligero. Si el navegador bloquea autoplay, puede pedir pulsar Play nativo una vez.",
-        )
-
-        names = [p.stem for p in tracks]
-        select_key = f"rrp_fm_select_safe_{st.session_state['rrp_fm_nonce']}"
-        selected = st.selectbox("Canción", names, index=idx, key=select_key)
-        selected_idx = names.index(selected)
-        if selected_idx != idx:
-            st.session_state["rrp_fm_idx"] = selected_idx
-            st.session_state["rrp_fm_autoplay_once"] = False
-            st.session_state["rrp_fm_playing_flag"] = False
-            st.session_state["rrp_fm_nonce"] += 1
-            st.rerun()
-
-        # Render final del audio actual.
-        current = tracks[int(st.session_state["rrp_fm_idx"])]
-        autoplay = bool(st.session_state.pop("rrp_fm_autoplay_once", False))
-        try:
-            audio_bytes = current.read_bytes()
-            _streamlit_audio(audio_bytes, _audio_format(current), autoplay=autoplay)
-            st.caption(f"Archivo local servido por Streamlit: `{current}`")
-            if duration:
-                st.caption(f"Duración estimada para auto-siguiente: {duration/60:.1f} min")
-                st.session_state["rrp_fm_expected_duration"] = duration
-            else:
-                st.caption("Duración no calculable: auto-siguiente usará duración aproximada de 180 s si pulsas Play.")
-                st.session_state.setdefault("rrp_fm_expected_duration", 180.0)
-        except Exception as exc:
-            st.error(f"No se pudo cargar la canción: {current.name}")
-            st.exception(exc)
-
-        # Refresco ligero para auto-siguiente. No se activa si el usuario lo desactiva.
-        if st.session_state.get("rrp_fm_auto_next") and st.session_state.get("rrp_fm_playing_flag") and st_autorefresh is not None:
-            remaining = None
-            try:
-                remaining = max(8.0, float(st.session_state.get("rrp_fm_expected_duration", 180.0)) - (_time.time() - float(st.session_state.get("rrp_fm_started_at", _time.time()))))
-            except Exception:
-                remaining = 30.0
-            # Capamos el intervalo para no dejar la app dormida demasiado tiempo si la estimación falla.
-            interval_ms = int(min(max(remaining, 12.0), 60.0) * 1000)
-            st_autorefresh(interval=interval_ms, limit=1, key=f"rrp_fm_autonext_refresh_{idx}_{st.session_state.get('rrp_fm_nonce',0)}")
+            with c2:
+                if st.button("⏭️ Siguiente seguro", key="rrp_fm_safe_next_v80"):
+                    st.session_state["rrp_fm_safe_idx"] = (int(st.session_state["rrp_fm_safe_idx"]) + 1) % len(tracks)
+                    st.rerun()
+            with c3:
+                if st.button("🎲 Aleatorio seguro", key="rrp_fm_safe_random_v80"):
+                    st.session_state["rrp_fm_safe_idx"] = _random.randrange(len(tracks))
+                    st.rerun()
+            safe_idx = max(0, min(int(st.session_state["rrp_fm_safe_idx"]), len(tracks)-1))
+            chosen = st.selectbox("Canción modo seguro", safe_names, index=safe_idx, key="rrp_fm_safe_select_v80")
+            chosen_idx = safe_names.index(chosen)
+            st.session_state["rrp_fm_safe_idx"] = chosen_idx
+            safe_file = tracks[chosen_idx]
+            fmt = "audio/mp3" if safe_file.suffix.lower() == ".mp3" else "audio/wav" if safe_file.suffix.lower() == ".wav" else "audio/ogg"
+            st.audio(safe_file.read_bytes(), format=fmt)
+            st.caption(f"Archivo local servido por Streamlit: `{safe_file}`")
 
         with st.expander("🔎 Diagnóstico Radar FM", expanded=False):
-            st.write("Modo:", "st.audio nativo seguro + botones + auto-siguiente experimental")
+            st.write("Modo:", "HTML interno fetch/blob + fallback st.audio")
             st.write("Directorio actual de Streamlit:", str(cwd))
             st.write("Directorio del archivo Python:", str(here))
             st.write("Carpeta usada:", str(music_dir))
@@ -16229,7 +16195,6 @@ def inject_music_player() -> None:
             st.warning(f"No se pudo cargar Radar FM: {exc}")
         except Exception:
             pass
-
 
 def main() -> None:
     st.set_page_config(page_title=APP_NAME, layout="wide", initial_sidebar_state="expanded")
@@ -16726,14 +16691,106 @@ Un cluster grande con mucho volumen puede indicar un distribuidor ODL, un treasu
         styled_table(fdf)
 
     elif section == "Cinemateca":
-        st.subheader("🎬 Cinemateca — evolución sincronizada con técnico")
-        st.markdown("""<div class='rrp-note'>
-<b>¿Qué es la cinemateca?</b> Reproduce el estado del radar semana a semana hacia atrás en el tiempo.
-Usa el slider para navegar o activa Auto-play para verlo correr automáticamente.<br>
-<b>⚠️ Normal que los frames iniciales sean rojos:</b> los primeros meses del histórico tienen poca actividad
-(o son datos demo con señales bajas). Los frames recientes reflejan la actividad real acumulada.
-Los gráficos muestran los datos disponibles hasta esa fecha para que veas cómo evolucionaron las señales.
-</div>""", unsafe_allow_html=True)
+        st.subheader("🎬 Cinemática — precio, liquidez y escenarios cruzados")
+        st.markdown("""
+<div class='rrp-note'>
+<b>Objetivo:</b> convertir los datos cruzados de la app en una cinemática de escenarios.
+No es una predicción exacta ni asesoramiento financiero: es una lectura visual de dirección probable,
+liquidez, spread/slippage estimados, volumen, rutas, pruebas, adopción y riesgo especulativo.
+</div>
+""", unsafe_allow_html=True)
+
+        def _f(row, key, default=0.0):
+            try:
+                return float(row.get(key, default) or 0.0)
+            except Exception:
+                return float(default)
+
+        def _clip(x, lo=0.0, hi=100.0):
+            return max(lo, min(hi, float(x)))
+
+        def _last_price_until(day_value):
+            try:
+                if xrp_price is None or xrp_price.empty:
+                    return None
+                px = xrp_price[xrp_price["day"].astype(str) <= str(day_value)].copy()
+                if px.empty:
+                    return None
+                return float(px.iloc[-1]["price_usd"])
+            except Exception:
+                return None
+
+        def _route_counts_until(day_value):
+            out = {"routes": 0, "proofs": 0, "dynamic": 0}
+            try:
+                out["routes"] = int(conn.execute("SELECT COUNT(*) FROM route_paths WHERE day<=?", (str(day_value),)).fetchone()[0])
+            except Exception:
+                pass
+            try:
+                out["proofs"] = int(conn.execute("SELECT COUNT(*) FROM connection_proofs").fetchone()[0])
+            except Exception:
+                pass
+            try:
+                out["dynamic"] = int(conn.execute("SELECT COUNT(*) FROM dynamic_routes").fetchone()[0])
+            except Exception:
+                pass
+            return out
+
+        def _scenario_engine(row, day_value):
+            bull = _f(row, "bull_score")
+            bear = _f(row, "bear_score")
+            flip = _f(row, "flip_score")
+            adoption = _f(row, "adoption_score")
+            pump = _f(row, "pump_score")
+            coverage = _f(row, "radar_coverage")
+            public = _f(row, "public_xrpl_score") * 100 if _f(row, "public_xrpl_score") <= 1.2 else _f(row, "public_xrpl_score")
+            payment = _f(row, "payment_flow_score") * 100 if _f(row, "payment_flow_score") <= 1.2 else _f(row, "payment_flow_score")
+            dex = _f(row, "dex_score") * 100 if _f(row, "dex_score") <= 1.2 else _f(row, "dex_score")
+            trust = _f(row, "trustline_score") * 100 if _f(row, "trustline_score") <= 1.2 else _f(row, "trustline_score")
+            whale = _f(row, "large_transfer_score") * 100 if _f(row, "large_transfer_score") <= 1.2 else _f(row, "large_transfer_score")
+            persistence = _f(row, "persistence_score") * 100 if _f(row, "persistence_score") <= 1.2 else _f(row, "persistence_score")
+            anomaly = _f(row, "anomaly_score") * 100 if _f(row, "anomaly_score") <= 1.2 else _f(row, "anomaly_score")
+            topology = _f(row, "topology_score") * 100 if _f(row, "topology_score") <= 1.2 else _f(row, "topology_score")
+            vol = _f(row, "xrpl_volume")
+            txc = _f(row, "tx_count")
+            routes = _route_counts_until(day_value)
+            route_factor = _clip((routes["routes"] / 12.0) * 100, 0, 100)
+            proof_factor = _clip((routes["proofs"] / 5.0) * 100, 0, 100)
+
+            # Liquidez y microestructura: estimación con datos internos disponibles.
+            # Si más adelante añadimos orderbook real, esta capa se sustituye por spread/slippage reales.
+            liquidity = _clip(0.28*public + 0.24*dex + 0.18*payment + 0.14*trust + 0.10*coverage + 0.06*persistence, 0, 100)
+            activity = _clip(0.30*bull + 0.20*public + 0.18*whale + 0.14*anomaly + 0.10*topology + 0.08*route_factor, 0, 100)
+            adoption_quality = _clip(0.28*adoption + 0.24*flip + 0.16*proof_factor + 0.14*persistence + 0.10*coverage + 0.08*payment, 0, 100)
+            speculation_penalty = _clip(0.45*pump + 0.35*bear + 0.20*max(0, pump-adoption), 0, 100)
+            pressure = _clip(0.42*activity + 0.38*adoption_quality + 0.20*liquidity - 0.34*speculation_penalty, 0, 100)
+
+            spread_bps = max(2.0, 42.0 - liquidity*0.32 + pump*0.05 + bear*0.06)
+            slippage_bps = max(3.0, 58.0 - liquidity*0.40 + whale*0.11 + anomaly*0.08 + pump*0.06)
+            liquidity_state = "alta" if liquidity >= 66 else "media" if liquidity >= 42 else "baja"
+            direction = "alcista" if pressure >= 60 else "neutra-alcista" if pressure >= 48 else "neutra/frágil" if pressure >= 36 else "bajista/fría"
+
+            price_now = _last_price_until(day_value)
+            # Escenarios no prometen precio; proyectan rango hipotético según intensidad.
+            cons_pct = max(-8.0, min(18.0, (pressure-45)*0.18 - max(0, bear-55)*0.08))
+            mod_pct  = max(-14.0, min(45.0, (pressure-42)*0.48 + (adoption_quality-50)*0.12 - max(0, pump-adoption)*0.10))
+            agg_pct  = max(-22.0, min(95.0, (pressure-40)*0.92 + max(0, flip-45)*0.35 + max(0, proof_factor-20)*0.15 - max(0, bear-62)*0.35))
+            def _target(pct):
+                return None if price_now is None else price_now * (1 + pct/100.0)
+            scenarios = [
+                {"name":"Conservador", "prob": _clip(70 - abs(pressure-45)*0.65 + liquidity*0.10 - pump*0.08), "pct": cons_pct, "target": _target(cons_pct), "desc":"Lectura prudente: solo acepta señales persistentes y descuenta ruido especulativo."},
+                {"name":"Moderado", "prob": _clip(35 + adoption_quality*0.35 + liquidity*0.15 - speculation_penalty*0.18), "pct": mod_pct, "target": _target(mod_pct), "desc":"Lectura central: exige alineación entre rutas, actividad pública, liquidez y persistencia."},
+                {"name":"Agresivo", "prob": _clip(15 + flip*0.32 + proof_factor*0.18 + route_factor*0.10 - bear*0.22 - max(0,pump-adoption)*0.18), "pct": agg_pct, "target": _target(agg_pct), "desc":"Lectura de ruptura: solo cobra sentido si aparecen pruebas nuevas y adopción supera claramente al pump."},
+            ]
+            dominant = max(scenarios, key=lambda x: x["prob"])
+            return {
+                "bull":bull,"bear":bear,"flip":flip,"adoption":adoption,"pump":pump,"coverage":coverage,
+                "public":public,"payment":payment,"dex":dex,"trust":trust,"whale":whale,"persistence":persistence,
+                "volume":vol,"tx_count":txc,"routes":routes,"liquidity":liquidity,"activity":activity,
+                "adoption_quality":adoption_quality,"speculation_penalty":speculation_penalty,"pressure":pressure,
+                "spread_bps":spread_bps,"slippage_bps":slippage_bps,"liquidity_state":liquidity_state,
+                "direction":direction,"price_now":price_now,"scenarios":scenarios,"dominant":dominant,
+            }
 
         max_frame = max(0, len(df)//7 - 1)
         if "cinema_frame" not in st.session_state:
@@ -16741,88 +16798,127 @@ Los gráficos muestran los datos disponibles hasta esa fecha para que veas cómo
 
         b1, b2, b3, b4 = st.columns([1,1,1,2])
         with b1:
-            if st.button("⏮ Inicio"):
+            if st.button("⏮ Inicio", key="cinema_v81_start"):
                 st.session_state["cinema_frame"] = 0
         with b2:
-            if st.button("◀ Anterior"):
+            if st.button("◀ Anterior", key="cinema_v81_prev"):
                 st.session_state["cinema_frame"] = max(0, st.session_state["cinema_frame"] - 1)
         with b3:
-            if st.button("▶ Siguiente"):
+            if st.button("▶ Siguiente", key="cinema_v81_next"):
                 st.session_state["cinema_frame"] = min(max_frame, st.session_state["cinema_frame"] + 1)
         with b4:
-            autoplay = st.toggle("Auto-play", value=False)
+            autoplay = st.toggle("Auto-play cinemática", value=False, key="cinema_v81_autoplay")
 
         if autoplay:
             st.session_state["cinema_frame"] = (st.session_state["cinema_frame"] + 1) if st.session_state["cinema_frame"] < max_frame else 0
             if st_autorefresh:
-                st_autorefresh(interval=1600, key="cinema_autoplay_v52")
+                st_autorefresh(interval=1800, key="cinema_autoplay_v81")
 
-        frame = st.slider("Frame semanal (0 = inicio histórico · máx = hoy)", 0, max_frame, int(st.session_state["cinema_frame"]))
+        frame = st.slider("Frame semanal (0 = inicio histórico · máx = hoy)", 0, max_frame, int(st.session_state["cinema_frame"]), key="cinema_v81_slider")
         st.session_state["cinema_frame"] = frame
-
         idx = min(len(df)-1, frame*7)
         r = df.iloc[idx].copy()
-        s = get_state(r)
+        day_value = str(r.get("day", ""))
+        m = _scenario_engine(r, day_value)
+        dominant = m["dominant"]
 
-        source_tag = "📡 XRPL real" if "xrpl" in str(r.get("source","")) else "🔶 Demo"
+        price_txt = "sin precio real" if m["price_now"] is None else f"${m['price_now']:.4f}"
+        target_txt = "sin objetivo" if dominant["target"] is None else f"${dominant['target']:.4f}"
+        route_total = m["routes"].get("routes",0)
+        proof_total = m["routes"].get("proofs",0)
+        dyn_total = m["routes"].get("dynamic",0)
+
         st.markdown(f"""
-<div class='rrp-cinema-frame'>
-<b>Frame {frame+1}/{max_frame+1}</b> &nbsp;·&nbsp; Fecha: <b>{r['day']}</b> &nbsp;·&nbsp; {source_tag}<br>
-Fase: <b>{int(r['phase'])}/5 — {r['phase_name']}</b><br>
-<span style='color:#3CFF9B'>Subida: <b>{r['bull_score']:.1f}%</b></span> &nbsp;·&nbsp;
-<span style='color:#FF5A67'>Riesgo: <b>{r['bear_score']:.1f}%</b></span> &nbsp;·&nbsp;
-<span style='color:#B673FF'>Flip: <b>{r['flip_score']:.1f}%</b></span> &nbsp;·&nbsp;
-<span style='color:#5AD7FF'>Cobertura: <b>{r['radar_coverage']:.1f}%</b></span> &nbsp;·&nbsp;
-<span style='color:#FFB84D'>Pump: <b>{r['pump_score']:.1f}%</b></span>
-</div>""", unsafe_allow_html=True)
+<div style="position:relative;overflow:hidden;border-radius:26px;padding:22px;margin:10px 0 16px 0;
+ background:radial-gradient(circle at 20% 20%,rgba(56,189,248,.28),transparent 30%),
+ radial-gradient(circle at 78% 28%,rgba(182,115,255,.25),transparent 34%),
+ linear-gradient(135deg,#020617 0%,#08111f 48%,#111827 100%);border:1px solid rgba(56,189,248,.32);box-shadow:0 22px 70px rgba(0,0,0,.45);">
+  <div style="font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:#38BDF8;font-weight:900;">Cinematic Intelligence Engine · v81</div>
+  <div style="font-size:28px;font-weight:950;color:white;margin-top:3px;">Escenario dominante: {html.escape(dominant['name'])} · sesgo {html.escape(m['direction'])}</div>
+  <div style="color:#CBD5E1;margin-top:6px;max-width:980px;">Fecha frame: <b>{html.escape(day_value)}</b> · Precio XRP real/ref.: <b>{price_txt}</b> · Rango escenario dominante: <b>{dominant['pct']:+.1f}%</b> → <b>{target_txt}</b></div>
+  <div style="display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:10px;margin-top:16px;">
+    <div style="background:rgba(2,6,23,.55);border:1px solid rgba(148,163,184,.22);border-radius:16px;padding:12px;color:#E5E7EB;"><b>Volumen XRPL</b><br><span style="color:#38BDF8;font-size:20px;">{m['volume']:,.0f}</span></div>
+    <div style="background:rgba(2,6,23,.55);border:1px solid rgba(148,163,184,.22);border-radius:16px;padding:12px;color:#E5E7EB;"><b>Spread estimado</b><br><span style="color:#FACC15;font-size:20px;">{m['spread_bps']:.1f} bps</span></div>
+    <div style="background:rgba(2,6,23,.55);border:1px solid rgba(148,163,184,.22);border-radius:16px;padding:12px;color:#E5E7EB;"><b>Slippage estimado</b><br><span style="color:#FB7185;font-size:20px;">{m['slippage_bps']:.1f} bps</span></div>
+    <div style="background:rgba(2,6,23,.55);border:1px solid rgba(148,163,184,.22);border-radius:16px;padding:12px;color:#E5E7EB;"><b>Rutas/pruebas</b><br><span style="color:#34D399;font-size:20px;">{route_total}/{proof_total}</span></div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
-        # Interpretación del frame en lenguaje sencillo
-        bull_r, bear_r, flip_r = float(r["bull_score"]), float(r["bear_score"]), float(r["flip_score"])
-        pump_r, adopt_r, phase_r = float(r["pump_score"]), float(r["adoption_score"]), int(r["phase"])
-        if phase_r >= 4:
-            interp = f"🟢 <b>Fase avanzada (Fase {phase_r}).</b> El radar ve varias huellas públicas coordinadas. Posible actividad institucional real."
-            ci = "#3CFF9B"
-        elif bear_r >= 70:
-            interp = f"🔴 <b>Período bajista/frío.</b> La actividad XRPL en este momento era baja o muy especulativa. Riesgo: {bear_r:.0f}%. Normal en frames iniciales del histórico."
-            ci = "#FF5A67"
-        elif pump_r > adopt_r:
-            interp = f"🟡 <b>Más especulativo que real.</b> Pump ({pump_r:.0f}%) supera adopción ({adopt_r:.0f}%). Posible movimiento de precio sin base sólida."
-            ci = "#FFB84D"
-        elif flip_r >= 55:
-            interp = f"🟣 <b>Adopción en progreso.</b> Flip score {flip_r:.0f}% · Cobertura {float(r['radar_coverage']):.0f}%. Varias huellas encendidas."
-            ci = "#B673FF"
+        c1,c2,c3,c4,c5 = st.columns(5)
+        c1.metric("Presión precio", f"{m['pressure']:.1f}%", help="Cruza actividad, adopción, liquidez, pruebas y penaliza pump/riesgo.")
+        c2.metric("Liquidez", f"{m['liquidity']:.1f}%", m["liquidity_state"])
+        c3.metric("Adopción calidad", f"{m['adoption_quality']:.1f}%")
+        c4.metric("Riesgo especulativo", f"{m['speculation_penalty']:.1f}%")
+        c5.metric("Rutas dinámicas", f"{dyn_total}")
+
+        st.markdown("#### Escenarios conservador · moderado · agresivo")
+        cols = st.columns(3)
+        for col, sc in zip(cols, m["scenarios"]):
+            with col:
+                tgt = "—" if sc["target"] is None else f"${sc['target']:.4f}"
+                st.markdown(f"""
+<div style="height:220px;border-radius:20px;padding:15px;background:rgba(15,23,42,.92);border:1px solid rgba(56,189,248,.22);color:#E5E7EB;">
+  <div style="font-size:12px;color:#38BDF8;font-weight:900;text-transform:uppercase;letter-spacing:.12em;">{html.escape(sc['name'])}</div>
+  <div style="font-size:32px;font-weight:950;color:white;">{sc['prob']:.0f}%</div>
+  <div style="color:{'#34D399' if sc['pct']>=0 else '#FB7185'};font-size:20px;font-weight:800;">{sc['pct']:+.1f}% · {tgt}</div>
+  <div style="font-size:13px;color:#CBD5E1;margin-top:10px;line-height:1.35;">{html.escape(sc['desc'])}</div>
+</div>
+""", unsafe_allow_html=True)
+
+        categories = ["Volumen", "Liquidez", "Adopción", "Flip", "Pump", "Riesgo", "Rutas", "Pruebas"]
+        values = [
+            _clip(math.log10(max(1.0, m["volume"]))/8*100),
+            m["liquidity"],
+            m["adoption_quality"],
+            m["flip"],
+            m["pump"],
+            m["bear"],
+            _clip(route_total/20*100),
+            _clip(proof_total/6*100),
+        ]
+        fig = go.Figure()
+        fig.add_trace(go.Scatterpolar(r=values, theta=categories, fill="toself", name="Estado cinemático"))
+        fig.update_layout(
+            title="Mapa radial de fuerzas cruzadas",
+            polar=dict(radialaxis=dict(visible=True, range=[0,100])),
+            paper_bgcolor="#020617", plot_bgcolor="#020617", font=dict(color="#E5E7EB"),
+            height=480, margin=dict(l=30,r=30,t=60,b=30)
+        )
+        st.plotly_chart(fig, width="stretch", key="cinema_v81_radar")
+
+        st.markdown("#### Cinta cinemática de liquidez")
+        flow_fig = go.Figure()
+        recent = df.iloc[max(0, idx-60):idx+1].copy()
+        if not recent.empty:
+            flow_fig.add_trace(go.Scatter(x=recent["day"], y=recent["xrpl_volume"], name="Volumen XRPL", fill="tozeroy"))
+            flow_fig.add_trace(go.Scatter(x=recent["day"], y=recent["bull_score"], name="Presión alcista score", yaxis="y2"))
+            flow_fig.add_trace(go.Scatter(x=recent["day"], y=recent["adoption_score"], name="Adopción score", yaxis="y2"))
+            flow_fig.update_layout(
+                title="Volumen, presión y adopción hasta el frame",
+                yaxis=dict(title="Volumen"), yaxis2=dict(title="Score", overlaying="y", side="right", range=[0,100]),
+                paper_bgcolor="#020617", plot_bgcolor="#020617", font=dict(color="#E5E7EB"), height=440,
+                legend=dict(orientation="h"), margin=dict(l=40,r=40,t=60,b=40)
+            )
+            st.plotly_chart(flow_fig, width="stretch", key="cinema_v81_flow")
+
+        st.markdown("#### Lectura automática")
+        narrative = []
+        narrative.append(f"El radar lee un sesgo <b>{html.escape(m['direction'])}</b> con presión de precio {m['pressure']:.1f}%.")
+        narrative.append(f"La liquidez aparece <b>{html.escape(m['liquidity_state'])}</b>: spread estimado {m['spread_bps']:.1f} bps y slippage estimado {m['slippage_bps']:.1f} bps.")
+        narrative.append(f"Rutas acumuladas: <b>{route_total}</b> · pruebas fijas: <b>{proof_total}</b> · rutas dinámicas: <b>{dyn_total}</b>.")
+        if m["pump"] > m["adoption"]:
+            narrative.append("⚠️ El componente especulativo supera a la adopción: conviene revisar fuentes antes de elevar el escenario.")
         else:
-            interp = f"🟠 <b>Señal baja / ruido.</b> Fase {phase_r}/5. Cobertura: {float(r['radar_coverage']):.0f}%. Aún no hay coordinación suficiente entre señales."
-            ci = "#FFB84D"
+            narrative.append("✅ La adopción técnica pesa más que el pump: la señal es más limpia, aunque no definitiva.")
+        st.markdown("<div class='rrp-note'>" + "<br>".join(narrative) + "</div>", unsafe_allow_html=True)
 
-        st.markdown(f"""<div style="padding:.65rem 1rem;border-radius:14px;background:rgba(15,23,42,.88);
-            border-left:4px solid {ci};margin:.30rem 0 .80rem 0;font-size:.93rem;">{interp}</div>""",
-            unsafe_allow_html=True)
-
-        render_alert(s)
-
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Subida", f"{r['bull_score']:.1f}%")
-        c2.metric("Riesgo", f"{r['bear_score']:.1f}%")
-        c3.metric("Flip", f"{r['flip_score']:.1f}%")
-        c4.metric("Cobertura", f"{r['radar_coverage']:.1f}%")
-        c5.metric("Pump", f"{r['pump_score']:.1f}%")
-
-        st.plotly_chart(make_map(r, title=f"Mapa histórico · {r['day']} · Fase {int(r['phase'])}/5"), width="stretch")
-        render_color_legend()
-
-        st.markdown("#### Gráficas acumuladas hasta este frame")
-        st.markdown("""<div class='rrp-note'>Las gráficas muestran la <b>evolución hasta la fecha del frame seleccionado</b>,
-no el estado actual. Esto permite ver cómo fueron creciendo o cayendo las señales en el tiempo.</div>""", unsafe_allow_html=True)
-        partial = df.iloc[:idx+1]
-        st.plotly_chart(make_price_risk_chart(partial, xrp_price), width="stretch")
-        chart_diagnosis(partial, "price_risk")
-        st.plotly_chart(make_adoption_chart(partial, xrp_price, conn), width="stretch")
-        chart_diagnosis(partial, "adoption")
-        st.plotly_chart(make_public_footprints_chart(partial, xrp_price, conn), width="stretch")
-        chart_diagnosis(partial, "footprints")
-        st.plotly_chart(make_intelligence_engines_chart(partial, conn), width="stretch")
-        chart_diagnosis(partial, "engines")
+        with st.expander("Ver gráficos técnicos clásicos de la cinemática", expanded=False):
+            partial = df.iloc[:idx+1]
+            st.plotly_chart(make_price_risk_chart(partial, xrp_price), width="stretch", key="cinema_v81_price_risk")
+            st.plotly_chart(make_adoption_chart(partial, xrp_price, conn), width="stretch", key="cinema_v81_adoption")
+            st.plotly_chart(make_public_footprints_chart(partial, xrp_price, conn), width="stretch", key="cinema_v81_footprints")
+            st.plotly_chart(make_intelligence_engines_chart(partial, conn), width="stretch", key="cinema_v81_engines")
 
     elif section == "Diagnóstico":
         st.subheader("🔧 Diagnóstico del sistema")
