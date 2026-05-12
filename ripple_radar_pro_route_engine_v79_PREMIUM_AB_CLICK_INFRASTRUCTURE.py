@@ -173,8 +173,8 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v120_2026_05_12_NODE_CLICK_CASCADE_PROOF_UI_FIX"
-BUILD_NOTE = "Node click direct drilldown + cascade results + proof impact panel + anti-truncation UI"
+BUILD_ID = "v121_2026_05_12_DISCOVERY_FLOW_MAP_FOCUS_ONCHAIN_FIX"
+BUILD_NOTE = "Discovery ordenado por árbol · foco real de nodos · pruebas/PDF/on-chain por tarjeta"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
 import os as _os
@@ -4400,6 +4400,9 @@ def make_map(row: pd.Series,
 
     # Zona extra de vigilancia si hay wallets vigiladas
     has_watched = watched is not None and not watched.empty
+    # v121: normalizar foco antes de dibujar cajas. En modo foco no dibujamos
+    # las cajas globales para que el usuario vea SOLO el nodo y sus rutas directas.
+    focus_node = str(focus_node).strip() if focus_node else None
 
     boxes = [
         (-8.95, -1.65, -8.25, 2.25, "Americas"),
@@ -4419,20 +4422,21 @@ def make_map(row: pd.Series,
     ]
     if has_watched:
         boxes.append((-2.50, -5.80, 6.00, -3.60, "🔍 Wallets Vigiladas"))
-    for x0, y0, x1, y1, label in boxes:
-        fig.add_shape(type="rect", x0=x0, y0=y0, x1=x1, y1=y1,
-                      line=dict(color="rgba(255,255,255,0.22)", width=1),
-                      fillcolor="rgba(15,23,42,0.35)", layer="below")
-        fig.add_annotation(
-            x=(x0+x1)/2, y=y1+0.06, text=f"<b>{label}</b>",
-            showarrow=False,
-            font=dict(size=10, color="#CBD5E1"),
-            yanchor="bottom",
-            bgcolor="rgba(7,17,31,0.70)",
-            bordercolor="rgba(255,255,255,0.18)",
-            borderwidth=1,
-            borderpad=3,
-        )
+    if not focus_node:
+        for x0, y0, x1, y1, label in boxes:
+            fig.add_shape(type="rect", x0=x0, y0=y0, x1=x1, y1=y1,
+                          line=dict(color="rgba(255,255,255,0.22)", width=1),
+                          fillcolor="rgba(15,23,42,0.35)", layer="below")
+            fig.add_annotation(
+                x=(x0+x1)/2, y=y1+0.06, text=f"<b>{label}</b>",
+                showarrow=False,
+                font=dict(size=10, color="#CBD5E1"),
+                yanchor="bottom",
+                bgcolor="rgba(7,17,31,0.70)",
+                bordercolor="rgba(255,255,255,0.18)",
+                borderwidth=1,
+                borderpad=3,
+            )
 
     # Fusionar nodos y rutas dinamicos (Discovery Engine)
     _dyn_nodes, _dyn_routes, _new_boxes = load_dynamic_map_elements(conn) if conn is not None else ({}, [], [])
@@ -4452,6 +4456,8 @@ def make_map(row: pd.Series,
     ]
     _populated_layers = {data.get("layer") for data in _all_nodes.values()}
     for _zlayer, _zx0, _zy0, _zx1, _zy1, _zlabel in _DISCOVERY_ZONES:
+        if focus_node:
+            continue
         if _zlayer not in _populated_layers:
             continue   # zona vacía — no dibujar
         fig.add_shape(type="rect", x0=_zx0, y0=_zy0, x1=_zx1, y1=_zy1,
@@ -4465,16 +4471,17 @@ def make_map(row: pd.Series,
         )
 
     # Dibujar cajas de categorias completamente nuevas (capas desconocidas del Discovery Engine)
-    for bx0, by0, bx1, by1, blabel, bcolor in _new_boxes:
-        fig.add_shape(type="rect", x0=bx0, y0=by0, x1=bx1, y1=by1,
-                      line=dict(color=bcolor, width=1.5),
-                      fillcolor="rgba(15,23,42,0.50)", layer="below")
-        fig.add_annotation(
-            x=(bx0+bx1)/2, y=by1+0.06, text=f"<b>{blabel}</b>",
-            showarrow=False, font=dict(size=10, color="#FFFFFF"),
-            yanchor="bottom", bgcolor="rgba(7,17,31,0.85)",
-            bordercolor=bcolor, borderwidth=1, borderpad=3,
-        )
+    if not focus_node:
+        for bx0, by0, bx1, by1, blabel, bcolor in _new_boxes:
+            fig.add_shape(type="rect", x0=bx0, y0=by0, x1=bx1, y1=by1,
+                          line=dict(color=bcolor, width=1.5),
+                          fillcolor="rgba(15,23,42,0.50)", layer="below")
+            fig.add_annotation(
+                x=(bx0+bx1)/2, y=by1+0.06, text=f"<b>{blabel}</b>",
+                showarrow=False, font=dict(size=10, color="#FFFFFF"),
+                yanchor="bottom", bgcolor="rgba(7,17,31,0.85)",
+                bordercolor=bcolor, borderwidth=1, borderpad=3,
+            )
 
     # ── Cargar nodos verificados: rutas de nodos verificados se pintarán en verde ──
     _verified_nodes: set = set()
@@ -4513,9 +4520,6 @@ def make_map(row: pd.Series,
         _all_routes = [r for r in _all_routes if r[2] in _CONFIRMED_KINDS]
     elif route_filter == "surveillance":
         _all_routes = [r for r in _all_routes if r[2] in _SURVEILLANCE_KINDS]
-
-    # Normalizar focus_node para comparaciones seguras
-    focus_node = str(focus_node).strip() if focus_node else None
 
     # v111: modo foco REAL. Al pinchar un nodo, el mapa debe mostrar únicamente
     # las rutas directas donde ese nodo participa, no solo el camino calculado hacia XRPL.
@@ -4647,6 +4651,8 @@ def make_map(row: pd.Series,
         customdata=node_names,
         hoverinfo="text", hovertext=hovers, showlegend=False,
         hoverlabel=dict(bgcolor="#1e293b", font=dict(color="#FFFFFF", size=13), bordercolor="#5AD7FF"),
+        clickmode="event+select",
+        dragmode="select",
     ))
 
     # Etiqueta del nodo foco encima del mapa
@@ -17752,15 +17758,34 @@ def _rrp_plotly_points(selection_obj: Any) -> List[Dict[str, Any]]:
 
 
 def _rrp_node_from_plotly_selection(selection_obj: Any) -> str:
-    """Extrae el nombre de nodo desde customdata del punto seleccionado."""
+    """Extrae el nombre de nodo desde customdata/id/text del punto seleccionado."""
     pts = _rrp_plotly_points(selection_obj)
     if not pts:
         return ""
-    cd = pts[0].get("customdata") if isinstance(pts[0], dict) else None
+    p0 = pts[0] if isinstance(pts[0], dict) else {}
+    cd = p0.get("customdata")
     if isinstance(cd, (list, tuple)):
         cd = cd[0] if cd else None
     node = str(cd or "").strip()
-    return node
+    if node and node in NODES:
+        return node
+    if node:
+        return _canonical_display_node(node)
+    # Fallback: algunos navegadores no devuelven customdata al hacer click sobre el texto.
+    for key in ("id", "label", "hovertext", "text"):
+        raw = str(p0.get(key, "") or "").replace("<br>", " ").strip()
+        if not raw:
+            continue
+        # quitar emoji inicial muy común en el texto del nodo
+        raw2 = re.sub(r"^[^A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ]+", "", raw).strip()
+        # Coincidencia exacta/canónica contra nodos conocidos.
+        cand = _canonical_display_node(raw2)
+        if cand in NODES:
+            return cand
+        for n in list(NODES.keys()):
+            if _canonical_entity_key(n) == _canonical_entity_key(raw2):
+                return n
+    return ""
 
 
 def _remember_cascade_result(result: Dict[str, Any]) -> None:
@@ -17877,6 +17902,339 @@ def _render_discovery_route_impact_panel(result: Dict[str, Any]) -> None:
         st.caption(f"No se pudo renderizar el impacto de mapa: {exc}")
 
 
+# =============================================================================
+# v121 — Discovery ordenado: búsqueda inicial → cascada n → resultado → pruebas
+# =============================================================================
+
+def _rrp_listify(value: Any) -> List[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _rrp_result_key(result: Dict[str, Any]) -> str:
+    try:
+        name = _canonical_entity_name(result.get("institution") or result.get("query") or "")
+        conf = float(result.get("confidence", 0.0) or 0.0)
+        summary = str(result.get("summary", ""))[:80]
+        return hashlib.sha256(f"{_canonical_entity_key(name)}|{conf:.3f}|{summary}".encode()).hexdigest()[:16]
+    except Exception:
+        return hashlib.sha256(str(result).encode()).hexdigest()[:16]
+
+
+def _rrp_record_discovery_step(result: Dict[str, Any], *, source: str = "auto") -> None:
+    """Guarda un árbol ordenado de Discovery para que la cascada no parezca que se actualiza 'arriba'."""
+    try:
+        if not result:
+            return
+        name = _canonical_display_node(result.get("institution", ""))
+        if not name:
+            return
+        parent = str(st.session_state.get("disc_cascade_parent", "") or "").strip()
+        is_cascade = bool(st.session_state.get("disc_cascade_active")) or bool(parent)
+        root = str(st.session_state.get("disc_root_query", "") or st.session_state.get("disc_query", "") or name)
+        if not st.session_state.get("rrp_discovery_tree") or (not is_cascade and _canonical_entity_key(name) != _canonical_entity_key(st.session_state.get("rrp_discovery_tree_root", name)) and source == "manual"):
+            st.session_state["rrp_discovery_tree"] = []
+            st.session_state["rrp_discovery_tree_root"] = name
+        tree = st.session_state.setdefault("rrp_discovery_tree", [])
+        rkey = _rrp_result_key(result)
+        if any(x.get("key") == rkey for x in tree):
+            return
+        # calcular profundidad por padre
+        depth = 0
+        if is_cascade and parent:
+            parent_key = _canonical_entity_key(parent)
+            parent_depths = [int(x.get("depth", 0)) for x in tree if _canonical_entity_key(x.get("institution", "")) == parent_key]
+            depth = (max(parent_depths) + 1) if parent_depths else 1
+        elif is_cascade:
+            depth = 1
+        tree.append({
+            "key": rkey,
+            "institution": name,
+            "parent": parent,
+            "depth": depth,
+            "source": "cascade" if is_cascade else "initial",
+            "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+            "result": result,
+        })
+        st.session_state["rrp_discovery_tree"] = tree[-40:]
+        if is_cascade:
+            st.session_state["disc_cascade_active"] = False
+            st.session_state["disc_cascade_parent"] = ""
+    except Exception:
+        pass
+
+
+def _rrp_valid_evidence_items_safe(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    try:
+        return [x for x in (_valid_discovery_evidence_items(result) or []) if isinstance(x, dict)]
+    except Exception:
+        return [x for x in (result.get("evidence_items") or []) if isinstance(x, dict)]
+
+
+def _rrp_extract_sources(result: Dict[str, Any]) -> List[Dict[str, str]]:
+    out: List[Dict[str, str]] = []
+    seen: Set[str] = set()
+    def add(url: Any, title: Any = "", claim: Any = "", typ: Any = ""):
+        u = _extract_url_from_any(url) if callable(globals().get("_extract_url_from_any")) else str(url or "")
+        u = str(u or "").strip()
+        if not u or not u.startswith("http") or u in seen:
+            return
+        seen.add(u)
+        out.append({"url": u, "title": str(title or u), "claim": str(claim or ""), "type": str(typ or "")})
+    for src in result.get("sources") or []:
+        if isinstance(src, dict):
+            add(src.get("url") or src.get("source") or src, src.get("title") or src.get("name") or "Fuente", src.get("claim") or src.get("summary") or "", src.get("type") or "")
+        else:
+            add(src, src, "", "")
+    for ev in _rrp_valid_evidence_items_safe(result):
+        add(ev.get("url"), ev.get("title") or ev.get("source") or "Prueba", ev.get("claim") or ev.get("evidence") or "", ev.get("type") or ev.get("evidence_type") or "")
+    for rd in result.get("route_decisions") or []:
+        if isinstance(rd, dict):
+            for u in _rrp_listify(rd.get("url") or rd.get("source_url") or rd.get("sources") or rd.get("source")):
+                add(u, rd.get("title") or rd.get("label") or "Ruta", rd.get("claim") or rd.get("evidence") or rd.get("reason") or "", rd.get("evidence_type") or rd.get("kind") or "")
+    return out[:24]
+
+
+def _rrp_sources_by_quality(result: Dict[str, Any]) -> Dict[str, List[Dict[str, str]]]:
+    groups = {"pdf": [], "official": [], "news": [], "weak": []}
+    for src in _rrp_extract_sources(result):
+        u = src.get("url", "")
+        typ = src.get("type", "")
+        if _is_pdf_or_primary_doc_url(u, typ) if callable(globals().get("_is_pdf_or_primary_doc_url")) else u.lower().endswith(".pdf"):
+            groups["pdf"].append(src)
+        elif any(d in u.lower() for d in ["ripple.com", "bis.org", "swift.com", "sec.gov", "federalreserve.gov", "dtcc.com", "xrpl.org", "xrpl.org", "github.com/ripple"]):
+            groups["official"].append(src)
+        elif any(d in u.lower() for d in ["reuters.com", "bloomberg.com", "coindesk.com", "thebanker.com", "pymnts.com", "cointelegraph.com"]):
+            groups["news"].append(src)
+        else:
+            groups["weak"].append(src)
+    return groups
+
+
+def _rrp_onchain_requirement(result: Dict[str, Any]) -> Tuple[str, List[str]]:
+    """Decide si esta investigación necesita revisión on-chain y qué mirar."""
+    name = _canonical_entity_name(result.get("institution", ""))
+    targets = {_canonical_entity_name(x) for x in (result.get("connects_to") or [])}
+    for rd in result.get("route_decisions") or []:
+        if isinstance(rd, dict):
+            targets.add(_canonical_entity_name(rd.get("to") or rd.get("dst") or rd.get("target") or ""))
+    text = " ".join([name, " ".join(targets), str(result.get("summary", "")), json.dumps(result.get("evidence_items", []), ensure_ascii=False)[:1000]]).lower()
+    checks: List[str] = []
+    wallets = [w for w in (result.get("wallets") or []) if isinstance(w, dict) and str(w.get("address", "")).startswith("r")]
+    amm = result.get("amm_pools") or []
+    if wallets:
+        checks.append("wallet XRPL detectada: revisar account_tx, trustlines, pagos y contrapartes")
+    if amm:
+        checks.append("pool AMM detectado: revisar cuenta AMM, par, liquidez y cambios de reserva")
+    if any(t in {"XRPL", "RLUSD", "DEX/AMM", "Trustlines", "Public Gateway", "Large Transfers", "Clusters"} for t in targets):
+        checks.append("la ruta apunta a XRPL/RLUSD/DEX/AMM: conviene validación on-chain")
+    if any(k in text for k in ["wallet", "trustline", "amm", "xrpl", "rlusd", "xrp ledger", "on-chain", "onchain", "transaction"]):
+        checks.append("el texto/fuente menciona huella on-chain")
+    if not checks:
+        return "No obligatoria ahora", ["No hay wallet, trustline, AMM ni TX concreta. Primero hacen falta fuentes/documentos mejores."]
+    # dedupe
+    dedup=[]
+    for c in checks:
+        if c not in dedup:
+            dedup.append(c)
+    return "Recomendada", dedup
+
+
+def _rrp_route_rows_for_result(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    rows=[]
+    for rd in result.get("route_decisions") or []:
+        if not isinstance(rd, dict):
+            continue
+        src = str(rd.get("from") or rd.get("src") or result.get("institution") or "?")
+        dst = str(rd.get("to") or rd.get("dst") or rd.get("target") or "?")
+        kind = str(rd.get("evidence_type") or rd.get("type") or rd.get("kind") or result.get("route_kind") or "watch")
+        claim = str(rd.get("claim") or rd.get("evidence") or rd.get("reason") or rd.get("summary") or "")
+        verdict, reason = _route_will_be_added_label(rd, result)
+        rows.append({"src":src,"dst":dst,"kind":kind,"claim":claim,"verdict":verdict,"reason":reason})
+    if not rows:
+        for dst in result.get("connects_to") or []:
+            rows.append({"src":str(result.get("institution","?")),"dst":str(dst),"kind":str(result.get("route_kind","watch")),"claim":"Conexión textual detectada; requiere prueba estructurada.","verdict":"👁 solo revisión","reason":"sin route_decisions estructurado"})
+    return rows
+
+
+def _rrp_render_sources_list(items: List[Dict[str, str]], *, empty: str = "Sin fuentes en esta categoría.") -> None:
+    if not items:
+        st.caption(empty)
+        return
+    for i, src in enumerate(items, 1):
+        u = html.escape(src.get("url", ""))
+        title = html.escape((src.get("title") or src.get("url") or "Fuente")[:140])
+        claim = html.escape((src.get("claim") or "")[:500])
+        mark = "📄" if (_is_pdf_or_primary_doc_url(src.get("url", ""), src.get("type", "")) if callable(globals().get("_is_pdf_or_primary_doc_url")) else str(src.get("url","")).lower().endswith(".pdf")) else "🧾"
+        st.markdown(f"- {mark} [{title}]({u})" + (f" — {claim}" if claim else ""))
+
+
+def _rrp_render_discovery_result_card(item: Dict[str, Any], conn: sqlite3.Connection, *, expanded: bool = False) -> None:
+    result = item.get("result") or item
+    name = _canonical_display_node(result.get("institution", item.get("institution", "")))
+    depth = int(item.get("depth", 0) or 0)
+    source = item.get("source", "initial")
+    parent = item.get("parent", "")
+    conf = float(result.get("confidence", 0.0) or 0.0) * 100
+    connected = bool(result.get("connected"))
+    prefix = "🔍 Búsqueda inicial" if source == "initial" and depth == 0 else f"🔗 Cascada nivel {depth}"
+    status = "✅ conexión/ruta posible" if connected else "👁 sin conexión confirmada"
+    label = f"{prefix} — {name} · {status} · {conf:.0f}%"
+    if parent:
+        label += f" · desde {parent}"
+    with st.expander(label, expanded=expanded):
+        st.markdown(f"**Resumen:** {result.get('summary','Sin resumen')}")
+        status_onchain, checks = _rrp_onchain_requirement(result)
+        route_rows = _rrp_route_rows_for_result(result)
+        src_groups = _rrp_sources_by_quality(result)
+        evidence_items = _rrp_valid_evidence_items_safe(result)
+        wallets = [w for w in (result.get("wallets") or []) if isinstance(w, dict)]
+        amm = result.get("amm_pools") or []
+        partners = result.get("partners") or []
+        map_points = result.get("map_points") or []
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Pruebas válidas", len(evidence_items))
+        c2.metric("PDF/primarias", len(src_groups.get("pdf", [])) + len(src_groups.get("official", [])))
+        c3.metric("Rutas candidatas", len(route_rows))
+        c4.metric("On-chain", status_onchain)
+
+        tabs = st.tabs(["🧾 Pruebas", "📄 PDFs/oficiales", "🧭 Rutas/mapa", "💧 On-chain", "🧩 Nodos derivados"])
+        with tabs[0]:
+            if evidence_items:
+                for ev in evidence_items[:12]:
+                    title = html.escape(str(ev.get("title", "Prueba"))[:160])
+                    claim = html.escape(str(ev.get("claim") or ev.get("evidence") or "")[:800])
+                    url = str(ev.get("url", ""))
+                    typ = html.escape(str(ev.get("type") or ev.get("evidence_type") or ""))
+                    if url.startswith("http"):
+                        st.markdown(f"- 🧾 **{title}** · `{typ}` — {claim}  \\n  [abrir fuente]({url})")
+                    else:
+                        st.markdown(f"- 🧾 **{title}** · `{typ}` — {claim}")
+            else:
+                st.warning("No hay pruebas válidas aceptadas por Proof‑First. Las fuentes recuperadas quedan como revisión, no como conexión.")
+            if src_groups.get("news") or src_groups.get("weak"):
+                with st.expander("Fuentes secundarias/débiles recuperadas", expanded=False):
+                    _rrp_render_sources_list(src_groups.get("news", []) + src_groups.get("weak", []), empty="Sin fuentes débiles.")
+        with tabs[1]:
+            st.markdown("**PDFs y fuentes primarias/oficiales**")
+            _rrp_render_sources_list(src_groups.get("pdf", []) + src_groups.get("official", []), empty="No se encontraron PDFs ni fuentes oficiales claras para esta entidad.")
+        with tabs[2]:
+            st.markdown("**Qué rutas se añaden al mapa y cuáles quedan solo en revisión**")
+            if route_rows:
+                for rr in route_rows[:18]:
+                    css = "rrp-proof-card-ok" if str(rr["verdict"]).startswith("✅") else "rrp-proof-card-watch" if "débil" in str(rr["verdict"]) or "revisión" in str(rr["verdict"]) else "rrp-proof-card-bad"
+                    st.markdown(f"""
+<div class='rrp-proof-card {css}'>
+  <div class='rrp-proof-kicker'>{html.escape(rr['kind'])}</div>
+  <div class='rrp-proof-card-title'>{html.escape(rr['src'])} → {html.escape(rr['dst'])}</div>
+  <div class='rrp-proof-note'><b>{html.escape(rr['verdict'])}</b> · {html.escape(rr['reason'])}</div>
+  <div class='rrp-proof-note'>{html.escape(rr['claim'][:700])}</div>
+</div>
+""", unsafe_allow_html=True)
+            else:
+                st.info("No hay rutas candidatas estructuradas.")
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("🎯 Enfocar nodo en Radar", key=f"focus_disc_{item.get('key', _rrp_result_key(result))}", use_container_width=True):
+                    st.session_state["map_focus_node"] = name
+                    st.success("Nodo preparado. Ve a Radar para verlo enfocado.")
+            with col_b:
+                if st.button("🔁 Añadir/actualizar rutas ahora", key=f"apply_disc_{item.get('key', _rrp_result_key(result))}", use_container_width=True):
+                    info = apply_discovery_to_map(conn, result, auto=False)
+                    st.success(f"Actualizado: {info.get('added_routes',0)} rutas · {info.get('added_nodes',0)} nodos/puntos · {info.get('wallets_added',0)} wallets")
+                    st.rerun()
+        with tabs[3]:
+            st.markdown(f"**Estado:** {status_onchain}")
+            for chk in checks:
+                st.markdown(f"- {chk}")
+            if wallets:
+                st.markdown("**Wallets detectadas**")
+                for w in wallets[:10]:
+                    addr = str(w.get("address", ""))
+                    labelw = html.escape(str(w.get("label", "wallet")))
+                    role = html.escape(str(w.get("role", "")))
+                    if addr.startswith("r"):
+                        st.markdown(f"- [{addr}](https://xrpscan.com/account/{addr}) · **{labelw}** · {role}")
+                    else:
+                        st.markdown(f"- `{addr}` · **{labelw}** · {role}")
+            if amm:
+                st.markdown("**Pools AMM detectados**")
+                for pool in amm[:8]:
+                    acct = str(pool.get("account", ""))
+                    pair = str(pool.get("pair", "AMM"))
+                    if acct.startswith("r"):
+                        st.markdown(f"- [{pair}](https://xrpscan.com/account/{acct})")
+                    else:
+                        st.markdown(f"- {pair}")
+            if not wallets and not amm and status_onchain != "Recomendada":
+                st.caption("Para esta entidad ahora mismo no procede on-chain: falta wallet/trustline/pool/TX concreta.")
+        with tabs[4]:
+            derived = []
+            for p in partners:
+                if isinstance(p, dict) and p.get("name"):
+                    derived.append(("partner", p.get("name"), p.get("layer", ""), p.get("connects_to", "")))
+            for mp in map_points:
+                if isinstance(mp, dict) and mp.get("name"):
+                    derived.append(("map_point", mp.get("name"), mp.get("layer", ""), mp.get("connects_to", "")))
+            for c in result.get("connects_to") or []:
+                derived.append(("connects_to", c, "", ""))
+            if not derived:
+                st.caption("No hay nodos derivados claros para seguir la cascada.")
+            for typ, node, layer, conn_to in derived[:20]:
+                col1, col2 = st.columns([4,1])
+                with col1:
+                    st.markdown(f"- `{node}` · {typ}" + (f" · capa: **{layer}**" if layer else ""))
+                with col2:
+                    if st.button("Investigar", key=f"cascade_from_card_{item.get('key')}_{_canonical_entity_key(node)}", use_container_width=True):
+                        st.session_state.setdefault("cascade_queue", [])
+                        if node not in st.session_state["cascade_queue"]:
+                            st.session_state["cascade_queue"].insert(0, str(node))
+                        st.session_state["disc_cascade_parent"] = name
+                        st.success(f"Añadido a cascada: {node}")
+                        st.rerun()
+
+
+def _render_discovery_investigation_flow(conn: sqlite3.Connection, current_result: Optional[Dict[str, Any]] = None) -> None:
+    """Renderiza Discovery como árbol: resultado inicial → cascada 1 → resultado → cascada n."""
+    if current_result:
+        _rrp_record_discovery_step(current_result)
+    tree = st.session_state.get("rrp_discovery_tree", []) or []
+    if not tree and current_result:
+        tree = [{"key": _rrp_result_key(current_result), "institution": current_result.get("institution",""), "parent":"", "depth":0, "source":"initial", "ts":"", "result":current_result}]
+    if not tree:
+        return
+    st.markdown("### 🧪 Investigación ordenada")
+    st.caption("Flujo legible: primero la búsqueda inicial; después cada cascada con su propio resultado, pruebas, PDFs, rutas y validación on-chain cuando procede.")
+    # índice visual
+    for i, item in enumerate(tree, 1):
+        _rrp_render_discovery_result_card(item, conn, expanded=(i == len(tree)))
+
+    q = st.session_state.get("cascade_queue", []) or []
+    if q:
+        st.markdown("### 🔗 Siguiente hilo de cascada")
+        st.caption("Nada se investiga en secreto: cada click ejecuta una entidad, muestra su resultado debajo y decide si añade rutas al mapa o solo queda en revisión.")
+        cols = st.columns([3,1,1])
+        with cols[0]:
+            st.info("Pendientes: " + ", ".join(str(x) for x in q[:8]))
+        with cols[1]:
+            if st.button("⚡ Investigar siguiente", key="btn_cascade_next_v121", use_container_width=True):
+                _next = st.session_state["cascade_queue"].pop(0)
+                parent = str((current_result or {}).get("institution") or (tree[-1].get("institution") if tree else ""))
+                st.session_state["disc_pending_query"] = _next
+                st.session_state["disc_cascade_active"] = True
+                st.session_state["disc_cascade_parent"] = parent
+                st.session_state.pop("disc_result", None)
+                st.rerun()
+        with cols[2]:
+            if st.button("🗑️ Vaciar cola", key="btn_cascade_clear_v121", use_container_width=True):
+                st.session_state["cascade_queue"] = []
+                st.rerun()
+
+
 def render_discovery_engine(conn: sqlite3.Connection) -> None:
     """Panel UI del motor de descubrimiento."""
     st.subheader("Discovery Engine — busqueda y reescritura automatica")
@@ -17949,6 +18307,12 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
                 st.error("🔑 Sin API key — esta institución no está en caché. Configura `ANTHROPIC_API_KEY` para buscarla.")
     if do_search and query and query.strip() and _has_api_key:
         _raw_q = query.strip()
+        # v121: una búsqueda manual nueva abre un árbol Discovery nuevo.
+        st.session_state["rrp_discovery_tree"] = []
+        st.session_state["rrp_discovery_tree_root"] = _canonical_display_node(_raw_q)
+        st.session_state["disc_root_query"] = _raw_q
+        st.session_state["disc_cascade_active"] = False
+        st.session_state["disc_cascade_parent"] = ""
         if clean_research:
             ensure_sanitizer_tables(conn)
             if not st.session_state.get("safe_sanitizer_admin_ok") and _admin_secret_value():
@@ -18293,8 +18657,8 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
                 else:
                     st.caption("La investigación actual no propone conexiones nuevas aparte de las fuentes/resumen.")
 
-        _render_discovery_route_impact_panel(result)
-        _render_cascade_results_panel()
+        # v121: Discovery ya no se muestra como panel largo: árbol ordenado con tarjetas por nodo.
+        _render_discovery_investigation_flow(conn, result)
 
         # ── Columnas: info principal | descubrimientos extra ──────────────────
         col_main, col_extra = st.columns([3, 2])
@@ -18640,26 +19004,8 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
                     else:
                         st.warning(f"No añadido: {info.get('reason')}")
 
-            # ── Investigación en cascada: partners pendientes ──────────────────
-            _cascade_q = st.session_state.get("cascade_queue", [])
-            if _cascade_q:
-                st.markdown("---")
-                st.markdown(f"**🔗 Hilo de investigación — {len(_cascade_q)} entidades pendientes de investigar:**")
-                for _cname in _cascade_q[:6]:
-                    st.markdown(f"• {_cname}")
-                col_cas1, col_cas2 = st.columns(2)
-                with col_cas1:
-                    if st.button("⚡ Investigar siguiente en cascada", use_container_width=True, key="btn_cascade_next"):
-                        _next = st.session_state["cascade_queue"].pop(0)
-                        st.session_state["disc_pending_query"] = _next
-                        st.session_state["disc_cascade_active"] = True
-                        st.session_state["disc_cascade_parent"] = str(result.get("institution", ""))
-                        st.session_state.pop("disc_result", None)
-                        st.rerun()
-                with col_cas2:
-                    if st.button("🗑️ Limpiar cola", use_container_width=True, key="btn_cascade_clear"):
-                        st.session_state["cascade_queue"] = []
-                        st.rerun()
+            # v121: la cola de cascada se renderiza dentro de `_render_discovery_investigation_flow`
+            # para que el usuario vea: búsqueda inicial → cascada → resultado → siguiente hilo.
 
     # Nodos descubiertos
     st.markdown("---")
