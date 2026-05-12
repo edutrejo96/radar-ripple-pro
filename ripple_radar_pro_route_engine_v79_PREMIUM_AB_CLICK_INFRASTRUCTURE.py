@@ -23,7 +23,7 @@
 #   pip install streamlit plotly pandas numpy requests python-dateutil streamlit-autorefresh
 #
 # Ejecutar:
-#   streamlit run ripple_radar_pro_route_engine_v62_universal.py
+#   streamlit run ripple_radar_pro_route_engine_v115_SAFE_SANITIZER_ADMIN_GUARD.py
 #
 # Nota honesta:
 # XRPL/RLUSD usa datos públicos reales. Rutas privadas como SWIFT, FedNow, DTCC,
@@ -173,8 +173,8 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v111_2026_05_12_NODE_CLICK_PROOFS_WEAK_EVIDENCE_FIX"
-BUILD_NOTE = "Click de nodos real + panel de pruebas/rutas + evidencias débiles visibles en confirmadas"
+BUILD_ID = "v115_2026_05_12_SAFE_SANITIZER_ADMIN_GUARD"
+BUILD_NOTE = "Sanitizador seguro con backup/quarantine/admin + filtros anti-rutas falsas"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
 import os as _os
@@ -185,9 +185,12 @@ RLUSD_CURRENCY = "RLUSD"
 
 REFRESH_SECONDS      = 60
 BACKFILL_DAYS        = 240
-# Desactivado por defecto para que Streamlit no recree iframes/formularios y no corte Radar FM.
-# El gráfico A→B se actualiza igualmente cuando una búsqueda, ruta o wallet dispara rerun.
+# Desactivado el refresco bruto antiguo. En su lugar usamos Live Sync compartido:
+# polling ligero de SQLite + datarevision, para que las rutas/pruebas que añade
+# cualquier usuario aparezcan en mapas, métricas y gráficos sin pulsar Autoscan/Actualizar.
 ENABLE_BACKGROUND_AUTOREFRESH = False
+ENABLE_SHARED_LIVE_SYNC = True
+LIVE_SHARED_REFRESH_SECONDS = 12
 
 # ── Umbrales whale / auto-mapa ─────────────────────────────────────────────
 WHALE_XRP_THRESHOLD   = 100_000      # XRP mínimo para considerarlo whale
@@ -1092,7 +1095,7 @@ def _connection_proof_row(conn: sqlite3.Connection, node_a: Any, node_b: Any):
         pid = _canonical_pair_proof_id(node_a, node_b)
         row = conn.execute(
             "SELECT proof_data, onchain, confidence, validated_at, node_a, node_b FROM connection_proofs "
-            "WHERE proof_id=? OR pair_key=? LIMIT 1",
+            "WHERE COALESCE(sanitizer_status,'active')!='quarantined' AND (proof_id=? OR pair_key=?) LIMIT 1",
             (pid, pair_key),
         ).fetchone()
         if row:
@@ -1105,7 +1108,7 @@ def _connection_proof_row(conn: sqlite3.Connection, node_a: Any, node_b: Any):
         pid2 = hashlib.sha256(f"{node_b}|{node_a}".encode()).hexdigest()[:16]
         row = conn.execute(
             "SELECT proof_data, onchain, confidence, validated_at, node_a, node_b FROM connection_proofs "
-            "WHERE proof_id=? OR proof_id=? OR (node_a=? AND node_b=?) OR (node_a=? AND node_b=?) LIMIT 1",
+            "WHERE COALESCE(sanitizer_status,'active')!='quarantined' AND (proof_id=? OR proof_id=? OR (node_a=? AND node_b=?) OR (node_a=? AND node_b=?)) LIMIT 1",
             (pid1, pid2, node_a, node_b, node_b, node_a),
         ).fetchone()
         if row:
@@ -1118,7 +1121,7 @@ def _connection_proof_row(conn: sqlite3.Connection, node_a: Any, node_b: Any):
         kb = _canonical_entity_key(node_b)
         rows = conn.execute(
             "SELECT proof_data, onchain, confidence, validated_at, node_a, node_b FROM connection_proofs "
-            "WHERE node_a=? OR node_b=? OR node_a=? OR node_b=?",
+            "WHERE COALESCE(sanitizer_status,'active')!='quarantined' AND (node_a=? OR node_b=? OR node_a=? OR node_b=?)",
             (node_a, node_a, node_b, node_b),
         ).fetchall()
         for r in rows:
@@ -1575,6 +1578,126 @@ def _proof_domain(url: str) -> str:
         return ""
 
 
+# =============================================================================
+# PROOF-FIRST HARDENING v113
+# =============================================================================
+# La app puede investigar, deducir y visualizar, pero no debe convertir
+# cualquier fuente o motor interno en una conexión factual. Esta capa separa:
+# - pruebas on-chain reales,
+# - documentos/fuentes primarias,
+# - prensa secundaria,
+# - inferencias/watch,
+# - nodos internos del radar.
+
+RADAR_ENGINE_NODES: Set[str] = {
+    "Topology Engine", "Anomaly Engine", "Fingerprint Engine"
+}
+RADAR_OBSERVATION_NODES: Set[str] = {
+    "Topology Engine", "Anomaly Engine", "Fingerprint Engine", "Clusters"
+}
+PAIR_ONCHAIN_TYPES: Set[str] = {
+    "tx_directa", "odl_payment", "trust_line", "amm_pool"
+}
+NODE_ONLY_ONCHAIN_TYPES: Set[str] = {
+    "wallet_activa", "offers_activas", "sin_wallet"
+}
+PRIMARY_SOURCE_DOMAINS: Tuple[str, ...] = (
+    "ripple.com", "xrpl.org", "bis.org", "federalreserve.gov", "sec.gov",
+    "swift.com", "dtcc.com", "mastercard.com", "metaco.com", "hiddenroad.com",
+    "gtreasury.com", "finastra.com", "volantetech.com", "imf.org", "worldbank.org",
+    "pbc.gov.cn", "gov.cn", "boj.or.jp", "fsa.go.jp", "cbr.ru", "rbi.org.in",
+    "bankofengland.co.uk", "ecb.europa.eu", "bde.es", "banrep.gov.co",
+    "sbi.co.jp", "sbiremit.co.jp", "tranglo.com", "bitso.com", "coins.ph",
+    "santander.com", "sc.com", "bankofamerica.com", "pnc.com", "bci.cl",
+    "lianlianglobal.com", "cimb.com", "akbank.com", "transfergo.com",
+)
+MAJOR_NEWS_DOMAINS: Tuple[str, ...] = (
+    "reuters.com", "bloomberg.com", "wsj.com", "ft.com", "cnbc.com", "apnews.com",
+    "theblock.co", "coindesk.com", "cointelegraph.com", "pymnts.com"
+)
+WEAK_SOURCE_DOMAINS: Tuple[str, ...] = (
+    "medium.com", "substack.com", "reddit.com", "x.com", "twitter.com", "youtube.com",
+    "coinbureau.com", "cryptopotato.com", "u.today", "ambcrypto.com", "watcher.guru"
+)
+RELATION_VERBS: Tuple[str, ...] = (
+    "partner", "partnership", "partners with", "joins", "joined", "member", "task force",
+    "uses", "using", "built on", "build on", "integrat", "connect", "powered by",
+    "launch", "announc", "select", "choose", "customer", "client", "acquir", "acquisition",
+    "custody", "custodian", "settlement", "liquidity", "off-ramp", "on-ramp",
+    "ripple payments", "ripplenet", "odl", "on-demand liquidity", "xrp ledger", "xrpl", "rlusd"
+)
+
+def _is_radar_engine_node(entity: Any) -> bool:
+    return _canonical_entity_name(entity) in RADAR_ENGINE_NODES
+
+def _is_radar_observation_node(entity: Any) -> bool:
+    return _canonical_entity_name(entity) in RADAR_OBSERVATION_NODES
+
+def _domain_matches(domain: str, suffixes: Tuple[str, ...]) -> bool:
+    d = str(domain or "").lower().replace("www.", "")
+    return any(d == s or d.endswith("." + s) or d.endswith(s) for s in suffixes)
+
+def _source_tier(url: Any) -> str:
+    d = _proof_domain(str(url or ""))
+    if not d:
+        return "none"
+    if _domain_matches(d, PRIMARY_SOURCE_DOMAINS) or any(h in str(url).lower() for h in _PRIMARY_DOC_HOST_HINTS):
+        return "primary"
+    if _domain_matches(d, MAJOR_NEWS_DOMAINS):
+        return "major_news"
+    if _domain_matches(d, WEAK_SOURCE_DOMAINS):
+        return "weak"
+    return "secondary"
+
+def _claim_has_relation_language(text: Any) -> bool:
+    t = str(text or "").lower()
+    nt = _norm_key(t)
+    return any(v in t or v in nt for v in RELATION_VERBS)
+
+def _proof_quality_multiplier(proof: Dict[str, Any], node_a: Any = "", node_b: Any = "") -> float:
+    if not isinstance(proof, dict):
+        return 0.0
+    ptype = str(proof.get("type", "") or "").strip().lower()
+    if proof.get("onchain"):
+        return 1.0 if ptype in PAIR_ONCHAIN_TYPES else 0.0
+    if ptype in {"social_mention", "ai_inference", "sin_wallet"}:
+        return 0.0
+    url = _extract_url_from_any(proof)
+    tier = _source_tier(url)
+    blob = _proof_text_blob(proof)
+    # Una fuente que solo menciona dos nombres, sin verbo/relación, no prueba una conexión.
+    if not _claim_has_relation_language(blob):
+        return 0.0
+    if tier == "primary":
+        return 1.0
+    if tier == "major_news":
+        return 0.62
+    if tier == "secondary":
+        return 0.42
+    if tier == "weak":
+        return 0.22
+    return 0.0
+
+def _cap_score_by_source_mix(score: float, proofs: List[Dict[str, Any]]) -> float:
+    if not proofs:
+        return 0.0
+    if any(p.get("onchain") and str(p.get("type", "")).lower() in PAIR_ONCHAIN_TYPES for p in proofs):
+        return min(float(score), 0.97)
+    tiers = [_source_tier(_extract_url_from_any(p)) for p in proofs if p.get("internet")]
+    has_primary = any(t == "primary" for t in tiers)
+    has_major = any(t == "major_news" for t in tiers)
+    independent_domains = {_proof_domain(_extract_url_from_any(p)) for p in proofs if p.get("internet") and _proof_domain(_extract_url_from_any(p))}
+    if has_primary:
+        return min(float(score), 0.92)
+    if has_major and len(independent_domains) >= 2:
+        return min(float(score), 0.62)
+    if has_major:
+        return min(float(score), 0.55)
+    if len(independent_domains) >= 2:
+        return min(float(score), 0.42)
+    return min(float(score), 0.32)
+
+
 def _is_core_ripple_node(entity: Any) -> bool:
     c = _canonical_entity_name(entity)
     return c in {
@@ -1586,32 +1709,43 @@ def _is_core_ripple_node(entity: Any) -> bool:
 
 def _proof_relevant_to_pair(proof: Dict[str, Any], node_a: str, node_b: str) -> bool:
     """
-    Evita basura: una prueba de internet solo vale si la fuente menciona la entidad A
-    y también el nodo/tema B. No basta con una noticia general de blockchain.
+    Filtro duro de relevancia A↔B. Una fuente solo vale si demuestra la relación,
+    no si simplemente contiene palabras que encajan con la narrativa.
     """
     if not isinstance(proof, dict):
         return False
+
+    # Los motores internos del radar no son entidades externas verificables.
+    # Ejemplo bloqueado: BIS ↔ Topology Engine como “conexión”.
+    if _is_radar_engine_node(node_a) or _is_radar_engine_node(node_b):
+        return False
+
+    ptype = str(proof.get("type", "") or "").strip().lower()
+
+    # On-chain solo cuenta si es evidencia de PAR. Wallet activa/ofertas genéricas
+    # son evidencia del nodo, no de la conexión A↔B.
     if proof.get("onchain"):
-        return True
+        return ptype in PAIR_ONCHAIN_TYPES
+
     if not proof.get("internet"):
         return False
     url = _extract_url_from_any(proof)
     if not url.startswith("http"):
         return False
-    ptype = str(proof.get("type", "") or "").strip()
     if ptype not in EVIDENCE_SCORES or ptype in {"social_mention", "ai_inference", "sin_wallet"}:
         return False
+    if _proof_quality_multiplier(proof, node_a, node_b) <= 0:
+        return False
+
     blob = _proof_text_blob(proof)
     domain = _proof_domain(url)
     blob_plus = f"{blob} {domain}"
     mentions_a = _blob_mentions_any(blob_plus, _entity_search_terms(node_a))
     mentions_b = _blob_mentions_any(blob_plus, _entity_search_terms(node_b))
 
-    # ripple.com/xrpl.org aporta contexto Ripple/XRPL, pero NO debe validar una conexión
-    # si no aparece claramente la entidad externa. Antes esto podía aceptar páginas genéricas
-    # de RLUSD/XRPL como prueba de cualquier entidad → conexión falsa.
     official_ripple_domain = domain.endswith("ripple.com") or domain.endswith("xrpl.org")
     if official_ripple_domain and (_is_core_ripple_node(node_a) or _is_core_ripple_node(node_b)):
+        # Si la fuente es Ripple/XRPL y el otro lado es externo, debe aparecer el externo.
         if _is_core_ripple_node(node_a) and _is_core_ripple_node(node_b):
             return mentions_a and mentions_b
         if _is_core_ripple_node(node_a):
@@ -1619,12 +1753,7 @@ def _proof_relevant_to_pair(proof: Dict[str, Any], node_a: str, node_b: str) -> 
         if _is_core_ripple_node(node_b):
             return mentions_a
 
-    # En el resto de fuentes exigimos A y B.
-    if mentions_a and mentions_b:
-        return True
-
-    return False
-
+    return bool(mentions_a and mentions_b)
 
 def _dedupe_and_filter_proofs(node_a: str, node_b: str, proofs: Any, max_items: int = 3) -> List[Dict[str, Any]]:
     """Deduplica por URL/historia y filtra fuentes que no demuestran A↔B."""
@@ -1639,6 +1768,9 @@ def _dedupe_and_filter_proofs(node_a: str, node_b: str, proofs: Any, max_items: 
             continue
         p = dict(raw)
         if p.get("onchain"):
+            # v113: wallet_activa/ofertas genéricas prueban existencia del nodo, no una relación A↔B.
+            if str(p.get("type", "") or "").strip().lower() not in PAIR_ONCHAIN_TYPES:
+                continue
             label_key = _norm_key(p.get("type", "") + " " + p.get("label", "") + " " + str(p.get("tx_hash", "")))[:180]
             if label_key in seen_labels:
                 continue
@@ -1816,18 +1948,18 @@ CONNECTS_TO_NODE: Dict[str, str] = {
 # Las conexiones confirmadas siguen entrando por dynamic_routes + connection_proofs.
 ROUTES = [
     # Rails privados / públicos vigilados por el radar
-    ("SWIFT", "Topology Engine", "watch", "institutional_route_score", "SWIFT → vigilancia topológica"),
+    ("SWIFT", "Topology Engine", "watch_only", "institutional_route_score", "SWIFT → vigilancia topológica"),
     ("SWIFT", "Treasury", "watch", "institutional_route_score", "SWIFT ↔ Ripple Treasury/GTreasury · conector certificado/vigilancia"),
     ("SWIFT", "Permissioned DEX", "future", "institutional_route_score", "SWIFT ledger/tokenised value → zona permissioned on-chain a vigilar"),
     ("SWIFT", "DEX/AMM", "future", "dex_score", "SWIFT → DEX/AMM XRPL · solo watch futuro, requiere huella on-chain"),
     ("SWIFT", "XRPL", "deductive_watch", "public_xrpl_score", "SWIFT → Treasury/infra Ripple → XRPL · ruta indirecta a vigilar, no prueba de liquidación"),
     ("SWIFT", "RLUSD", "deductive_watch", "public_xrpl_score", "SWIFT → Treasury/infra Ripple → RLUSD · ruta indirecta a vigilar, no prueba de uso directo"),
-    ("FedNow", "Topology Engine", "watch", "institutional_route_score", "FedNow → vigilancia topológica"),
-    ("Mastercard", "Topology Engine", "watch", "institutional_route_score", "Mastercard → vigilancia topológica"),
-    ("SEPA/ACH", "Topology Engine", "watch", "institutional_route_score", "SEPA/ACH → vigilancia topológica"),
-    ("Federal Reserve", "Topology Engine", "watch", "institutional_route_score", "Federal Reserve → vigilancia topológica"),
-    ("Bank for International Settlements (BIS)", "Topology Engine", "watch", "institutional_route_score", "BIS → vigilancia topológica"),
-    ("Project mBridge", "Topology Engine", "watch", "institutional_route_score", "mBridge → vigilancia topológica"),
+    ("FedNow", "Topology Engine", "watch_only", "institutional_route_score", "FedNow → vigilancia topológica"),
+    ("Mastercard", "Topology Engine", "watch_only", "institutional_route_score", "Mastercard → vigilancia topológica"),
+    ("SEPA/ACH", "Topology Engine", "watch_only", "institutional_route_score", "SEPA/ACH → vigilancia topológica"),
+    ("Federal Reserve", "Topology Engine", "watch_only", "institutional_route_score", "Federal Reserve → vigilancia topológica"),
+    ("Bank for International Settlements (BIS)", "Topology Engine", "watch_only", "institutional_route_score", "BIS → vigilancia topológica"),
+    ("Project mBridge", "Topology Engine", "watch_only", "institutional_route_score", "mBridge → vigilancia topológica"),
 
     # Motores internos del radar
     ("Topology Engine", "Anomaly Engine", "model", "topology_score", "Topología → anomalías"),
@@ -1841,7 +1973,7 @@ ROUTES = [
     ("Large Transfers", "XRPL", "public", "large_transfer_score", "Large transfers → XRPL"),
     ("Clusters", "XRPL", "public", "cluster_score", "Clusters → XRPL"),
     ("RLUSD", "XRPL", "public", "public_xrpl_score", "RLUSD → XRPL"),
-    ("Ethereum", "Fingerprint Engine", "watch", "cross_network_score", "Ethereum → vigilancia cross-network"),
+    ("Ethereum", "Fingerprint Engine", "watch_only", "cross_network_score", "Ethereum → vigilancia cross-network"),
 
     # Núcleo Ripple / XRPL: infraestructura interna directa.
     # IMPORTANTE: esto NO convierte a bancos externos, SWIFT, DTCC, etc. en usuarios probados de XRPL.
@@ -1857,12 +1989,12 @@ ROUTES = [
     ("Treasury", "XRPL", "core_infra", "public_xrpl_score", "Treasury → XRPL · tesorería Ripple con borde público XRPL"),
     ("Treasury", "RLUSD", "core_infra", "public_xrpl_score", "Treasury → RLUSD · tesorería/stablecoin Ripple"),
     ("Treasury", "DEX/AMM", "core_infra", "dex_score", "Treasury → DEX/AMM · liquidez pública XRPL"),
-    ("Custody/Metaco", "Fingerprint Engine", "watch", "custody_score", "Custody/Metaco → fingerprints institucionales"),
+    ("Custody/Metaco", "Fingerprint Engine", "watch_only", "custody_score", "Custody/Metaco → fingerprints institucionales"),
     ("Custody/Metaco", "XRPL", "core_infra", "custody_score", "Custody/Metaco → XRPL · custodia institucional del stack Ripple"),
     ("Custody/Metaco", "RLUSD", "core_infra", "custody_score", "Custody/Metaco → RLUSD · custodia stablecoin/activos Ripple"),
     ("Standard Custody", "XRPL", "core_infra", "custody_score", "Standard Custody → XRPL · custodia regulada vinculada al stack Ripple"),
     ("Standard Custody", "RLUSD", "core_infra", "custody_score", "Standard Custody → RLUSD · custodia regulada de stablecoin/activos"),
-    ("Hidden Road / Prime", "Fingerprint Engine", "watch", "prime_brokerage_score", "Prime brokerage → fingerprints institucionales"),
+    ("Hidden Road / Prime", "Fingerprint Engine", "watch_only", "prime_brokerage_score", "Prime brokerage → fingerprints institucionales"),
     ("Hidden Road / Prime", "XRPL", "core_infra", "prime_brokerage_score", "Hidden Road / Prime → XRPL · prime brokerage del stack Ripple"),
     ("Hidden Road / Prime", "RLUSD", "core_infra", "prime_brokerage_score", "Hidden Road / Prime → RLUSD · liquidez/collateral stablecoin"),
     ("Permissioned DEX", "XRPL", "core_infra", "dex_score", "Permissioned DEX → XRPL · DEX permissioned anclado al ledger"),
@@ -1870,9 +2002,9 @@ ROUTES = [
     ("Permissioned DEX", "DEX/AMM", "core_infra", "dex_score", "Permissioned DEX → DEX/AMM · puente lógico con liquidez XRPL"),
     ("DEX/AMM", "RLUSD", "public", "dex_score", "DEX/AMM → RLUSD · liquidez on-chain observable"),
     ("Ripple Escrow", "XRPL", "core_infra", "large_transfer_score", "Ripple Escrow → XRPL · escrow nativo del ledger"),
-    ("Treasury", "Fingerprint Engine", "watch", "institutional_route_score", "Treasury → fingerprints institucionales"),
-    ("Rail", "Topology Engine", "watch", "institutional_route_score", "Rail → vigilancia topológica"),
-    ("Ripple Escrow", "Large Transfers", "watch", "large_transfer_score", "Ripple Escrow → grandes transferencias"),
+    ("Treasury", "Fingerprint Engine", "watch_only", "institutional_route_score", "Treasury → fingerprints institucionales"),
+    ("Rail", "Topology Engine", "watch_only", "institutional_route_score", "Rail → vigilancia topológica"),
+    ("Ripple Escrow", "Large Transfers", "watch_only", "large_transfer_score", "Ripple Escrow → grandes transferencias"),
 ]
 
 
@@ -3119,6 +3251,8 @@ def route_color(row: pd.Series, route: Tuple[str, str, str, str, str]) -> str:
         return "#FF4D6D"    # rojo-rosa — implicación técnica
     if kind == "public":
         return "#00CFFF"    # cian — gateway público
+    if kind == "watch_only":
+        return "#64748B"   # gris — ruta de observación, no prueba verificable
     if kind == "watch":
         return "#B673FF" if s >= 0.45 else "#9B59B6"   # morado — vigilada
     if kind in {"deductive_watch", "infra_deduction", "transitive_watch"}:
@@ -3143,7 +3277,9 @@ def route_dash(route: Tuple[str, str, str, str, str]) -> str:
     if kind == "weak_evidence":
         return "dash"       # evidencia débil: visible en confirmadas, pero sin venderla como confirmación fuerte
     if kind == "obligatory":
-        return "dash"       # deducción técnica irrefutable pero no TX directa verificada
+        return "dash"       # deducción técnica declarada; debe verse como regla/estructura, no como TX directa
+    if kind == "watch_only":
+        return "dot"
     if kind in {"watch", "model"}:
         return "solid"
     if kind in {"deductive_watch", "infra_deduction", "transitive_watch"}:
@@ -3342,6 +3478,7 @@ _ROUTE_KIND_RANK: Dict[str, int] = {
     "public_wallet": 3,
     "discovered": 4,
     "watch": 5,
+    "watch_only": 8,
     "future": 6,
     "model": 7,
 }
@@ -3359,6 +3496,7 @@ _ROUTE_KIND_LABEL: Dict[str, Tuple[str, str]] = {
     "public_wallet": ("🔑 wallet pública", "#34D399"),
     "discovered": ("🔍 descubierta", "#FFD700"),
     "watch": ("👁 vigilada/indirecta", "#B673FF"),
+    "watch_only": ("🔭 observación del radar", "#64748B"),
     "future": ("🔮 futura", "#8CA0B8"),
     "model": ("🧠 modelo", "#60A5FA"),
 }
@@ -3427,6 +3565,12 @@ def _find_ripple_paths(
             continue
         for nxt, edge in adj.get(cur, []):
             if nxt in nodes:
+                continue
+            # No usar motores internos ni rutas de simple observación para fabricar una cadena hacia XRPL.
+            # Ejemplo: BIS → Topology → Anomaly → Fingerprint → Clusters → XRPL NO es una conexión;
+            # es solo un camino analítico del radar.
+            _edge_kind = str(edge[2] or "").strip().lower()
+            if _edge_kind in {"model", "watch_only", "watch", "future"}:
                 continue
             kind_rank = _route_kind_rank(edge[2])
             next_score = score + 1 + kind_rank
@@ -3499,7 +3643,7 @@ def _render_ripple_path_panel(focus_node: str, paths: List[Dict[str, Any]]) -> N
 <div style='margin-top:12px;background:rgba(15,23,42,.62);border:1px solid rgba(148,163,184,.35);border-radius:13px;padding:12px 14px;'>
   <div style='color:#E2E8F0;font-weight:900;margin-bottom:4px'>🧭 Ruta hacia Ripple/XRPL</div>
   <div style='color:#94A3B8;font-size:.84rem;line-height:1.45'>
-    Este nodo todavía no tiene una cadena trazable hasta <b>Ripple Payments</b>, <b>XRPL</b> o <b>RLUSD</b> dentro del grafo local. Puede ser un nodo aislado, una ruta pendiente de verificar o una entidad que necesita búsqueda profunda.
+    Este nodo todavía no tiene una cadena operativa, core o evidencial hasta <b>Ripple Payments</b>, <b>XRPL</b> o <b>RLUSD</b>. Las rutas de motor interno como Topology/Anomaly/Fingerprint no se cuentan como conexión real ni como prueba.
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -3541,9 +3685,9 @@ def _render_ripple_path_panel(focus_node: str, paths: List[Dict[str, Any]]) -> N
 
     st.markdown(f"""
 <div style='margin-top:12px;background:rgba(6,16,31,.72);border:1px solid rgba(90,215,255,.45);border-radius:13px;padding:12px 14px;'>
-  <div style='color:#E2E8F0;font-weight:900;margin-bottom:4px'>🧭 Ruta completa hacia infraestructura Ripple/XRPL</div>
+  <div style='color:#E2E8F0;font-weight:900;margin-bottom:4px'>🧭 Cadena operativa/vigilada hacia Ripple/XRPL</div>
   <div style='color:#94A3B8;font-size:.82rem;line-height:1.45;margin-bottom:8px'>
-    Al pinchar un círculo, el radar busca la cadena dirigida hasta <b>Ripple Payments</b>, <b>XRPL</b> o <b>RLUSD</b>. Directo no significa operativo si la etiqueta dice “watch”, “documental” o “modelo”: significa que existe una ruta trazable dentro del mapa.
+    Al pinchar un círculo, el radar muestra solo cadenas que usan infraestructura core, prueba pública/documental o evidencia débil. Las rutas de motor interno sirven para análisis visual, pero no se cuentan como prueba de conexión operativa.
   </div>
   {''.join(cards)}
 </div>
@@ -3734,8 +3878,9 @@ def render_node_info_panel(
         "real":        ("✅ Directa on-chain",    "#3CFF9B"),   # verde brillante — TX real en ledger
         "public":      ("🌐 Directa pública",     "#00CFFF"),   # cian eléctrico — gateway/exchange público
         "private":     ("🔒 Directa inferida",    "#F59E0B"),   # ámbar — evidencia documental/contractual
-        "obligatory":  ("⚡ Obligatoria",          "#FF4D6D"),   # rojo-rosa — implicación técnica irrefutable
+        "obligatory":  ("⚡ Regla técnica",       "#FF4D6D"),   # rojo-rosa — regla técnica/estructura, no prueba on-chain
         "watch":       ("👁 Indirecta vigilada",  "#B673FF"),   # morado — huella pública sin confirmar
+        "watch_only":  ("🔭 Observación",          "#64748B"),   # gris — motor del radar, no conexión factual
         "discovered":  ("🔍 Indirecta descubierta","#FFD700"),  # dorado — detectada por motor IA
         "model":       ("🧠 Modelo analítico",    "#60A5FA"),   # azul — motor de inteligencia
         "future":      ("🔮 Futura",              "#8CA0B8"),   # gris — integración en desarrollo
@@ -3782,7 +3927,7 @@ def render_node_info_panel(
 </div>
 """, unsafe_allow_html=True)
 
-    # Ruta completa hacia infraestructura Ripple/XRPL para el nodo seleccionado.
+    # Cadena operativa/vigilada hacia Ripple/XRPL para el nodo seleccionado.
     # Esto evita que el usuario vea solo vecinos sueltos: muestra la cadena causal.
     try:
         _ripple_paths = _find_ripple_paths(focus_node, all_routes, all_nodes)
@@ -3821,6 +3966,8 @@ def render_node_info_panel(
                     bar_html = sig_bar(sig)
                 elif kind == "core_infra":
                     bar_html = "<span style='color:#14F195;font-size:0.70rem'>🧬 Infraestructura interna XRPL · no requiere búsqueda externa</span>"
+                elif kind == "watch_only":
+                    bar_html = "<span style='color:#64748B;font-size:0.70rem'>🔭 Ruta de observación del radar · no se verifica como conexión</span>"
                 elif kind in ("watch", "deductive_watch", "future_watch", "infra_deduction", "transitive_watch"):
                     _dc = float(_dyn_meta.get("confidence", 0.0) or 0.0)
                     if _dc > 0:
@@ -3872,9 +4019,11 @@ def render_node_info_panel(
                     f"<div style='color:#94A3B8;font-size:0.68rem;margin-top:4px;line-height:1.35'>🧾 {_dyn_ev}</div>"
                     if _dyn_ev else ""
                 )
-                is_watch = kind in ("watch", "deductive_watch", "future_watch", "infra_deduction", "transitive_watch") or "sin verificar" in proof_html or "Sin evidencia" in proof_html
+                is_watch = kind in ("watch", "watch_only", "deductive_watch", "future_watch", "infra_deduction", "transitive_watch") or "sin verificar" in proof_html or "Sin evidencia" in proof_html
                 if kind == "core_infra":
                     bar_html = "<span style='color:#14F195;font-size:0.70rem'>🧬 Infraestructura interna XRPL · no requiere búsqueda externa</span>"
+                elif kind == "watch_only":
+                    bar_html = "<span style='color:#64748B;font-size:0.70rem'>🔭 Ruta de observación del radar · no se verifica como conexión</span>"
                 elif is_watch and sig <= 0 and "✅" not in proof_html and "🟡" not in proof_html:
                     _dc = float(_dyn_meta.get("confidence", 0.0) or 0.0)
                     bar_html = (f"<span style='color:#B673FF;font-size:0.70rem'>👁 Vigilancia {_dc*100:.0f}% · no prueba directa</span>" if _dc > 0 else "<span style='color:#334155;font-size:0.70rem;font-style:italic'>⏳ Verificar para obtener confianza real</span>")
@@ -3904,40 +4053,67 @@ def render_node_info_panel(
     if conn:
         st.markdown("---")
 
-        all_peers = list({r[0] for r in outbound} | {r[0] for r in inbound})
+        # Peers directos, pero separando conexiones reales de rutas de observación.
+        # watch_only/model son caminos del motor del radar; NO se cuentan como pruebas ni como pendientes.
+        peer_kind_map: Dict[str, Set[str]] = defaultdict(set)
+        for _peer, _kind, *_ in outbound:
+            peer_kind_map[str(_peer)].add(str(_kind))
+        for _peer, _kind, *_ in inbound:
+            peer_kind_map[str(_peer)].add(str(_kind))
 
-        def _needs_verify(peer: str) -> bool:
+        def _is_observation_only(peer: str) -> bool:
+            kinds = {str(k).lower() for k in peer_kind_map.get(peer, set())}
+            if _is_core_infra_pair(focus_node, peer):
+                return False
+            return bool(kinds) and kinds.issubset({"watch_only", "model"})
+
+        all_peers = sorted(peer_kind_map.keys())
+        verification_peers = [p for p in all_peers if not _is_observation_only(p) and not _is_core_infra_pair(focus_node, p)]
+        core_peers = [p for p in all_peers if _is_core_infra_pair(focus_node, p)]
+        observation_peers = [p for p in all_peers if _is_observation_only(p)]
+
+        def _proof_score_for_peer(peer: str) -> Tuple[Optional[float], int, bool]:
             try:
-                # Si existe cualquier resultado guardado para A↔B, aunque sea "sin evidencia",
-                # ya está verificado y no debe volver a gastar tokens ni salir como pendiente.
-                return _connection_proof_row(conn, focus_node, peer) is None
+                rowp = _connection_proof_row(conn, focus_node, peer)
+                if not rowp:
+                    return None, 0, False
+                pdata_str, onchain, raw_conf, *_ = rowp
+                try:
+                    pj = json.loads(pdata_str or "{}")
+                    clean = _dedupe_and_filter_proofs(focus_node, peer, pj.get("proofs") or [], max_items=5)
+                    score = _combine_evidence_score(clean)
+                    return float(max(score or 0.0, float(raw_conf or 0.0))), len(clean), bool(onchain)
+                except Exception:
+                    return float(raw_conf or 0.0), 0, bool(onchain)
             except Exception:
-                return True
+                return None, 0, False
 
-        pending_peers = [p for p in all_peers if _needs_verify(p)]
-        verified_peers = [p for p in all_peers if not _needs_verify(p)]
+        pending_peers, strong_peers, weak_peers, no_evidence_peers = [], [], [], []
+        n_onchain = 0
+        n_internet = 0
+        for p in verification_peers:
+            score, proof_n, onchain = _proof_score_for_peer(p)
+            if score is None:
+                pending_peers.append(p)
+            elif onchain or score >= 0.55:
+                strong_peers.append(p)
+            elif score >= 0.20 or proof_n > 0:
+                weak_peers.append(p)
+            else:
+                no_evidence_peers.append(p)
+            if onchain:
+                n_onchain += 1
+            if proof_n > 0:
+                n_internet += 1
 
-        try:
-            focus_key = _canonical_entity_key(focus_node)
-            n_onchain = conn.execute(
-                "SELECT COUNT(*) FROM connection_proofs WHERE (node_a=? OR node_b=? OR node_a_key=? OR node_b_key=?) AND onchain=1",
-                (focus_node, focus_node, focus_key, focus_key)
-            ).fetchone()[0]
-            n_internet = conn.execute(
-                "SELECT COUNT(*) FROM connection_proofs "
-                "WHERE (node_a=? OR node_b=? OR node_a_key=? OR node_b_key=?) AND proof_data LIKE '%\"internet\": true%'",
-                (focus_node, focus_node, focus_key, focus_key)
-            ).fetchone()[0]
-        except Exception:
-            n_onchain = n_internet = 0
-
-        # Header con estado
+        # Header con estado honesto: 0% ya no sale como “verificada”.
         st.markdown(
-            f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:10px'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;flex-wrap:wrap'>"
             f"<span style='color:{accent};font-weight:700;font-size:0.88rem'>🔬 Verificación de conexiones · {focus_node}</span>"
             f"<span style='color:#64748B;font-size:0.75rem'>"
-            f"✅ {len(verified_peers)} verificadas · ⏳ {len(pending_peers)} pendientes · "
-            f"⛓ {n_onchain} on-chain · 🌐 {n_internet} internet</span>"
+            f"✅ {len(strong_peers)} fuertes · 🟠 {len(weak_peers)} débiles · ❌ {len(no_evidence_peers)} sin evidencia · "
+            f"🧬 {len(core_peers)} core · 🔭 {len(observation_peers)} observación · ⏳ {len(pending_peers)} pendientes · "
+            f"⛓ {n_onchain} on-chain · 🌐 {n_internet} con fuentes</span>"
             f"</div>",
             unsafe_allow_html=True
         )
@@ -3965,7 +4141,7 @@ def render_node_info_panel(
                 conn.commit()
             except Exception:
                 pass
-            pending_peers = all_peers
+            pending_peers = verification_peers
             do_verify = True
 
         if do_verify and pending_peers:
@@ -3993,7 +4169,7 @@ def render_node_info_panel(
             focus_key = _canonical_entity_key(focus_node)
             proof_rows = conn.execute(
                 "SELECT node_a, node_b, proof_data, onchain, confidence, validated_at "
-                "FROM connection_proofs WHERE node_a=? OR node_b=? OR node_a_key=? OR node_b_key=? ORDER BY onchain DESC, confidence DESC",
+                "FROM connection_proofs WHERE COALESCE(sanitizer_status,'active')!='quarantined' AND (node_a=? OR node_b=? OR node_a_key=? OR node_b_key=?) ORDER BY onchain DESC, confidence DESC",
                 (focus_node, focus_node, focus_key, focus_key)
             ).fetchall()
         except Exception:
@@ -4214,7 +4390,7 @@ def make_map(row: pd.Series,
     """
     route_filter:
       "all"          — todas las rutas (por defecto)
-      "confirmed"    — solo rutas confirmadas + obligatorias
+      "confirmed"    — rutas verificadas + core XRPL + evidencia débil visible
                        (kinds: real, public, private, obligatory, odl, partner, public_wallet, core_infra, weak_evidence)
       "surveillance" — solo rutas de vigilancia/inferencia
                        (kinds: watch, discovered, model, future)
@@ -4329,7 +4505,7 @@ def make_map(row: pd.Series,
         "public_wallet", "official", "institutional", "government_payment_rail", "core_infra", "weak_evidence"
     }
     _SURVEILLANCE_KINDS = {
-        "watch", "discovered", "model", "future", "future_watch",
+        "watch", "watch_only", "discovered", "model", "future", "future_watch",
         "deductive_watch", "infra_deduction", "transitive_watch", "watch_only"
     }
     if route_filter == "confirmed":
@@ -5170,6 +5346,34 @@ def _chart_col(df: pd.DataFrame, col: str) -> str:
     safe = f"{col}_chart"
     return safe if safe in df.columns else col
 
+
+def evidence_gated_latest_row(conn: Optional[sqlite3.Connection], row: pd.Series) -> pd.Series:
+    """Fila segura para métricas principales y mapas.
+
+    La BD puede tener scores internos de demo/topología aunque aún no exista
+    evidencia. Esta función aplica el mismo gate que los gráficos para que Flip,
+    cobertura/adopción documental y fase no parezcan más fuertes que las pruebas.
+    """
+    try:
+        safe_df = prepare_chart_metrics(pd.DataFrame([row]), conn)
+        if safe_df.empty:
+            return row
+        safe = row.copy()
+        sr = safe_df.iloc[0]
+        guarded_cols = set(INSTITUTIONAL_CHART_COLS) | {"flip_score", "phase", "persistence_score"}
+        # Ledger y watch se mantienen como canales separados; institucional/flip se gatean.
+        for col in guarded_cols:
+            cchart = f"{col}_chart"
+            if cchart in sr.index:
+                safe[col] = sr[cchart]
+        # Añadir contadores para paneles de calidad y trazabilidad.
+        for col in ("proof_count", "official_proof_count", "verified_route_count", "ledger_real_channel", "institutional_channel", "speculative_channel"):
+            if col in sr.index:
+                safe[col] = sr[col]
+        return safe
+    except Exception:
+        return row
+
 def _parse_sqlite_date(value: Any) -> Optional[pd.Timestamp]:
     """Parsea fechas de SQLite siempre como día tz-naive.
 
@@ -5219,14 +5423,14 @@ def add_evidence_counts_to_metrics_df(conn: Optional[sqlite3.Connection], df: pd
 
     if conn is not None:
         try:
-            for validated_at, proof_data, conf in conn.execute("SELECT validated_at, proof_data, confidence FROM connection_proofs").fetchall():
+            for validated_at, proof_data, conf in conn.execute("SELECT validated_at, proof_data, confidence FROM connection_proofs WHERE COALESCE(sanitizer_status,'active')!='quarantined'").fetchall():
                 day = _parse_sqlite_date(validated_at)
                 if day is not None and float(conf or 0) > 0:
                     proof_events.append((day, _officialish_blob(proof_data)))
         except Exception:
             pass
         try:
-            for added_at, kind, conf in conn.execute("SELECT added_at, kind, confidence FROM dynamic_routes").fetchall():
+            for added_at, kind, conf in conn.execute("SELECT added_at, kind, confidence FROM dynamic_routes WHERE COALESCE(sanitizer_status,'active')!='quarantined'").fetchall():
                 day = _parse_sqlite_date(added_at)
                 k = str(kind or "").lower().strip()
                 if day is not None and float(conf or 0) >= 0.55 and k not in {"watch", "model", "future", "inferred"}:
@@ -5318,7 +5522,7 @@ def data_quality_snapshot(conn: Optional[sqlite3.Connection], row: Any) -> Dict[
     officialish = 0
     try:
         if conn is not None:
-            rows = conn.execute("SELECT proof_data FROM connection_proofs LIMIT 500").fetchall()
+            rows = conn.execute("SELECT proof_data FROM connection_proofs WHERE COALESCE(sanitizer_status,'active')!='quarantined' LIMIT 500").fetchall()
             for (blob,) in rows:
                 txt = str(blob or "").lower()
                 if any(d in txt for d in ("bis.org", "ripple.com", "hkma.gov", "federalreserve.gov", "sec.gov", "xrpl.org", "central bank", "official")):
@@ -5843,10 +6047,14 @@ def render_color_legend() -> None:
   <span><b style='color:#F59E0B'>Ámbar sólida — Documentada</b><br><small style='color:#94A3B8'>Contrato, filing SEC/regulatorio o acuerdo documentado.</small></span>
 </div>
 
-<div style="font-size:.70rem;color:#FF4D6D;text-transform:uppercase;letter-spacing:.08em;margin:.50rem 0 .30rem">— Línea discontinua roja: implicación técnica obligatoria —</div>
+<div style="font-size:.70rem;color:#14F195;text-transform:uppercase;letter-spacing:.08em;margin:.50rem 0 .30rem">— Línea sólida verde XRPL: núcleo interno / arquitectura —</div>
 <div class='rrp-line'>
-  <span style='display:inline-block;width:28px;height:0;border-top:3px dashed #FF4D6D;vertical-align:middle;margin-right:8px'></span>
-  <span><b style='color:#FF4D6D'>⚡ Rojo-rosa discontinua — Obligatoria</b><br><small style='color:#94A3B8'>El protocolo lo exige sin excepción. Sin TX directa verificada, pero técnicamente irrefutable. Confianza 97%.<br>Ej: conectado a Ripple Payments → Rail → XRPL · DEX → XRPL · RLUSD → XRPL</small></span>
+  <span style='display:inline-block;width:28px;height:3px;background:#14F195;border-radius:2px;vertical-align:middle;margin-right:8px'></span>
+  <span><b style='color:#14F195'>🧬 Core XRPL — infraestructura Ripple</b><br><small style='color:#94A3B8'>Rutas internas del stack Ripple/XRPL: Payments, Rail, Treasury, Custody, Permissioned DEX, RLUSD, DEX/AMM. No afirma que un banco externo use XRP.</small></span>
+</div>
+<div class='rrp-line'>
+  <span style='display:inline-block;width:28px;height:0;border-top:3px dashed #F59E0B;vertical-align:middle;margin-right:8px'></span>
+  <span><b style='color:#F59E0B'>🟠 Evidencia débil</b><br><small style='color:#94A3B8'>Existe fuente o huella, pero no basta para confirmación fuerte. Debe verse en el mapa, sin venderlo como certeza.</small></span>
 </div>
 
 <div style="font-size:.70rem;color:#64748B;text-transform:uppercase;letter-spacing:.08em;margin:.50rem 0 .30rem">— Líneas discontinuas: señal sin prueba directa —</div>
@@ -5869,7 +6077,7 @@ def render_color_legend() -> None:
 
 <div style="margin-top:.75rem;padding:.55rem .70rem;background:rgba(255,77,109,.10);border-radius:10px;border:1px solid rgba(255,77,109,.30);">
 <small style="color:#CBD5E1">
-<b style="color:#FFFFFF">Sólida</b> = evidencia directa verificada &nbsp;·&nbsp; <b style="color:#FF4D6D">Discontinua roja ⚡</b> = obligatoria por protocolo &nbsp;·&nbsp; <b style="color:#FFFFFF">Discontinua</b> = inferida/vigilada<br>
+<b style="color:#FFFFFF">Sólida</b> = evidencia directa o core interno XRPL &nbsp;·&nbsp; <b style="color:#F59E0B">Naranja</b> = evidencia débil &nbsp;·&nbsp; <b style="color:#FFFFFF">Discontinua</b> = inferida/vigilada<br>
 <b style="color:#FFFFFF">Grosor</b> = intensidad de señal &nbsp;·&nbsp; <b style="color:#FFFFFF">Cursor sobre línea o nodo</b> = detalle exacto
 </small>
 </div>
@@ -5885,8 +6093,9 @@ def render_sidebar_legend() -> None:
 <div class='rrp-line'><span class='rrp-dot' style='background:#3CFF9B'></span><span style='font-size:.78rem'>On-chain XRPL (TX real)</span></div>
 <div class='rrp-line'><span class='rrp-dot' style='background:#00CFFF'></span><span style='font-size:.78rem'>Pública (gateway/exchange)</span></div>
 <div class='rrp-line'><span class='rrp-dot' style='background:#F59E0B'></span><span style='font-size:.78rem'>Inferida (contrato/filing)</span></div>
-<div style='font-size:.68rem;color:#FF4D6D;margin:.3rem 0 .2rem'>OBLIGATORIA (discontinua)</div>
-<div class='rrp-line'><span style='display:inline-block;width:16px;height:0;border-top:2px dashed #FF4D6D;vertical-align:middle;margin-right:6px'></span><span style='font-size:.78rem;color:#FF4D6D'>⚡ Protocolo — 97%</span></div>
+<div style='font-size:.68rem;color:#14F195;margin:.3rem 0 .2rem'>CORE / ESTRUCTURA</div>
+<div class='rrp-line'><span style='display:inline-block;width:16px;height:2px;background:#14F195;vertical-align:middle;margin-right:6px'></span><span style='font-size:.78rem;color:#14F195'>🧬 Core XRPL / Ripple</span></div>
+<div class='rrp-line'><span style='display:inline-block;width:16px;height:0;border-top:2px dashed #F59E0B;vertical-align:middle;margin-right:6px'></span><span style='font-size:.78rem;color:#F59E0B'>🟠 Evidencia débil</span></div>
 <div style='font-size:.68rem;color:#64748B;margin:.3rem 0 .2rem'>INDIRECTAS</div>
 <div class='rrp-line'><span class='rrp-dot' style='background:#B673FF'></span><span style='font-size:.78rem'>Vigilada (huella pública)</span></div>
 <div class='rrp-line'><span class='rrp-dot' style='background:#FFD700'></span><span style='font-size:.78rem'>Descubierta (motor IA)</span></div>
@@ -10412,9 +10621,9 @@ def render_route_path_engine(conn: sqlite3.Connection, df: pd.DataFrame, row: pd
     st.markdown("### 🔁 Gráfico A→B premium · vivo y sin duplicados")
     st.markdown("""
 <div class='rrp-note'>
-⚠️ <b>Importante:</b> pulsa <b>Actualizar gráfico/fichas</b> después de añadir pruebas, rutas o wallets.
-El gráfico se reconstruye desde <b>connection_proofs</b>, <b>dynamic_routes</b>, <b>route_paths</b> y wallets aprobadas.
-No se vuelve a mostrar el Sankey clásico ni tablas repetidas dentro de esta pestaña.
+🔄 <b>Live Sync:</b> las fichas A→B se reconstruyen automáticamente desde <b>connection_proofs</b>,
+<b>dynamic_routes</b>, <b>route_paths</b> y wallets aprobadas. Ya no hace falta pulsar un botón después
+de añadir pruebas, rutas o wallets; si otro usuario cambia SQLite, esta vista se actualiza en el siguiente tick.
 </div>""", unsafe_allow_html=True)
 
     c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 1.3])
@@ -10422,12 +10631,7 @@ No se vuelve a mostrar el Sankey clásico ni tablas repetidas dentro de esta pes
     c2.metric("Rutas dinámicas", dyn_n)
     c3.metric("Rutas base", route_n)
     c4.metric("Wallets vigiladas", wallets_n)
-    if c5.button("🔄 Actualizar gráfico/fichas", key="route_paths_force_refresh_v93"):
-        try:
-            st.cache_data.clear()
-        except Exception:
-            pass
-        st.rerun()
+    c5.metric("Sync", f"{LIVE_SHARED_REFRESH_SECONDS}s")
 
     chart_paths = render_route_path_graph_and_fichas(live_paths, key_prefix="clean_v93", conn=conn)
 
@@ -10442,7 +10646,7 @@ No se vuelve a mostrar el Sankey clásico ni tablas repetidas dentro de esta pes
         st.markdown("""
 <div class='rrp-note'>
 Usa este bloque para proponer una conexión A→B o añadir una wallet. El gatekeeper decide si entra como radar,
-watchlist, hipótesis o descartada. Después pulsa <b>Actualizar gráfico/fichas</b> arriba.
+watchlist, hipótesis o descartada. Después se sincroniza automáticamente en mapas, métricas y fichas A→B.
 </div>""", unsafe_allow_html=True)
         render_direct_route_adder(conn)
         st.markdown("---")
@@ -10845,7 +11049,7 @@ def _chain_all_routes(conn: Optional[sqlite3.Connection] = None) -> List[Tuple[s
     routes = list(ROUTES)
     if conn is not None:
         try:
-            rows = conn.execute("SELECT src,dst,kind,signal_col,label FROM dynamic_routes").fetchall()
+            rows = conn.execute("SELECT src,dst,kind,signal_col,label FROM dynamic_routes WHERE COALESCE(sanitizer_status,'active')!='quarantined'").fetchall()
             routes.extend([(str(a), str(b), str(c), str(d), str(e)) for a, b, c, d, e in rows])
         except Exception:
             pass
@@ -11084,7 +11288,7 @@ def render_chain_logic_box(focus_node: str, conn: Optional[sqlite3.Connection]) 
         key = _canonical_entity_key(focus_node)
         rows = conn.execute(
             "SELECT node_a,node_b,proof_data,confidence FROM connection_proofs "
-            "WHERE node_a=? OR node_b=? OR node_a_key=? OR node_b_key=? ORDER BY confidence DESC LIMIT 10",
+            "WHERE COALESCE(sanitizer_status,'active')!='quarantined' AND (node_a=? OR node_b=? OR node_a_key=? OR node_b_key=?) ORDER BY confidence DESC LIMIT 10",
             (focus_node, focus_node, key, key)
         ).fetchall()
     except Exception:
@@ -11802,6 +12006,9 @@ def _get_map_revision_token(conn: sqlite3.Connection) -> str:
             ("connection_proofs", "validated_at"),
             ("node_verifications", "verified_at"),
             ("map_update_log", "updated_at"),
+            ("route_paths", "day"),
+            ("daily_metrics", "day"),
+            ("discovered_wallets", "last_seen"),
         ):
             try:
                 row = conn.execute(f"SELECT COUNT(*), COALESCE(MAX({date_col}), '') FROM {table}").fetchone()
@@ -12960,8 +13167,38 @@ def render_public_entry_gate(conn: sqlite3.Connection) -> bool:
             st.error(st.session_state.get("entry_name_error", "No se pudo crear el usuario."))
     return False
 
+def render_shared_live_sync(conn: sqlite3.Connection) -> None:
+    """Sincronización multiusuario ligera.
+
+    Streamlit no empuja eventos entre sesiones por sí solo. Para que un mapa de
+    un usuario se actualice cuando otro guarda rutas/pruebas, cada sesión hace un
+    ping silencioso cada pocos segundos. Si SQLite cambió, datarevision + keys
+    fuerzan el repintado de mapas/gráficos. No hay que pulsar Autoscan.
+    """
+    if not ENABLE_SHARED_LIVE_SYNC:
+        return
+    try:
+        # Guardamos el token para diagnóstico y para detectar cambios entre ticks.
+        current_rev = _get_map_revision_token(conn)
+        last_rev = st.session_state.get("rrp_live_last_revision", "")
+        if last_rev and current_rev != last_rev:
+            st.session_state["rrp_live_seen_change"] = True
+        st.session_state["rrp_live_last_revision"] = current_rev
+    except Exception:
+        pass
+    try:
+        if st_autorefresh is not None:
+            st_autorefresh(
+                interval=int(LIVE_SHARED_REFRESH_SECONDS * 1000),
+                key="rrp_shared_live_sync_tick_v114",
+            )
+    except Exception:
+        # Si falta streamlit-autorefresh, la app sigue funcionando; solo pierde live sync.
+        pass
+
+
 def render_global_update_notice(conn: sqlite3.Connection) -> None:
-    """Notificación global: si otro usuario actualizó el mapa, avisa en cualquier pestaña."""
+    """Notificación global sin botón: aplica automáticamente cambios compartidos."""
     try:
         last = _get_last_map_update(conn)
         seen = st.session_state.get("map_last_seen_global", "")
@@ -12969,18 +13206,18 @@ def render_global_update_notice(conn: sqlite3.Connection) -> None:
             return
         if not seen:
             st.session_state["map_last_seen_global"] = last
+            st.session_state["map_last_seen"] = last
             return
         pending = _get_pending_updates(conn, seen)
         if pending <= 0:
             return
-        c1, c2 = st.columns([4, 1])
-        with c1:
-            st.warning(f"🔔 El mapa tiene {pending} actualización(es) nueva(s) de otros usuarios. Puedes seguir mirando, pero conviene refrescar el grafo.")
-        with c2:
-            if st.button("Actualizar mapa", width="stretch", key="global_apply_map_updates"):
-                st.session_state["map_last_seen_global"] = last
-                st.session_state["map_last_seen"] = last
-                st.rerun()
+        st.session_state["map_last_seen_global"] = last
+        st.session_state["map_last_seen"] = last
+        try:
+            st.toast(f"🔄 Radar actualizado: {pending} cambio(s) compartidos aplicados automáticamente.")
+        except Exception:
+            pass
+        st.rerun()
     except Exception:
         pass
 
@@ -13264,7 +13501,7 @@ UI_I18N: Dict[str, Dict[str, str]] = {
     "Actualizar XRPL": {"es":"Actualizar XRPL","en":"Refresh XRPL","fr":"Actualiser XRPL","de":"XRPL aktualisieren","it":"Aggiorna XRPL","pt":"Atualizar XRPL","ja":"XRPLを更新","ko":"XRPL 새로고침","zh":"刷新 XRPL","ar":"تحديث XRPL"},
     "Regenerar demo visual": {"es":"Regenerar demo visual","en":"Regenerate visual demo","fr":"Régénérer la démo visuelle","de":"Visuelle Demo neu erzeugen","it":"Rigenera demo visiva","pt":"Regenerar demo visual","ja":"ビジュアルデモを再生成","ko":"시각 데모 재생성","zh":"重新生成视觉演示","ar":"إعادة إنشاء العرض المرئي"},
     "Vigila rutas privadas por sus huellas públicas.": {"es":"Vigila rutas privadas por sus huellas públicas.","en":"Watch private routes through their public traces.","fr":"Surveille les routes privées grâce à leurs traces publiques.","de":"Überwache private Routen über ihre öffentlichen Spuren.","it":"Sorveglia rotte private tramite le loro tracce pubbliche.","pt":"Vigia rotas privadas pelas suas pegadas públicas.","ja":"公開された痕跡からプライベートルートを監視します。","ko":"공개 흔적으로 비공개 경로를 감시합니다.","zh":"通过公开痕迹监控私有路线。","ar":"راقب المسارات الخاصة عبر آثارها العامة."},
-    "Conexiones confirmadas + obligatorias": {"es":"Conexiones confirmadas + obligatorias","en":"Confirmed + required connections","fr":"Connexions confirmées + requises","de":"Bestätigte + erforderliche Verbindungen","it":"Connessioni confermate + obbligatorie","pt":"Conexões confirmadas + obrigatórias","ja":"確認済み＋必須接続","ko":"확인됨 + 필수 연결","zh":"已确认 + 必需连接","ar":"اتصالات مؤكدة + لازمة"},
+    "Conexiones confirmadas + obligatorias": {"es":"Verificadas + core + evidencia","en":"Confirmed + required connections","fr":"Connexions confirmées + requises","de":"Bestätigte + erforderliche Verbindungen","it":"Connessioni confermate + obbligatorie","pt":"Conexões confirmadas + obrigatórias","ja":"確認済み＋必須接続","ko":"확인됨 + 필수 연결","zh":"已确认 + 必需连接","ar":"اتصالات مؤكدة + لازمة"},
     "Vigilancia / inferidas": {"es":"Vigilancia / inferidas","en":"Watch / inferred","fr":"Surveillance / inférées","de":"Beobachtung / abgeleitet","it":"Vigilanza / inferite","pt":"Vigilância / inferidas","ja":"監視 / 推定","ko":"감시 / 추론","zh":"监控 / 推断","ar":"مراقبة / مستنتجة"},
     "Mapa completo": {"es":"Mapa completo","en":"Full map","fr":"Carte complète","de":"Vollständige Karte","it":"Mappa completa","pt":"Mapa completo","ja":"完全なマップ","ko":"전체 지도","zh":"完整地图","ar":"الخريطة الكاملة"},
     "Ver todo": {"es":"Ver todo","en":"Show all","fr":"Tout afficher","de":"Alles anzeigen","it":"Mostra tutto","pt":"Ver tudo","ja":"すべて表示","ko":"전체 보기","zh":"显示全部","ar":"عرض الكل"},
@@ -13424,13 +13661,13 @@ def _rrp_merge_translations() -> None:
         "Adopción técnica": {"en":"Technical adoption","fr":"Adoption technique","de":"Technische Adoption","it":"Adozione tecnica","pt":"Adoção técnica","ja":"技術的採用","ko":"기술적 채택","zh":"技术采用","ar":"تبنٍ تقني"},
         "Haz clic en cualquier nodo del mapa para ver solo sus rutas.": {"en":"Click any map node to show only its routes.","fr":"Clique sur n’importe quel nœud de la carte pour voir uniquement ses routes.","pt":"Clica em qualquer nó do mapa para ver apenas as suas rotas.","ja":"マップ上の任意のノードをクリックすると、そのルートだけを表示します。","ko":"지도에서 노드를 클릭하면 해당 경로만 표시됩니다.","zh":"点击地图上的任意节点，仅查看它的路线。","ar":"انقر على أي عقدة في الخريطة لعرض مساراتها فقط."},
         # Mapa / leyenda
-        "Solo rutas con evidencia confirmada (on-chain, documentada) o implicación técnica irrefutable (⚡ rojo-rosa). Sin ruido de vigilancia.": {"en":"Only routes with confirmed evidence (on-chain, documented) or irrefutable technical implication (⚡ red-pink). No watch noise.","fr":"Uniquement les routes avec preuve confirmée (on-chain, documentée) ou implication technique irréfutable (⚡ rouge-rose). Sans bruit de surveillance.","pt":"Apenas rotas com evidência confirmada (on-chain, documentada) ou implicação técnica irrefutável (⚡ vermelho-rosa). Sem ruído de vigilância.","ja":"確認済み証拠（オンチェーン、文書）または技術的に反証不能な含意（⚡赤ピンク）のあるルートのみ。監視ノイズは除外。","ko":"확인된 증거(온체인, 문서) 또는 반박 불가능한 기술적 함의(⚡ 빨강-분홍)가 있는 경로만 표시합니다. 감시 노이즈는 제외됩니다.","zh":"仅显示有确认性证据（链上、文档）或不可反驳技术含义（⚡红粉色）的路线。无观察噪声。","ar":"المسارات ذات الأدلة المؤكدة فقط (على السلسلة أو موثقة) أو ذات دلالة تقنية لا يمكن دحضها (⚡ أحمر وردي). بلا ضجيج مراقبة."},
+        "Solo rutas con evidencia confirmada, core interno XRPL/Ripple o evidencia débil visible. Sin rutas de motor interno ni observación genérica.": {"en":"Only routes with confirmed evidence (on-chain, documented) or irrefutable technical implication (⚡ red-pink). No watch noise.","fr":"Uniquement les routes avec preuve confirmée (on-chain, documentée) ou implication technique irréfutable (⚡ rouge-rose). Sans bruit de surveillance.","pt":"Apenas rotas com evidência confirmada (on-chain, documentada) ou implicação técnica irrefutável (⚡ vermelho-rosa). Sem ruído de vigilância.","ja":"確認済み証拠（オンチェーン、文書）または技術的に反証不能な含意（⚡赤ピンク）のあるルートのみ。監視ノイズは除外。","ko":"확인된 증거(온체인, 문서) 또는 반박 불가능한 기술적 함의(⚡ 빨강-분홍)가 있는 경로만 표시합니다. 감시 노이즈는 제외됩니다.","zh":"仅显示有确认性证据（链上、文档）或不可反驳技术含义（⚡红粉色）的路线。无观察噪声。","ar":"المسارات ذات الأدلة المؤكدة فقط (على السلسلة أو موثقة) أو ذات دلالة تقنية لا يمكن دحضها (⚡ أحمر وردي). بلا ضجيج مراقبة."},
         "Haz click en cualquier nodo para ver solo sus conexiones": {"en":"Click any node to see only its connections","fr":"Clique sur un nœud pour voir uniquement ses connexions","pt":"Clica em qualquer nó para ver apenas as suas conexões","ja":"任意のノードをクリックすると、その接続のみを表示します","ko":"노드를 클릭하면 해당 연결만 볼 수 있습니다","zh":"点击任意节点仅查看它的连接","ar":"انقر على أي عقدة لرؤية اتصالاتها فقط"},
         "Leyenda del mapa — cómo leer colores y líneas": {"en":"Map legend — how to read colors and lines","fr":"Légende de la carte — comment lire couleurs et lignes","pt":"Legenda do mapa — como ler cores e linhas","ja":"マップ凡例 — 色と線の読み方","ko":"지도 범례 — 색상과 선 읽는 법","zh":"地图图例 — 如何阅读颜色和线条","ar":"مفتاح الخريطة — كيفية قراءة الألوان والخطوط"},
         "Nodos (círculos del mapa)": {"en":"Nodes (map circles)","fr":"Nœuds (cercles de la carte)","pt":"Nós (círculos do mapa)","ja":"ノード（マップ上の円）","ko":"노드(지도 원)","zh":"节点（地图圆点）","ar":"العقد (دوائر الخريطة)"},
         "Líneas — tipos de ruta": {"en":"Lines — route types","fr":"Lignes — types de route","pt":"Linhas — tipos de rota","ja":"線 — ルートの種類","ko":"선 — 경로 유형","zh":"线条 — 路线类型","ar":"الخطوط — أنواع المسارات"},
         "Línea sólida: confirmado con evidencia directa": {"en":"Solid line: confirmed with direct evidence","fr":"Ligne continue : confirmée par preuve directe","pt":"Linha sólida: confirmada com evidência direta","ja":"実線：直接証拠で確認済み","ko":"실선: 직접 증거로 확인됨","zh":"实线：直接证据确认","ar":"خط متصل: مؤكد بدليل مباشر"},
-        "Línea discontinua roja: implicación técnica obligatoria": {"en":"Red dashed line: required technical implication","fr":"Ligne rouge discontinue : implication technique obligatoire","pt":"Linha vermelha tracejada: implicação técnica obrigatória","ja":"赤い破線：必須の技術的含意","ko":"빨간 점선: 필수 기술적 함의","zh":"红色虚线：必需技术含义","ar":"خط أحمر متقطع: دلالة تقنية لازمة"},
+        "Línea verde: core interno XRPL/Ripple": {"en":"Red dashed line: required technical implication","fr":"Ligne rouge discontinue : implication technique obligatoire","pt":"Linha vermelha tracejada: implicação técnica obrigatória","ja":"赤い破線：必須の技術的含意","ko":"빨간 점선: 필수 기술적 함의","zh":"红色虚线：必需技术含义","ar":"خط أحمر متقطع: دلالة تقنية لازمة"},
         "Líneas discontinuas: señal sin prueba directa": {"en":"Dashed lines: signal without direct proof","fr":"Lignes discontinues : signal sans preuve directe","pt":"Linhas tracejadas: sinal sem prova direta","ja":"破線：直接証拠のないシグナル","ko":"점선: 직접 증거 없는 신호","zh":"虚线：无直接证据的信号","ar":"خطوط متقطعة: إشارة بلا دليل مباشر"},
         "Sólida = evidencia directa verificada": {"en":"Solid = verified direct evidence","fr":"Continue = preuve directe vérifiée","pt":"Sólida = evidência direta verificada","ja":"実線 = 検証済み直接証拠","ko":"실선 = 검증된 직접 증거","zh":"实线 = 已验证直接证据","ar":"متصل = دليل مباشر مؤكد"},
         "Discontinua = inferida/vigilada": {"en":"Dashed = inferred/watch","fr":"Discontinue = inférée/surveillée","pt":"Tracejada = inferida/vigiada","ja":"破線 = 推定/監視","ko":"점선 = 추론/감시","zh":"虚线 = 推断/观察","ar":"متقطع = مستنتج/مراقب"},
@@ -13536,7 +13773,7 @@ def _rrp_merge_hard_i18n_layer() -> None:
         "Pública (gateway/exchange)": {"en":"Public (gateway/exchange)", "fr":"Publique (gateway/exchange)", "de":"Öffentlich (Gateway/Exchange)", "it":"Pubblica (gateway/exchange)", "pt":"Pública (gateway/exchange)", "ja":"公開（ゲートウェイ/取引所）", "ko":"공개(게이트웨이/거래소)", "zh":"公开（网关/交易所）", "ar":"عام (بوابة/منصة)"},
         "Inferida (contrato/filing)": {"en":"Inferred (contract/filing)", "fr":"Inférée (contrat/filing)", "de":"Abgeleitet (Vertrag/Filing)", "it":"Inferita (contratto/filing)", "pt":"Inferida (contrato/filing)", "ja":"推定（契約/提出書類）", "ko":"추론(계약/공시)", "zh":"推断（合同/备案）", "ar":"مستنتجة (عقد/إفصاح)"},
         "OBLIGATORIA (discontinua)": {"en":"REQUIRED (dashed)", "fr":"OBLIGATOIRE (discontinue)", "de":"ERFORDERLICH (gestrichelt)", "it":"OBBLIGATORIA (tratteggiata)", "pt":"OBRIGATÓRIA (tracejada)", "ja":"必須（破線）", "ko":"필수(점선)", "zh":"必需（虚线）", "ar":"لازمة (متقطع)"},
-        "⚡ Protocolo — 97%": {"en":"⚡ Protocol — 97%", "fr":"⚡ Protocole — 97%", "de":"⚡ Protokoll — 97%", "it":"⚡ Protocollo — 97%", "pt":"⚡ Protocolo — 97%", "ja":"⚡ プロトコル — 97%", "ko":"⚡ 프로토콜 — 97%", "zh":"⚡ 协议 — 97%", "ar":"⚡ البروتوكول — 97%"},
+        "🧬 Core XRPL / Ripple": {"en":"🧬 XRPL / Ripple core", "fr":"🧬 Core XRPL / Ripple", "de":"🧬 XRPL / Ripple Core", "it":"🧬 Core XRPL / Ripple", "pt":"🧬 Core XRPL / Ripple", "ja":"🧬 XRPL / Ripple コア", "ko":"🧬 XRPL / Ripple 코어", "zh":"🧬 XRPL / Ripple 核心", "ar":"🧬 نواة XRPL / Ripple"},
         "Vigilada (huella pública)": {"en":"Watched (public trace)", "fr":"Surveillée (trace publique)", "de":"Beobachtet (öffentliche Spur)", "it":"Vigilata (traccia pubblica)", "pt":"Vigiada (pegada pública)", "ja":"監視中（公開痕跡）", "ko":"감시 중(공개 흔적)", "zh":"观察中（公开痕迹）", "ar":"مراقبة (أثر عام)"},
         "Descubierta (motor IA)": {"en":"Discovered (AI engine)", "fr":"Découverte (moteur IA)", "de":"Entdeckt (KI-Engine)", "it":"Scoperta (motore AI)", "pt":"Descoberta (motor IA)", "ja":"発見済み（AIエンジン）", "ko":"발견됨(AI 엔진)", "zh":"AI 引擎发现", "ar":"مكتشفة (محرك ذكاء اصطناعي)"},
         # Mapa y explicación
@@ -15804,15 +16041,20 @@ def _route_decision_mentions_pair(rd: Dict[str, Any], node_a: Any, node_b: Any) 
 def _decision_has_real_proof(rd: Dict[str, Any]) -> bool:
     et = str(rd.get("evidence_type") or rd.get("type") or "").strip().lower()
     claim = str(rd.get("claim") or rd.get("summary") or rd.get("snippet") or "").strip()
-    url = str(rd.get("url") or rd.get("source") or "").strip()
+    url = _canonical_source_url(str(rd.get("url") or rd.get("source") or "").strip())
     if et in {"deductive_watch", "watch", "inferred", "model", "speculative"}:
         return False
     if _is_generic_route_claim(claim):
         return False
-    if et in DIRECT_EVIDENCE_TYPES and (claim or url.startswith("http")):
+    if not url.startswith("http") and et != "onchain":
+        return False
+    # Debe existir lenguaje de relación; no basta con que el texto mencione dos nombres.
+    if et != "onchain" and not _claim_has_relation_language(claim + " " + url):
+        return False
+    if et in DIRECT_EVIDENCE_TYPES:
         return True
-    # Si no clasificó el tipo pero hay URL + claim explícito, se permite para nodos no estrictos.
-    return bool(url.startswith("http") and len(claim) >= 24)
+    # Si no clasificó el tipo pero hay URL + claim explícito, se permite como débil.
+    return bool(url.startswith("http") and len(claim) >= 36)
 
 
 def _route_allowed_by_proof_first(result: Dict[str, Any], src: str, dst: str,
@@ -16211,17 +16453,16 @@ def apply_discovery_to_map(conn: sqlite3.Connection, result: Dict[str, Any],
     }
 
     # ── IMPLICACIONES OBLIGATORIAS ────────────────────────────────────────────
-    # Deducción técnica irrefutable: si X entonces Y necesariamente.
-    # Confianza = 0.97 (máxima posible sin TX on-chain directa).
-    # Estas rutas NO requieren verificación porque son consecuencia del protocolo.
-    # ── REGLAS OBLIGATORIAS: implicaciones técnicas irrefutables del protocolo ──
+    # Reglas técnicas estructurales: si X entonces Y se muestra como arquitectura/watch.
+    # En v113 no se vende como “irrefutable 97%”; si no hay TX/fuente directa, no es prueba operativa.
+    # ── REGLAS TÉCNICAS: estructura controlada ──
     # Formato: (trigger, required, razón)
     # Deducción transitiva: si A→B y B→C están en las reglas, el motor genera A→B→C automáticamente.
     OBLIGATORY_RULES = []
 
     # Recopilar nodos ya presentes en rutas dinámicas
     all_route_nodes_now = set()
-    for _r in conn.execute("SELECT src, dst FROM dynamic_routes").fetchall():
+    for _r in conn.execute("SELECT src, dst FROM dynamic_routes WHERE COALESCE(sanitizer_status,'active')!='quarantined'").fetchall():
         all_route_nodes_now.add(_r[0]); all_route_nodes_now.add(_r[1])
 
     def _apply_obligatory_rules(source_nodes: set) -> None:
@@ -16405,7 +16646,7 @@ def load_dynamic_map_elements(conn: sqlite3.Connection) -> Tuple[Dict, List, Lis
             new_zone_boxes.append((x0, y0, x1, y1, layer, color))
 
         route_rows = conn.execute(
-            "SELECT src, dst, kind, signal_col, label FROM dynamic_routes WHERE confidence >= 0.35"
+            "SELECT src, dst, kind, signal_col, label FROM dynamic_routes WHERE confidence >= 0.15 AND COALESCE(sanitizer_status,'active')!='quarantined'"
         ).fetchall()
         all_nodes = {**NODES, **dyn_nodes}
         for src, dst, kind, signal, label in route_rows:
@@ -16430,7 +16671,7 @@ def load_dynamic_map_elements(conn: sqlite3.Connection) -> Tuple[Dict, List, Lis
                     existing_confirmed_pairs.add(_canonical_pair_key(_rs, _rd))
 
             proof_rows = conn.execute(
-                "SELECT node_a, node_b, proof_data, confidence, onchain FROM connection_proofs"
+                "SELECT node_a, node_b, proof_data, confidence, onchain FROM connection_proofs WHERE COALESCE(sanitizer_status,'active')!='quarantined'"
             ).fetchall()
             for _pa, _pb, _pjson, _raw_conf, _onchain in proof_rows:
                 cpa = _canonical_display_node(_pa)
@@ -16547,19 +16788,34 @@ def _cert_label(score: float) -> tuple:
 
 def _combine_evidence_score(proofs: List[Dict]) -> float:
     """
-    Combina múltiples pruebas en una puntuación final calibrada.
-    No es promedio simple: cada prueba adicional sube menos que la anterior
-    (modelo de probabilidad independiente: P = 1 - prod(1-pi)).
+    Combina pruebas con penalización por calidad de fuente.
+    v113 evita que tres noticias menores o una wallet genérica eleven una conexión
+    a nivel “confirmado”.
     """
     if not proofs:
         return 0.0
-    scores = [EVIDENCE_SCORES.get(p.get("type", ""), 0.0) for p in proofs if p.get("onchain") or p.get("internet")]
-    if not scores:
+    weighted: List[float] = []
+    for p in proofs:
+        if not isinstance(p, dict):
+            continue
+        base = EVIDENCE_SCORES.get(str(p.get("type", "") or ""), 0.0)
+        if p.get("onchain"):
+            mult = 1.0 if str(p.get("type", "")).lower() in PAIR_ONCHAIN_TYPES else 0.0
+        elif p.get("internet"):
+            mult = _proof_quality_multiplier(p)
+        else:
+            mult = 0.0
+        s = max(0.0, min(0.99, float(base) * float(mult)))
+        if s > 0:
+            weighted.append(s)
+    if not weighted:
         return 0.0
     combined = 1.0
-    for s in sorted(scores, reverse=True):
+    for s in sorted(weighted, reverse=True):
         combined *= (1.0 - s)
-    return round(1.0 - combined, 3)
+    score = 1.0 - combined
+    score = _cap_score_by_source_mix(score, proofs)
+    return round(float(score), 3)
 
 
 # Traducción de nombres de nodo del mapa a términos buscables en internet
@@ -17105,7 +17361,7 @@ def validate_node_fast(
                 proof_id, focus_node, peer, node_a_key, node_b_key, pair_key,
                 all_proofs[0]["type"] if all_proofs else "unknown",
                 json.dumps(result_data, ensure_ascii=False),
-                int(is_onchain or is_internet), calibrated_score, now,
+                int(is_onchain), calibrated_score, now,
             ))
         except Exception:
             pass
@@ -17304,6 +17560,8 @@ def validate_connection_onchain(
         all_proofs = [p for p in all_proofs if p.get("type") != "sin_wallet"]
 
     # ── 8) Scoring calibrado combinado ───────────────────────────────────────
+    # Filtro final: no contar wallet_activa/ofertas genéricas como conexión A↔B.
+    all_proofs = _dedupe_and_filter_proofs(node_a, node_b, all_proofs, max_items=3)
     calibrated_score = _combine_evidence_score(all_proofs)
     cert_label, cert_color = _cert_label(calibrated_score)
 
@@ -17332,7 +17590,7 @@ def validate_connection_onchain(
         proof_id, node_a, node_b, node_a_key, node_b_key, pair_key,
         all_proofs[0]["type"] if all_proofs else "unknown",
         json.dumps(result_data, ensure_ascii=False),
-        int(is_onchain or is_internet), calibrated_score, now,
+        int(is_onchain), calibrated_score, now,
     ))
     # ── Actualizar node_verifications para que el mapa cambie color en la próxima carga ──
     _is_connected_node = calibrated_score >= 0.50 and (is_onchain or is_internet)
@@ -17427,6 +17685,10 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
     if do_search and query and query.strip() and _has_api_key:
         _raw_q = query.strip()
         if clean_research:
+            ensure_sanitizer_tables(conn)
+            if not st.session_state.get("safe_sanitizer_admin_ok") and _admin_secret_value():
+                st.error("🔐 Re-búsqueda limpia bloqueada: primero desbloquea el token admin en Diagnóstico → Sanitizador seguro. Así nadie puede borrar asociaciones por accidente.")
+                st.stop()
             _purged = _purge_discovery_associations_for_entity(conn, _raw_q, purge_cache=True)
             st.info(
                 "🧹 Re-búsqueda limpia preparada: "
@@ -17529,17 +17791,19 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
         st.session_state.pop("disc_result", None)
 
     # ── Actualizaciones pendientes del mapa ─────────────────────────────────
+    # v114: ya no hay botón "Aplicar actualizaciones". Si otro usuario añade
+    # rutas/pruebas/nodos, la sesión lo aplica automáticamente en el siguiente
+    # tick de Live Sync para que todos vean el mismo mapa.
     _map_seen  = st.session_state.get("map_last_seen", "")
     _map_last  = _get_last_map_update(conn)
     _n_pending = _get_pending_updates(conn, _map_seen) if _map_seen else 0
     if _n_pending > 0:
-        _upd_col1, _upd_col2 = st.columns([3, 1])
-        with _upd_col1:
-            st.info(f"🔄 **{_n_pending} actualización(es) pendiente(s)** — otro usuario añadió nodos o verificaciones al mapa.")
-        with _upd_col2:
-            if st.button("Aplicar actualizaciones", key="apply_map_updates"):
-                st.session_state["map_last_seen"] = _map_last
-                st.rerun()
+        st.session_state["map_last_seen"] = _map_last
+        try:
+            st.toast(f"🔄 {_n_pending} actualización(es) del mapa aplicadas automáticamente.")
+        except Exception:
+            pass
+        st.rerun()
     elif _map_last:
         st.session_state["map_last_seen"] = _map_last
 
@@ -17998,6 +18262,15 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
                     if isinstance(rd, dict) and bool(rd.get("draw_on_map", True)):
                         _push(rd.get("to") or rd.get("target") or rd.get("connects_to"))
 
+                # Cascada controlada: si el resultado no superó Proof-First o solo trajo
+                # fuentes recuperadas sin conexión, no encolamos más entidades.
+                try:
+                    _cascade_conf = float((_result or {}).get("confidence", 0.0) or 0.0)
+                    _has_structured = bool((_result or {}).get("route_decisions") or _valid_discovery_evidence_items(_result or {}))
+                    if not bool((_result or {}).get("connected")) and (_cascade_conf < 0.55 or not _has_structured):
+                        return []
+                except Exception:
+                    return []
                 if not candidates:
                     return []
 
@@ -18255,7 +18528,7 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
                         st.rerun()
 
         dyn_routes_df = pd.read_sql_query(
-            "SELECT src, dst, kind, label, confidence, evidence, source_urls FROM dynamic_routes ORDER BY added_at DESC", conn)
+            "SELECT src, dst, kind, label, confidence, evidence, source_urls FROM dynamic_routes WHERE COALESCE(sanitizer_status,'active')!='quarantined' ORDER BY added_at DESC", conn)
         if not dyn_routes_df.empty:
             st.markdown("#### Rutas descubiertas")
             _kind_color = {
@@ -18317,36 +18590,405 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
     except Exception as exc:
         st.error(f"Error: {exc}")
 
-def purge_legacy_preconfigured_routes(conn: sqlite3.Connection) -> int:
-    """
-    Limpia rutas/pruebas heredadas de versiones antiguas sin borrar búsquedas guardadas.
-    Borra solo aristas generadas por plantillas: inferido por tipo, obligatoria por protocolo,
-    Ripple ecosystem, vigilancia por tipo y pruebas semilla.
-    """
-    ensure_discovery_tables(conn)
-    deleted = 0
+
+# =============================================================================
+# SANITIZADOR SEGURO v115 — no borra a ciegas, cuarentena reversible
+# =============================================================================
+# Objetivo:
+# - Evitar que basura antigua de SQLite contamine mapas/métricas.
+# - Bloquear rutas falsas de motores internos y pruebas de 0%.
+# - Nunca borrar datos sin copia: backup + quarantine + restore.
+# - En modo público, nadie puede aplicar cambios destructivos sin token admin.
+
+SANITIZER_HARD_INVALID_KINDS = {"model", "watch_only"}
+SANITIZER_VALID_STATUSES = {"active", "quarantined", "degraded"}
+
+
+def _table_has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
     try:
-        patterns = [
-            "%inferido por tipo%", "%Ruta inferida automaticamente%",
-            "%obligatoria por protocolo%", "%deducción:%", "%deduccion:%",
-            "%Ripple ecosystem%", "%vigilancia por tipo%", "%Ruta especulativa por tipo%",
-            "%obligatoria%",
-        ]
-        for pat in patterns:
-            cur = conn.execute(
-                "DELETE FROM dynamic_routes WHERE COALESCE(label,'') LIKE ? OR COALESCE(evidence,'') LIKE ?",
-                (pat, pat),
-            )
-            deleted += cur.rowcount or 0
-        # Quitar pruebas semilla antiguas, pero mantener caché de investigaciones.
-        cur = conn.execute(
-            "DELETE FROM connection_proofs WHERE COALESCE(proof_data,'') LIKE '%seeded_known_evidence%'"
-        )
-        deleted += cur.rowcount or 0
+        return any(str(r[1]) == column for r in conn.execute(f"PRAGMA table_info({table})").fetchall())
+    except Exception:
+        return False
+
+
+def ensure_sanitizer_tables(conn: sqlite3.Connection) -> None:
+    ensure_discovery_tables(conn)
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS sanitizer_quarantine (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_table  TEXT NOT NULL,
+            row_key       TEXT NOT NULL,
+            action        TEXT NOT NULL,
+            reason        TEXT NOT NULL,
+            severity      TEXT NOT NULL DEFAULT 'medium',
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            restored      INTEGER NOT NULL DEFAULT 0,
+            created_at    TEXT NOT NULL,
+            applied_by    TEXT NOT NULL DEFAULT 'system'
+        );
+        CREATE TABLE IF NOT EXISTS sanitizer_runs (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            mode          TEXT NOT NULL,
+            applied       INTEGER NOT NULL DEFAULT 0,
+            counts_json   TEXT NOT NULL DEFAULT '{}',
+            backup_path   TEXT,
+            created_at    TEXT NOT NULL,
+            applied_by    TEXT NOT NULL DEFAULT 'system'
+        );
+    """)
+    for table in ("dynamic_routes", "connection_proofs", "route_paths", "node_verifications"):
+        try:
+            existing = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+        except Exception:
+            existing = []
+        for col_def in (
+            "sanitizer_status TEXT NOT NULL DEFAULT 'active'",
+            "sanitizer_reason TEXT",
+            "sanitized_at TEXT",
+        ):
+            col = col_def.split()[0]
+            if col not in existing:
+                try:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
+                except Exception:
+                    pass
+    conn.commit()
+
+
+def _active_sql(table_alias: str = "") -> str:
+    prefix = (table_alias + ".") if table_alias else ""
+    return f"COALESCE({prefix}sanitizer_status,'active')!='quarantined'"
+
+
+def _db_file_path(conn: sqlite3.Connection) -> str:
+    try:
+        rows = conn.execute("PRAGMA database_list").fetchall()
+        for r in rows:
+            if str(r[1]) == "main" and r[2]:
+                return str(r[2])
+    except Exception:
+        pass
+    return str(DB_PATH)
+
+
+def create_safe_db_backup(conn: sqlite3.Connection, label: str = "sanitizer") -> str:
+    """Copia física de SQLite antes de aplicar cualquier saneo."""
+    import shutil
+    db_file = _db_file_path(conn)
+    if not db_file or db_file == ":memory:" or not _os.path.exists(db_file):
+        return ""
+    backup_dir = _os.path.join(_os.path.dirname(db_file) or ".", "rrp_db_backups")
+    _os.makedirs(backup_dir, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    backup_path = _os.path.join(backup_dir, f"{_os.path.basename(db_file)}.{label}.{ts}.bak")
+    try:
         conn.commit()
     except Exception:
         pass
-    return deleted
+    shutil.copy2(db_file, backup_path)
+    return backup_path
+
+
+def _admin_secret_value() -> str:
+    for key in ("RRP_ADMIN_TOKEN", "RIPPLE_RADAR_ADMIN_TOKEN"):
+        val = str(_os.environ.get(key, "") or "").strip()
+        if val:
+            return val
+    try:
+        secrets = getattr(st, "secrets", {}) or {}
+        for key in ("RRP_ADMIN_TOKEN", "RIPPLE_RADAR_ADMIN_TOKEN"):
+            if key in secrets and str(secrets[key]).strip():
+                return str(secrets[key]).strip()
+    except Exception:
+        pass
+    return ""
+
+
+def render_admin_guard(prefix: str = "sanitizer") -> bool:
+    """Devuelve True solo si el admin ha introducido el token correcto."""
+    token = _admin_secret_value()
+    if not token:
+        st.warning("🔐 Modo seguro: no hay `RRP_ADMIN_TOKEN` configurado. Solo se permite auditoría, no aplicar cambios.")
+        return False
+    if st.session_state.get(f"{prefix}_admin_ok"):
+        st.success("🔓 Admin verificado para esta sesión.")
+        return True
+    cols = st.columns([3, 1])
+    with cols[0]:
+        typed = st.text_input("Token admin", type="password", key=f"{prefix}_admin_token_input", placeholder="RRP_ADMIN_TOKEN")
+    with cols[1]:
+        if st.button("Desbloquear", key=f"{prefix}_admin_unlock", use_container_width=True):
+            if typed and typed == token:
+                st.session_state[f"{prefix}_admin_ok"] = True
+                st.rerun()
+            else:
+                st.error("Token incorrecto.")
+    return False
+
+
+def _snapshot_row(cols: List[str], row: Any) -> Dict[str, Any]:
+    return {cols[i]: row[i] for i in range(min(len(cols), len(row)))}
+
+
+def _route_severity_reason(src: Any, dst: Any, kind: Any, confidence: Any, evidence: Any, source_urls: Any) -> Tuple[str, str, str, str]:
+    """Devuelve (decision, reason, severity, suggested_kind)."""
+    csrc, cdst = _canonical_display_node(src), _canonical_display_node(dst)
+    k = str(kind or "").strip().lower()
+    conf = float(confidence or 0.0)
+    ev = str(evidence or "").strip()
+    urls = str(source_urls or "").strip()
+
+    if not csrc or not cdst or _canonical_entity_key(csrc) == _canonical_entity_key(cdst):
+        return "quarantine", "self_route_or_empty_endpoint", "high", k or "watch"
+    if _is_radar_engine_node(csrc) or _is_radar_engine_node(cdst):
+        return "quarantine", "radar_engine_node_cannot_be_external_connection", "high", k or "watch"
+    if k in SANITIZER_HARD_INVALID_KINDS:
+        return "quarantine", "internal_model_or_observation_not_valid_as_dynamic_connection", "high", k
+    if k in {"obligatory"} and not _is_core_infra_pair(csrc, cdst):
+        return "degrade", "non_core_obligatory_claim_degraded_to_watch", "medium", "weak_evidence" if (ev or urls) else "watch"
+    if k in {"verified", "official", "institutional", "government_payment_rail", "private", "partner", "public_wallet"}:
+        # Si no hay evidencia/fuente, no puede mostrarse como fuerte.
+        if not ev and not urls and not _is_core_infra_pair(csrc, cdst):
+            return "degrade", "strong_kind_without_evidence_degraded", "medium", "weak_evidence"
+    if conf <= 0 and k not in {"watch", "future"} and not _is_core_infra_pair(csrc, cdst):
+        return "quarantine", "zero_confidence_non_watch_route", "medium", k or "watch"
+    return "keep", "ok", "low", k or "watch"
+
+
+def _proof_severity_reason(node_a: Any, node_b: Any, proof_data_s: Any, confidence: Any, onchain: Any) -> Tuple[str, str, str, float, int]:
+    """Devuelve (decision, reason, severity, new_confidence, new_onchain)."""
+    ca, cb = _canonical_display_node(node_a), _canonical_display_node(node_b)
+    raw_conf = float(confidence or 0.0)
+    raw_onchain = int(onchain or 0)
+    if not ca or not cb or _canonical_entity_key(ca) == _canonical_entity_key(cb):
+        return "quarantine", "self_proof_or_empty_endpoint", "high", 0.0, 0
+    if _is_radar_engine_node(ca) or _is_radar_engine_node(cb):
+        return "quarantine", "radar_engine_node_cannot_be_proof_endpoint", "high", 0.0, 0
+    try:
+        pdata = json.loads(proof_data_s or "{}")
+    except Exception:
+        return "quarantine", "malformed_proof_json", "high", 0.0, 0
+    proofs = pdata.get("proofs") if isinstance(pdata, dict) else []
+    clean = _dedupe_and_filter_proofs(ca, cb, proofs or [], max_items=6)
+    score = _combine_evidence_score(clean)
+    pair_onchain = any((p.get("onchain") and str(p.get("type", "")).lower() in PAIR_ONCHAIN_TYPES) for p in clean if isinstance(p, dict))
+    new_onchain = 1 if pair_onchain else 0
+    new_conf = max(score, raw_conf if _is_core_infra_pair(ca, cb) else 0.0)
+    if raw_onchain and not pair_onchain:
+        # Internet o wallet genérica no puede quedarse como on-chain.
+        if score <= 0 and not _is_core_infra_pair(ca, cb):
+            return "quarantine", "invalid_onchain_flag_without_pair_onchain_proof", "high", 0.0, 0
+        return "degrade", "onchain_flag_removed_not_pair_level", "medium", min(max(score, 0.15), 0.42), 0
+    if not clean and not _is_core_infra_pair(ca, cb):
+        return "quarantine", "no_pair_relevant_proofs", "medium", 0.0, 0
+    if new_conf <= 0.0 and not _is_core_infra_pair(ca, cb):
+        return "quarantine", "zero_confidence_proof", "medium", 0.0, 0
+    if raw_conf > 0.55 and score < 0.45 and not pair_onchain and not _is_core_infra_pair(ca, cb):
+        return "degrade", "overconfident_proof_downgraded_by_source_quality", "medium", min(max(score, 0.15), 0.42), new_onchain
+    return "keep", "ok", "low", round(float(new_conf), 3), new_onchain
+
+
+def audit_sanitizer(conn: sqlite3.Connection) -> Dict[str, Any]:
+    ensure_sanitizer_tables(conn)
+    report: Dict[str, Any] = {"routes": [], "proofs": [], "counts": Counter()}
+    # Dynamic routes
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(dynamic_routes)").fetchall()]
+        q = "SELECT * FROM dynamic_routes WHERE COALESCE(sanitizer_status,'active')!='quarantined'"
+        for row in conn.execute(q).fetchall():
+            snap = _snapshot_row(cols, row)
+            decision, reason, severity, suggested_kind = _route_severity_reason(
+                snap.get("src"), snap.get("dst"), snap.get("kind"), snap.get("confidence"), snap.get("evidence"), snap.get("source_urls")
+            )
+            if decision != "keep":
+                item = {"table": "dynamic_routes", "row_key": snap.get("route_id"), "decision": decision, "reason": reason, "severity": severity, "suggested_kind": suggested_kind, "snapshot": snap}
+                report["routes"].append(item)
+                report["counts"][f"routes_{decision}"] += 1
+    except Exception as exc:
+        report["counts"]["routes_audit_error"] += 1
+        report["routes_error"] = str(exc)
+    # Connection proofs
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(connection_proofs)").fetchall()]
+        q = "SELECT * FROM connection_proofs WHERE COALESCE(sanitizer_status,'active')!='quarantined'"
+        for row in conn.execute(q).fetchall():
+            snap = _snapshot_row(cols, row)
+            decision, reason, severity, new_conf, new_onchain = _proof_severity_reason(
+                snap.get("node_a"), snap.get("node_b"), snap.get("proof_data"), snap.get("confidence"), snap.get("onchain")
+            )
+            if decision != "keep":
+                item = {"table": "connection_proofs", "row_key": snap.get("proof_id"), "decision": decision, "reason": reason, "severity": severity, "new_confidence": new_conf, "new_onchain": new_onchain, "snapshot": snap}
+                report["proofs"].append(item)
+                report["counts"][f"proofs_{decision}"] += 1
+    except Exception as exc:
+        report["counts"]["proofs_audit_error"] += 1
+        report["proofs_error"] = str(exc)
+    report["counts"] = dict(report["counts"])
+    return report
+
+
+def apply_sanitizer_quarantine(conn: sqlite3.Connection, report: Dict[str, Any], applied_by: str = "admin") -> Dict[str, Any]:
+    """Aplica cambios reversibles: marca status/degrada, guarda snapshot y crea backup."""
+    ensure_sanitizer_tables(conn)
+    backup = create_safe_db_backup(conn, "pre_sanitizer")
+    now = datetime.now(timezone.utc).isoformat()
+    counts = Counter()
+    items = list(report.get("routes", [])) + list(report.get("proofs", []))
+    with conn:
+        for item in items:
+            table = item.get("table")
+            key = str(item.get("row_key") or "")
+            decision = item.get("decision")
+            reason = item.get("reason") or "sanitizer"
+            severity = item.get("severity") or "medium"
+            snap = item.get("snapshot") or {}
+            if not table or not key:
+                continue
+            conn.execute("""
+                INSERT INTO sanitizer_quarantine
+                (source_table,row_key,action,reason,severity,snapshot_json,created_at,applied_by)
+                VALUES (?,?,?,?,?,?,?,?)
+            """, (table, key, decision, reason, severity, json.dumps(snap, ensure_ascii=False), now, applied_by))
+            if table == "dynamic_routes":
+                if decision == "quarantine":
+                    conn.execute("UPDATE dynamic_routes SET sanitizer_status='quarantined', sanitizer_reason=?, sanitized_at=? WHERE route_id=?", (reason, now, key))
+                    counts["routes_quarantined"] += 1
+                elif decision == "degrade":
+                    new_kind = str(item.get("suggested_kind") or "weak_evidence")
+                    conn.execute("UPDATE dynamic_routes SET sanitizer_status='degraded', sanitizer_reason=?, sanitized_at=?, kind=?, confidence=MIN(COALESCE(confidence,0),0.32) WHERE route_id=?", (reason, now, new_kind, key))
+                    counts["routes_degraded"] += 1
+            elif table == "connection_proofs":
+                if decision == "quarantine":
+                    conn.execute("UPDATE connection_proofs SET sanitizer_status='quarantined', sanitizer_reason=?, sanitized_at=?, confidence=0.0, onchain=0 WHERE proof_id=?", (reason, now, key))
+                    counts["proofs_quarantined"] += 1
+                elif decision == "degrade":
+                    new_conf = float(item.get("new_confidence") or 0.0)
+                    new_onchain = int(item.get("new_onchain") or 0)
+                    conn.execute("UPDATE connection_proofs SET sanitizer_status='degraded', sanitizer_reason=?, sanitized_at=?, confidence=?, onchain=? WHERE proof_id=?", (reason, now, new_conf, new_onchain, key))
+                    counts["proofs_degraded"] += 1
+        conn.execute("INSERT INTO sanitizer_runs(mode,applied,counts_json,backup_path,created_at,applied_by) VALUES (?,?,?,?,?,?)", ("apply", 1, json.dumps(dict(counts), ensure_ascii=False), backup, now, applied_by))
+        conn.execute("INSERT INTO map_update_log(update_type,entity_name,details,updated_at) VALUES (?,?,?,?)", ("sanitizer", "global", json.dumps(dict(counts), ensure_ascii=False), now))
+    return {"backup": backup, "counts": dict(counts), "items": len(items)}
+
+
+def restore_last_sanitizer_batch(conn: sqlite3.Connection, applied_by: str = "admin") -> Dict[str, int]:
+    """Restaura el último lote no restaurado usando snapshots guardados."""
+    ensure_sanitizer_tables(conn)
+    counts = Counter()
+    rows = conn.execute("""
+        SELECT id, source_table, row_key, action, snapshot_json
+        FROM sanitizer_quarantine
+        WHERE restored=0
+        ORDER BY id DESC
+        LIMIT 500
+    """).fetchall()
+    now = datetime.now(timezone.utc).isoformat()
+    with conn:
+        for qid, table, key, action, snap_s in rows:
+            try:
+                snap = json.loads(snap_s or "{}")
+            except Exception:
+                snap = {}
+            if table == "dynamic_routes":
+                conn.execute("UPDATE dynamic_routes SET sanitizer_status='active', sanitizer_reason=NULL, sanitized_at=? WHERE route_id=?", (now, key))
+                # Restaurar kind/confianza si estaban en snapshot.
+                if snap:
+                    conn.execute("UPDATE dynamic_routes SET kind=?, confidence=? WHERE route_id=?", (snap.get("kind", "watch"), float(snap.get("confidence") or 0.0), key))
+                counts["routes_restored"] += 1
+            elif table == "connection_proofs":
+                conn.execute("UPDATE connection_proofs SET sanitizer_status='active', sanitizer_reason=NULL, sanitized_at=?, confidence=?, onchain=? WHERE proof_id=?", (now, float(snap.get("confidence") or 0.0), int(snap.get("onchain") or 0), key))
+                counts["proofs_restored"] += 1
+            conn.execute("UPDATE sanitizer_quarantine SET restored=1 WHERE id=?", (qid,))
+        conn.execute("INSERT INTO sanitizer_runs(mode,applied,counts_json,backup_path,created_at,applied_by) VALUES (?,?,?,?,?,?)", ("restore", 1, json.dumps(dict(counts), ensure_ascii=False), "", now, applied_by))
+        conn.execute("INSERT INTO map_update_log(update_type,entity_name,details,updated_at) VALUES (?,?,?,?)", ("sanitizer_restore", "global", json.dumps(dict(counts), ensure_ascii=False), now))
+    return dict(counts)
+
+
+def sanitizer_autoflag_hard_invalid(conn: sqlite3.Connection) -> Dict[str, Any]:
+    """Auto-protección ligera en arranque: solo reglas duras, sin borrar."""
+    ensure_sanitizer_tables(conn)
+    report = audit_sanitizer(conn)
+    hard = {"routes": [], "proofs": [], "counts": {}}
+    hard["routes"] = [x for x in report.get("routes", []) if x.get("decision") == "quarantine" and x.get("severity") == "high"]
+    hard["proofs"] = [x for x in report.get("proofs", []) if x.get("decision") == "quarantine" and x.get("severity") == "high"]
+    if not hard["routes"] and not hard["proofs"]:
+        return {"items": 0, "counts": {}}
+    # Backup por seguridad incluso en auto-flag.
+    result = apply_sanitizer_quarantine(conn, hard, applied_by="auto_hard_rules")
+    return result
+
+
+def render_safe_sanitizer_panel(conn: sqlite3.Connection) -> None:
+    ensure_sanitizer_tables(conn)
+    st.markdown("### 🛡️ Sanitizador seguro de conexiones")
+    st.markdown("""
+Este panel **no borra a ciegas**. Primero audita. Si aplicas, crea backup, guarda snapshot en cuarentena y solo oculta/degrada rutas peligrosas.
+Reglas principales: sin motores internos como conexiones, sin 0% como prueba, sin on-chain falso, sin self-routes y sin fuentes que no sostienen A↔B.
+""")
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        do_audit = st.button("🔎 Auditar sin tocar nada", key="safe_sanitizer_audit", use_container_width=True)
+    with col_b:
+        st.metric("Rutas en cuarentena", conn.execute("SELECT COUNT(*) FROM sanitizer_quarantine WHERE source_table='dynamic_routes' AND restored=0").fetchone()[0])
+    with col_c:
+        st.metric("Pruebas en cuarentena", conn.execute("SELECT COUNT(*) FROM sanitizer_quarantine WHERE source_table='connection_proofs' AND restored=0").fetchone()[0])
+
+    if do_audit or "safe_sanitizer_report" not in st.session_state:
+        st.session_state["safe_sanitizer_report"] = audit_sanitizer(conn)
+    report = st.session_state.get("safe_sanitizer_report") or {"routes": [], "proofs": [], "counts": {}}
+    counts = report.get("counts", {})
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Rutas a cuarentena", counts.get("routes_quarantine", 0))
+    c2.metric("Rutas a degradar", counts.get("routes_degrade", 0))
+    c3.metric("Pruebas a cuarentena", counts.get("proofs_quarantine", 0))
+    c4.metric("Pruebas a degradar", counts.get("proofs_degrade", 0))
+
+    preview = []
+    for item in (report.get("routes", []) + report.get("proofs", []))[:80]:
+        snap = item.get("snapshot") or {}
+        preview.append({
+            "tabla": item.get("table"),
+            "acción": item.get("decision"),
+            "severidad": item.get("severity"),
+            "motivo": item.get("reason"),
+            "A/src": snap.get("src") or snap.get("node_a"),
+            "B/dst": snap.get("dst") or snap.get("node_b"),
+            "conf": snap.get("confidence"),
+            "kind/tipo": snap.get("kind") or snap.get("proof_type"),
+        })
+    if preview:
+        styled_table(pd.DataFrame(preview))
+    else:
+        st.success("✅ No se detectan conexiones peligrosas activas con las reglas actuales.")
+
+    admin_ok = render_admin_guard("safe_sanitizer")
+    confirm = st.text_input("Confirmación para aplicar", key="safe_sanitizer_confirm", placeholder="Escribe SANEAR para aplicar cuarentena reversible", disabled=not admin_ok)
+    cols = st.columns(2)
+    with cols[0]:
+        if st.button("🛡️ Aplicar cuarentena reversible", key="safe_sanitizer_apply", use_container_width=True, disabled=(not admin_ok or confirm != "SANEAR")):
+            result = apply_sanitizer_quarantine(conn, report, applied_by="admin")
+            st.session_state.pop("safe_sanitizer_report", None)
+            st.success(f"Saneo aplicado. Backup: {result.get('backup') or 'no disponible'} · {result.get('counts')}")
+            st.rerun()
+    with cols[1]:
+        if st.button("↩️ Restaurar último saneo", key="safe_sanitizer_restore", use_container_width=True, disabled=not admin_ok):
+            restored = restore_last_sanitizer_batch(conn, applied_by="admin")
+            st.success(f"Restaurado: {restored}")
+            st.rerun()
+
+def purge_legacy_preconfigured_routes(conn: sqlite3.Connection) -> int:
+    """
+    v115: ya no borra rutas heredadas en cada arranque.
+    Solo aplica cuarentena reversible a reglas duras de alta severidad
+    (motores internos como conexión, self-routes, JSON roto/on-chain falso).
+    Todo queda restaurable en sanitizer_quarantine y respaldado en rrp_db_backups.
+    """
+    try:
+        result = sanitizer_autoflag_hard_invalid(conn)
+        counts = result.get("counts", {}) if isinstance(result, dict) else {}
+        return int(sum(int(v or 0) for v in counts.values()))
+    except Exception:
+        return 0
 
 
 
@@ -18745,6 +19387,7 @@ def main() -> None:
     conn = get_conn()
     bootstrap_demo(conn)
     ensure_discovery_tables(conn)
+    ensure_sanitizer_tables(conn)
     purge_legacy_preconfigured_routes(conn)
     _ensure_static_verifications(conn)   # pre-poblar verificaciones de nodos estáticos
     normalize_static_aliases_in_db(conn)  # v106: absorbe alias fijos como GTreasury dentro de Treasury
@@ -18756,12 +19399,12 @@ def main() -> None:
     if not render_public_entry_gate(conn):
         return
     render_global_public_banner(conn)
+    render_shared_live_sync(conn)
     render_global_update_notice(conn)
     inject_music_player()
-    # v98: no autorefresh global. El refresco global mezclaba componentes vivos
-    # entre Rutas A→B y Comunidad en algunos navegadores/iframes de Streamlit Cloud.
-    # Los mapas se actualizan con botones explícitos (Autoscan/Actualizar) o al cambiar de pestaña.
-    # Esto evita bucles de carga y que una pestaña conserve restos visuales de otra.
+    # v114: Live Sync sustituye Autoscan/Actualizar mapa. El refresco es ligero y
+    # se basa en la firma de SQLite; las pestañas siguen aisladas para evitar que
+    # Comunidad/Rutas A→B mezclen iframes, pero los datos compartidos sí se actualizan.
 
     # Cargar wallets descubiertas con added_to_map=1 en KNOWN_XRPL_WALLETS
     try:
@@ -18843,6 +19486,11 @@ def main() -> None:
     if not watched_wallets.empty:
         row = boost_metrics_from_watched(conn, row)
 
+    # v114: las métricas visibles usan el mismo cruce de evidencias que los gráficos.
+    # Así Flip/Cobertura/Fase no se inflan por rutas watch, motores internos o fuentes débiles.
+    raw_row = row.copy()
+    row = evidence_gated_latest_row(conn, row)
+
     state = get_state(row)
 
     render_hero()
@@ -18855,6 +19503,7 @@ def main() -> None:
     m5.metric("Fase", f"{int(row['phase'])}")
     m6.metric("Pump", f"{row['pump_score']:.1f}%")
     m7.metric("Rutas hot", hot_routes_count(row))
+    st.caption("🔄 Live Sync activo: métricas y mapas se recalculan desde SQLite compartida cada pocos segundos; Flip está gateado por pruebas/rutas verificadas, no por ruido interno.")
 
     render_metric_explanations()
     render_flip_quality_panel(add_evidence_counts_to_metrics_df(conn, pd.DataFrame([row])).iloc[0])
@@ -18918,7 +19567,7 @@ def main() -> None:
                 st.rerun()
 
         with tab_conn:
-            st.caption("Rutas confirmadas/obligatorias + cualquier conexión con prueba guardada. Si la evidencia es poca, aparece en naranja como “evidencia débil”, no como certeza fuerte.")
+            st.caption("Rutas verificadas + core interno XRPL/Ripple + cualquier conexión con evidencia guardada. Si la evidencia es poca, aparece en naranja como “evidencia débil”, no como certeza fuerte.")
             sel = st.plotly_chart(
                 make_map(row, title="Conexiones confirmadas + obligatorias", route_filter="confirmed", **_map_kwargs),
                 width="stretch", on_select="rerun", selection_mode="points", key=f"radar_map_conn_{_map_rev}",
@@ -19444,6 +20093,9 @@ La simulación usa precio {price_txt} (fuente: {html.escape(str(price_source))})
         else:
             st.info("Sin eventos registrados.")
 
+        with st.expander("🛡️ Sanitizador seguro de conexiones", expanded=False):
+            render_safe_sanitizer_panel(conn)
+
     elif section == "Donaciones":
         render_donations()
 
@@ -19536,7 +20188,7 @@ La simulación usa precio {price_txt} (fuente: {html.escape(str(price_source))})
         st.code("""python -m venv .venv
 .venv\\Scripts\\activate
 pip install streamlit plotly pandas numpy requests python-dateutil
-streamlit run ripple_radar_pro_route_engine_v62_universal.py""", language="bash")
+streamlit run ripple_radar_pro_route_engine_v115_SAFE_SANITIZER_ADMIN_GUARD.py""", language="bash")
         st.warning("Las rutas privadas no se ven por dentro. Este radar vigila las huellas públicas obligatorias.")
 
     st.divider()
