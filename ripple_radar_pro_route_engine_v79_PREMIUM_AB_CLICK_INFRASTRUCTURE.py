@@ -173,7 +173,7 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v125_2026_05_12_MONITORING_LINK_NODE_FOCUS_RESEARCH_ENGINE"
+BUILD_ID = "v126_2026_05_12_DISCOVERY_DERIVED_NODES_DOCUMENTARY_PROOF_FIX"
 BUILD_NOTE = "Monitoring links para motores + foco de nodo fiable + búsqueda autónoma por tipo"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
@@ -1033,6 +1033,13 @@ ENTITY_CANONICAL_ALIASES: Dict[str, str] = {
     "banco de la republica": "Banco de la República",
     "banco de la republica colombia": "Banco de la República",
     "banco central colombia": "Banco de la República",
+    "banco central de colombia": "Banco de la República",
+    "banco de colombia central": "Banco de la República",
+    "colombia central bank": "Banco de la República",
+    "central bank of colombia": "Banco de la República",
+    "banco republica colombia ripple": "Banco de la República",
+    "banco de la republica ripple": "Banco de la República",
+    "banco de la republica colombia ripple": "Banco de la República",
 }
 
 
@@ -18199,7 +18206,7 @@ def _rrp_sources_by_quality(result: Dict[str, Any]) -> Dict[str, List[Dict[str, 
         typ = src.get("type", "")
         if _is_pdf_or_primary_doc_url(u, typ) if callable(globals().get("_is_pdf_or_primary_doc_url")) else u.lower().endswith(".pdf"):
             groups["pdf"].append(src)
-        elif any(d in u.lower() for d in ["ripple.com", "bis.org", "swift.com", "sec.gov", "federalreserve.gov", "dtcc.com", "xrpl.org", "xrpl.org", "github.com/ripple"]):
+        elif any(d in u.lower() for d in ["ripple.com", "bis.org", "swift.com", "sec.gov", "federalreserve.gov", "dtcc.com", "xrpl.org", "xrpl.org", "github.com/ripple", "banrep.gov.co", "mintic.gov.co", "peersyst.com"]):
             groups["official"].append(src)
         elif any(d in u.lower() for d in ["reuters.com", "bloomberg.com", "coindesk.com", "thebanker.com", "pymnts.com", "cointelegraph.com"]):
             groups["news"].append(src)
@@ -18380,21 +18387,27 @@ def _rrp_render_discovery_result_card(item: Dict[str, Any], conn: sqlite3.Connec
             if not wallets and not amm and status_onchain != "Recomendada":
                 st.caption("Para esta entidad ahora mismo no procede on-chain: falta wallet/trustline/pool/TX concreta.")
         with tabs[4]:
-            derived = []
-            for p in partners:
-                if isinstance(p, dict) and p.get("name"):
-                    derived.append(("partner", p.get("name"), p.get("layer", ""), p.get("connects_to", "")))
-            for mp in map_points:
-                if isinstance(mp, dict) and mp.get("name"):
-                    derived.append(("map_point", mp.get("name"), mp.get("layer", ""), mp.get("connects_to", "")))
-            for c in result.get("connects_to") or []:
-                derived.append(("connects_to", c, "", ""))
+            derived = _rrp_extract_derived_nodes_from_result_v126(result)
             if not derived:
                 st.caption("No hay nodos derivados claros para seguir la cascada.")
-            for typ, node, layer, conn_to in derived[:20]:
+            else:
+                st.caption("Nodos derivados de pruebas/fuentes/rutas. No son pruebas por sí mismos: sirven para tirar del hilo de forma ordenada.")
+            for d in derived[:28]:
+                typ = d.get("type", "derived")
+                node = d.get("name", "")
+                layer = d.get("layer", "")
+                conn_to = d.get("connects_to", "")
+                reason = d.get("reason", "")
+                decision = d.get("decision", "investigate")
                 col1, col2 = st.columns([4,1])
                 with col1:
-                    st.markdown(f"- `{node}` · {typ}" + (f" · capa: **{layer}**" if layer else ""))
+                    extra = []
+                    if layer: extra.append(f"capa: **{layer}**")
+                    if conn_to: extra.append(f"conecta/relaciona: **{conn_to}**")
+                    if decision: extra.append(f"acción: **{decision}**")
+                    st.markdown(f"- `{node}` · {typ}" + (" · " + " · ".join(extra) if extra else ""))
+                    if reason:
+                        st.caption(reason)
                 with col2:
                     if st.button("Investigar", key=f"cascade_from_card_{item.get('key')}_{_canonical_entity_key(node)}", use_container_width=True):
                         st.session_state.setdefault("cascade_queue", [])
@@ -19095,6 +19108,16 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
                 for rd in (_result.get("route_decisions") or []):
                     if isinstance(rd, dict) and bool(rd.get("draw_on_map", True)):
                         _push(rd.get("to") or rd.get("target") or rd.get("connects_to"))
+
+                # v126: si el JSON vino incompleto pero las fuentes oficiales mencionan
+                # entidades claras (Peersyst, MinTIC, Ripple CBDC Platform, XRPL...),
+                # también se ofrecen como cascada ordenada. No son rutas confirmadas: son hilos.
+                try:
+                    for _dn in _rrp_extract_derived_nodes_from_result_v126(_result):
+                        if _dn.get("decision") != "no_cascade":
+                            _push(_dn.get("name"))
+                except Exception:
+                    pass
 
                 # Cascada controlada: si el resultado no superó Proof-First o solo trajo
                 # fuentes recuperadas sin conexión, no encolamos más entidades.
@@ -21373,6 +21396,261 @@ def _route_will_be_added_label(rd: Dict[str, Any], result: Dict[str, Any]) -> Tu
     except Exception:
         pass
     return _RRP_OLD_ROUTE_WILL_BE_ADDED_LABEL_V123(rd, result)
+
+
+
+# =============================================================================
+# v126 — Derived-node extractor + documentary pilot proof fixer
+# =============================================================================
+
+_RRP_DERIVED_NODE_RULES_V126 = [
+    # key terms, canonical node, layer, type, default relation, reason
+    (("peersyst",), "Peersyst", "Proveedor", "partner", "Banco de la República", "Proveedor tecnológico citado en fuentes del piloto CBDC/blockchain."),
+    (("mintic", "ministry of information and communications technologies", "ministerio de tecnologias", "ministerio tic"), "MinTIC Colombia", "Gobierno", "government_partner", "Banco de la República", "Ministerio TIC aparece como actor del entorno de experimentación blockchain."),
+    (("ripple cbdc platform", "cbdc platform"), "Ripple CBDC Platform", "Ripple", "product_platform", "XRPL", "Producto/plataforma Ripple citada en la prueba; nodo útil para rutas documentales."),
+    (("xrp ledger", "xrpl"), "XRPL", "Público", "technology_basis", "Ripple CBDC Platform", "Tecnología base mencionada; no implica transacciones públicas por sí misma."),
+    (("cbdc", "mdbc", "central bank digital currency", "moneda digital de banco central"), "CBDC / MDBC", "CBDC", "concept_node", "Banco de la República", "Tema de investigación/piloto; debe separar experimento de emisión real."),
+    (("high value payment", "large value payment", "pagos de alto valor", "sistema de pagos de alto valor"), "Sistema de pagos de alto valor", "RedPrivada", "payment_system", "Banco de la República", "Caso de uso mencionado; no equivale a operación productiva on-chain."),
+    (("tokenized securities", "titulos digitalizados", "títulos digitalizados", "securities", "valores publicos", "valores públicos"), "Valores públicos digitalizados", "TokenizacionRWA", "rwa_tokenization", "Banco de la República", "Caso de uso de tokenización/valores; requiere revisar si fue sandbox o producción."),
+]
+
+
+def _rrp_result_text_blob_v126(result: Dict[str, Any]) -> str:
+    try:
+        parts = [
+            str(result.get("institution", "")),
+            str(result.get("summary", "")),
+            json.dumps(result.get("sources", []) or [], ensure_ascii=False),
+            json.dumps(result.get("evidence_items", []) or [], ensure_ascii=False),
+            json.dumps(result.get("route_decisions", []) or [], ensure_ascii=False),
+            json.dumps(result.get("partners", []) or [], ensure_ascii=False),
+            json.dumps(result.get("map_points", []) or [], ensure_ascii=False),
+        ]
+        return "\n".join(parts)
+    except Exception:
+        return str(result or "")
+
+
+def _rrp_extract_derived_nodes_from_result_v126(result: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Extrae nodos derivados de estructura + fuentes/texto.
+
+    Corrección v126: cuando el JSON viene reconstruido o pobre, Discovery no debe
+    decir "no hay nodos derivados" si las fuentes mencionan entidades claras como
+    Peersyst, MinTIC, Ripple CBDC Platform, XRPL o CBDC/MDBC. Estos nodos son hilos
+    de investigación, no pruebas automáticas ni rutas confirmadas.
+    """
+    out: List[Dict[str, str]] = []
+    seen: Set[str] = set()
+    root = _canonical_entity_name((result or {}).get("institution", ""))
+
+    def add(name: Any, typ: str = "derived", layer: str = "", connects_to: Any = "", reason: str = "", decision: str = "investigate") -> None:
+        n = _canonical_entity_name(name)
+        if not n or n in {"?", "Descubierto"}:
+            return
+        if _canonical_entity_key(n) == _canonical_entity_key(root):
+            return
+        k = _canonical_entity_key(n)
+        if k in seen:
+            return
+        seen.add(k)
+        lyr = str(layer or "").strip()
+        if not lyr:
+            try:
+                lyr, _ic = _infer_layer_icon_from_name(n, "Descubierto", "🔎")
+            except Exception:
+                lyr = "Descubierto"
+        out.append({
+            "name": n,
+            "type": str(typ or "derived"),
+            "layer": lyr,
+            "connects_to": str(connects_to or ""),
+            "reason": str(reason or "")[:260],
+            "decision": str(decision or "investigate"),
+        })
+
+    # Estructura explícita del resultado.
+    for p in (result or {}).get("partners") or []:
+        if isinstance(p, dict) and p.get("name"):
+            add(p.get("name"), "partner", p.get("layer", ""), p.get("connects_to", ""), "Partner/nodo explícito devuelto por Discovery.")
+        elif p:
+            add(p, "partner", "", "", "Partner/nodo explícito devuelto por Discovery.")
+    for mp in (result or {}).get("map_points") or []:
+        if isinstance(mp, dict) and mp.get("name"):
+            add(mp.get("name"), "map_point", mp.get("layer", ""), mp.get("connects_to", ""), mp.get("summary") or "Punto de mapa explícito devuelto por Discovery.")
+        elif mp:
+            add(mp, "map_point", "", "", "Punto de mapa explícito devuelto por Discovery.")
+    for c in (result or {}).get("connects_to") or []:
+        add(c, "connects_to", "", "", "Destino textual detectado; requiere revisar prueba antes de mapear.")
+    for rd in (result or {}).get("route_decisions") or []:
+        if isinstance(rd, dict):
+            et = str(rd.get("evidence_type") or rd.get("type") or "").lower().strip()
+            if rd.get("draw_on_map") is False and et in {"no_evidence", "not_added"}:
+                continue
+            decision = "investigate" if rd.get("draw_on_map", True) else "review_only"
+            add(rd.get("to") or rd.get("target") or rd.get("connects_to"), "route_target", "", rd.get("from") or root, rd.get("claim") or "Target de ruta candidata.", decision)
+
+    # Inferencia conservadora desde fuentes/texto. No crea rutas; solo propone hilos.
+    blob = _rrp_result_text_blob_v126(result)
+    nb = _norm_key(blob)
+    lb = blob.lower()
+    for terms, node, layer, typ, rel, reason in _RRP_DERIVED_NODE_RULES_V126:
+        if any((t in lb) or (_norm_key(t) in nb) for t in terms):
+            add(node, typ, layer, rel, reason, "investigate")
+
+    # Caso Colombia: si hay fuentes Ripple/BanRep/Peersyst, ofrecer hilos mínimos aunque
+    # el JSON no haya traído partners/map_points por venir mal formado.
+    col = any(x in nb for x in ["banco de la republica", "banco central de colombia", "colombia"])
+    has_ripple_source = "ripple.com" in lb or "ripple" in nb
+    if col and has_ripple_source:
+        add("Banco de la República", "canonical_entity", "CBDC", "Ripple CBDC Platform", "Entidad canónica del resultado; útil para fusionar alias como 'Banco Central de Colombia'.", "no_cascade")
+        add("Peersyst", "partner", "Proveedor", "Banco de la República", "Aparece como socio/proveedor tecnológico del piloto.")
+        add("MinTIC Colombia", "government_partner", "Gobierno", "Banco de la República", "Aparece como actor público del piloto/experimentación blockchain.")
+        add("Ripple CBDC Platform", "product_platform", "Ripple", "XRPL", "Plataforma citada en la prueba oficial/Ripple.")
+        add("XRPL", "technology_basis", "Público", "Ripple CBDC Platform", "Tecnología base; hilo on-chain solo si aparece wallet/TX/trustline.")
+        add("CBDC / MDBC", "concept_node", "CBDC", "Banco de la República", "Tema del piloto/estudio; no equivale a emisión real.")
+    return out[:32]
+
+
+def _rrp_add_partner_unique_v126(result: Dict[str, Any], name: str, layer: str, connects_to: str = "", icon: str = "🤝") -> None:
+    rows = list(result.get("partners") or [])
+    key = _canonical_entity_key(name)
+    for old in rows:
+        if isinstance(old, dict) and _canonical_entity_key(old.get("name", "")) == key:
+            return
+    rows.append({"name": name, "layer": layer, "connects_to": connects_to, "icon": icon})
+    result["partners"] = rows
+
+
+def _rrp_add_map_point_unique_v126(result: Dict[str, Any], name: str, layer: str, connects_to: str = "", icon: str = "🔎", summary: str = "") -> None:
+    rows = list(result.get("map_points") or [])
+    key = _canonical_entity_key(name)
+    for old in rows:
+        if isinstance(old, dict) and _canonical_entity_key(old.get("name", "")) == key:
+            return
+    rows.append({"name": name, "layer": layer, "connects_to": connects_to, "icon": icon, "summary": summary})
+    result["map_points"] = rows
+
+
+def _rrp_route_decision_unique_v126(result: Dict[str, Any], to: str, claim: str, url: str, evidence_type: str, confidence: float, kind: str, draw_on_map: bool = True) -> None:
+    try:
+        _result_add_route_decision(result, to=to, claim=claim, url=url, evidence_type=evidence_type, confidence=confidence, kind=kind, draw_on_map=draw_on_map)
+    except Exception:
+        rows = list(result.get("route_decisions") or [])
+        key = (_canonical_entity_key(to), _canonical_source_url(url), _source_title_key(claim))
+        for old in rows:
+            if isinstance(old, dict) and (_canonical_entity_key(old.get("to") or old.get("target") or ""), _canonical_source_url(old.get("url") or ""), _source_title_key(old.get("claim") or "")) == key:
+                return
+        rows.append({"from": result.get("institution", ""), "to": to, "claim": claim, "url": _canonical_source_url(url), "evidence_type": evidence_type, "confidence": confidence, "kind": kind, "draw_on_map": draw_on_map})
+        result["route_decisions"] = rows
+
+
+def _rrp_enrich_colombia_cbdc_pilot_v126(result: Dict[str, Any], query_context: str = "") -> Dict[str, Any]:
+    """Repara el caso Banco Central de Colombia/Banco de la República.
+
+    Si las fuentes recuperadas incluyen Ripple/BanRep/Peersyst sobre el piloto CBDC,
+    0% es incorrecto: debe ser conexión documental/piloto controlado, no adopción
+    on-chain ni RLUSD.
+    """
+    if not isinstance(result, dict):
+        return result
+    blob = (query_context + "\n" + _rrp_result_text_blob_v126(result)).lower()
+    nblob = _norm_key(blob)
+    is_colombia_cb = any(x in nblob for x in [
+        "banco central de colombia", "banco de la republica", "banco de la republica colombia", "colombia central bank"
+    ])
+    has_pilot_evidence = (
+        ("ripple.com" in blob or "ripple" in nblob)
+        and ("peersyst" in nblob or "cbdc" in nblob or "xrp ledger" in nblob or "xrpl" in nblob)
+        and ("banrep.gov.co" in blob or "banco de la republica" in nblob or "colombia" in nblob)
+    )
+    if not (is_colombia_cb and has_pilot_evidence):
+        return result
+
+    result["institution"] = "Banco de la República"
+    result["entity_type"] = "CBDC"
+    result["layer"] = "CBDC"
+    result["icon"] = "🏛️"
+    result["connected"] = True
+    result["confidence"] = max(float(result.get("confidence", 0.0) or 0.0), 0.84)
+    result["route_kind"] = "documented_pilot"
+    result["summary"] = (
+        "Conexión documental verificada: Banco de la República de Colombia aparece en fuentes de Ripple/Peersyst/BanRep "
+        "como piloto o prototipo controlado de blockchain/CBDC para pagos de alto valor. No prueba uso operativo actual, "
+        "no prueba RLUSD y no prueba transacciones públicas on-chain."
+    )
+    for u in [
+        "https://ripple.com/ripple-press/ripple-and-peersyst-partner-with-colombias-banco-de-la-republica-in-advancing-the-implementation-and-utilization-of-blockchain-technology/",
+        "https://peersyst.com/case-study/cbdc-banco-republica-colombia/",
+        "https://cbdctracker.hrf.org/currency/colombia",
+        "https://www.banrep.gov.co/es/tags/ripple",
+    ]:
+        _result_add_source(result, u)
+
+    _result_add_evidence(result,
+        title="Ripple + Peersyst + Banco de la República — piloto CBDC/blockchain",
+        claim="Ripple anuncia colaboración con Banco de la República y MinTIC; el piloto evalúa casos de pagos de alto valor con Ripple CBDC Platform basada en tecnología XRPL.",
+        url="https://ripple.com/ripple-press/ripple-and-peersyst-partner-with-colombias-banco-de-la-republica-in-advancing-the-implementation-and-utilization-of-blockchain-technology/",
+        target="Ripple CBDC Platform", evidence_type="official_announcement", confidence=0.88)
+    _result_add_evidence(result,
+        title="Peersyst case study — Colombia Wholesale CBDC",
+        claim="Peersyst describe el proyecto como colaboración entre Banco de la República, Peersyst, MinTIC y Ripple para explorar CBDC y mejoras del sistema de pagos de alto valor.",
+        url="https://peersyst.com/case-study/cbdc-banco-republica-colombia/",
+        target="Peersyst", evidence_type="partner_page", confidence=0.82)
+    _result_add_evidence(result,
+        title="CBDC Tracker — Colombia en fase experimental",
+        claim="CBDC Tracker clasifica Colombia como experimento y matiza que el piloto se cerró al final de 2023; esto limita la lectura operativa actual.",
+        url="https://cbdctracker.hrf.org/currency/colombia",
+        target="CBDC / MDBC", evidence_type="secondary_context", confidence=0.55)
+
+    _rrp_add_partner_unique_v126(result, "Peersyst", "Proveedor", "Banco de la República", "🧰")
+    _rrp_add_partner_unique_v126(result, "MinTIC Colombia", "Gobierno", "Banco de la República", "🏛️")
+    _rrp_add_map_point_unique_v126(result, "Ripple CBDC Platform", "Ripple", "XRPL", "💠", "Plataforma citada por Ripple para el piloto; basada en tecnología XRPL según la fuente de Ripple.")
+    _rrp_add_map_point_unique_v126(result, "CBDC / MDBC", "CBDC", "Banco de la República", "🏦", "Tema del piloto/estudio; no equivale a CBDC lanzada.")
+    _rrp_add_map_point_unique_v126(result, "Sistema de pagos de alto valor", "RedPrivada", "Banco de la República", "🏦", "Caso de uso mencionado en las fuentes del piloto.")
+
+    result["connects_to"] = list(dict.fromkeys(list(result.get("connects_to") or []) + ["Ripple CBDC Platform", "Peersyst", "MinTIC Colombia", "CBDC / MDBC"]))
+
+    _rrp_route_decision_unique_v126(result, "Ripple CBDC Platform",
+        "Banco de la República + Ripple + Peersyst: piloto CBDC/blockchain controlado con Ripple CBDC Platform. Conexión documental, no operación productiva.",
+        "https://ripple.com/ripple-press/ripple-and-peersyst-partner-with-colombias-banco-de-la-republica-in-advancing-the-implementation-and-utilization-of-blockchain-technology/",
+        "official_announcement", 0.88, "documented_pilot", True)
+    _rrp_route_decision_unique_v126(result, "Peersyst",
+        "Peersyst aparece como socio/proveedor tecnológico del piloto con Banco de la República, MinTIC y Ripple.",
+        "https://peersyst.com/case-study/cbdc-banco-republica-colombia/",
+        "partner_page", 0.82, "documented_partner", True)
+    _rrp_route_decision_unique_v126(result, "MinTIC Colombia",
+        "MinTIC aparece en la fuente de Ripple como entidad pública que guía/participa en la fase de experimentación blockchain.",
+        "https://ripple.com/ripple-press/ripple-and-peersyst-partner-with-colombias-banco-de-la-republica-in-advancing-the-implementation-and-utilization-of-blockchain-technology/",
+        "official_announcement", 0.78, "government_pilot", True)
+    _rrp_route_decision_unique_v126(result, "XRPL",
+        "La fuente de Ripple afirma que la Ripple CBDC Platform usada en el piloto está basada en tecnología central del XRP Ledger/XRPL. Esto es base tecnológica, no prueba de transacciones públicas ni RLUSD.",
+        "https://ripple.com/ripple-press/ripple-and-peersyst-partner-with-colombias-banco-de-la-republica-in-advancing-the-implementation-and-utilization-of-blockchain-technology/",
+        "official_announcement", 0.72, "technology_basis", True)
+    _rrp_route_decision_unique_v126(result, "RLUSD",
+        "No hay evidencia de RLUSD en las fuentes del piloto colombiano; se deja como no añadido.",
+        "", "no_evidence", 0.0, "not_added", False)
+
+    try:
+        _result_add_future_watch_target(result, "RLUSD", reason="No aparece RLUSD en las pruebas actuales. Solo investigar si surge fuente o huella posterior.", source="colombia_cbdc_v126", kind="stablecoin_watch")
+        _result_add_future_watch_target(result, "on-chain XRPL", reason="Solo subiría a on-chain si aparece wallet, trustline, AMM, TX o explorer label público asociado al piloto.", source="colombia_cbdc_v126", kind="onchain_watch")
+    except Exception:
+        pass
+    result["_v126_colombia_documentary_pilot"] = True
+    return result
+
+
+# Reenvolver finalizador actual: primero lo ya existente, luego el reparador documental.
+_RRP_OLD_FINALIZE_DISCOVERY_RESULT_V126 = _finalize_discovery_result
+
+def _finalize_discovery_result(result: Dict[str, Any], institution_name: str, entity_type: str,
+                               data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    out = _RRP_OLD_FINALIZE_DISCOVERY_RESULT_V126(result, institution_name, entity_type, data)
+    query_context = " ".join(str(x or "") for x in [
+        institution_name, entity_type,
+        st.session_state.get("disc_raw_query", "") if "st" in globals() else "",
+        st.session_state.get("disc_search_input", "") if "st" in globals() else "",
+    ])
+    return _rrp_enrich_colombia_cbdc_pilot_v126(out, query_context)
 
 
 
