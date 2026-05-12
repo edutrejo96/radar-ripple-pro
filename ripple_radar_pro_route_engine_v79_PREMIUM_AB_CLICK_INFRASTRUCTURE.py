@@ -173,7 +173,7 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v126_2026_05_12_DISCOVERY_DERIVED_NODES_DOCUMENTARY_PROOF_FIX"
+BUILD_ID = "v128_2026_05_12_CASCADE_RESEED_CACHE_DERIVED_NODES_FIX"
 BUILD_NOTE = "Monitoring links para motores + foco de nodo fiable + búsqueda autónoma por tipo"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
@@ -18133,6 +18133,22 @@ RRP_CASCADE_MAX_DEPTH = 4
 RRP_CASCADE_MAX_QUEUE = 24
 
 
+def _rrp_clear_cascade_seed_flags() -> None:
+    """Limpia los flags internos cascade_seeded_* cuando empieza una búsqueda manual nueva.
+
+    v128: antes, si una entidad ya se había buscado una vez, el flag
+    cascade_seeded_<entidad> quedaba vivo aunque el árbol/cola se reiniciara.
+    Resultado: al volver a buscar Banco de la República desde caché, se mostraba
+    la raíz pero no se reencolaban Peersyst/Ripple CBDC Platform/etc.
+    """
+    try:
+        for _k in list(st.session_state.keys()):
+            if str(_k).startswith("cascade_seeded_"):
+                st.session_state.pop(_k, None)
+    except Exception:
+        pass
+
+
 def _rrp_cascade_item_key(name: Any) -> str:
     return _canonical_entity_key(_canonical_entity_name(name))
 
@@ -18653,6 +18669,7 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
         st.session_state.pop("disc_cascade_depth", None)
         st.session_state["cascade_queue"] = []
         st.session_state["rrp_cascade_done_keys"] = set()
+        _rrp_clear_cascade_seed_flags()
         if clean_research:
             ensure_sanitizer_tables(conn)
             if not st.session_state.get("safe_sanitizer_admin_ok") and _admin_secret_value():
@@ -19286,11 +19303,27 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
             or "discovery"
         )
         _cascade_seed_key = "cascade_seeded_" + _canonical_entity_key(_cascade_seed_root)
-        if not st.session_state.get(_cascade_seed_key):
+        # v128: si el resultado viene de caché reparado o es un caso documental con
+        # nodos derivados claros, resembrar la cascada aunque el flag antiguo exista.
+        # Esto evita que una nueva búsqueda manual limpie la cola y luego el seed viejo
+        # impida volver a mostrar Peersyst/Ripple CBDC Platform/etc.
+        _derived_now_for_seed = []
+        try:
+            _derived_now_for_seed = _rrp_extract_derived_nodes_from_result_v126(result)
+        except Exception:
+            _derived_now_for_seed = []
+        _force_reseed_cascade = bool(
+            result.get("_v126_colombia_documentary_pilot")
+            or result.get("_force_cascade_reseed")
+            or (st.session_state.get("disc_from_cache") and _derived_now_for_seed and not st.session_state.get("cascade_queue"))
+        )
+        if (not st.session_state.get(_cascade_seed_key)) or _force_reseed_cascade:
             _queued_seed = _queue_cascade_entities_from_result(result)
             st.session_state[_cascade_seed_key] = True
             if _queued_seed:
                 st.info("🔗 Cascada preparada: " + ", ".join(_queued_seed[:6]))
+            elif _derived_now_for_seed:
+                st.caption("🔗 Cascada revisada: hay nodos derivados visibles, pero ya estaban investigados o en cola.")
 
         if _effectively_connected and conf >= min_conf_manual:
             already = conn.execute(
@@ -21684,10 +21717,16 @@ def _rrp_enrich_colombia_cbdc_pilot_v126(result: Dict[str, Any], query_context: 
     is_colombia_cb = any(x in nblob for x in [
         "banco central de colombia", "banco de la republica", "banco de la republica colombia", "colombia central bank"
     ])
+    # v128: reparar también cachés antiguos que solo conservan URLs oficiales
+    # (Ripple + BanRep/Peersyst), aunque el JSON original no trajera bien los claims.
+    _official_pair = ("ripple.com" in blob and ("banrep.gov.co" in blob or "peersyst.com" in blob))
     has_pilot_evidence = (
-        ("ripple.com" in blob or "ripple" in nblob)
-        and ("peersyst" in nblob or "cbdc" in nblob or "xrp ledger" in nblob or "xrpl" in nblob)
-        and ("banrep.gov.co" in blob or "banco de la republica" in nblob or "colombia" in nblob)
+        _official_pair
+        or (
+            ("ripple.com" in blob or "ripple" in nblob)
+            and ("peersyst" in nblob or "cbdc" in nblob or "xrp ledger" in nblob or "xrpl" in nblob)
+            and ("banrep.gov.co" in blob or "banco de la republica" in nblob or "colombia" in nblob)
+        )
     )
     if not (is_colombia_cb and has_pilot_evidence):
         return result
@@ -21762,6 +21801,7 @@ def _rrp_enrich_colombia_cbdc_pilot_v126(result: Dict[str, Any], query_context: 
     except Exception:
         pass
     result["_v126_colombia_documentary_pilot"] = True
+    result["_force_cascade_reseed"] = True
     return result
 
 
