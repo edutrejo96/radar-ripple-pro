@@ -173,8 +173,8 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery · v150 Fixed Node Evidence Pending"
-BUILD_ID = "v150_2026_05_12_FIXED_NODE_PENDING_EVIDENCE_FIX"
-BUILD_NOTE = "Notificaciones visuales en nodos: verificar, vigilar huella pública, revisar alcance documental y evitar repeticiones"
+BUILD_ID = "v153_2026_05_12_MANUAL_NODE_EVIDENCE_RESET_FIX"
+BUILD_NOTE = "Modo manual de evidencias para nodos fijos + reset admin de rutas/pruebas dinámicas · Notificaciones visuales en nodos: verificar, vigilar huella pública, revisar alcance documental y evitar repeticiones"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
 import os as _os
@@ -20121,6 +20121,8 @@ Después propone el siguiente hilo de cascada para seguir investigando sin mezcl
         _connect_targets = {_canonical_entity_name(x) for x in (result.get("connects_to") or [])}
         if result.get("_api_temporal_error") or result.get("_api_transient_error"):
             connected_txt = "API temporal — reintentar"
+        elif result.get("_fixed_node_pending_evidence"):
+            connected_txt = "Nodo fijo — pendiente documental"
         elif result.get("connected"):
             if "Treasury" in _connect_targets and any(x in _rd_types for x in {"official_partner", "institutional", "deductive_watch"}):
                 connected_txt = "Ruta infra documentada"
@@ -20130,7 +20132,9 @@ Después propone el siguiente hilo de cascada para seguir investigando sin mezcl
                 connected_txt = "Conexión confirmada"
         else:
             connected_txt = "Sin conexión encontrada"
-        if result.get("_confidence_is_research_quality"):
+        if result.get("_fixed_node_pending_evidence"):
+            conf_label = "Estado"
+        elif result.get("_confidence_is_research_quality"):
             conf_label = "Calidad búsqueda"
         elif connected_txt in {"Ruta infra documentada", "Ruta deductiva/watch"}:
             conf_label = "Confianza infra"
@@ -25535,6 +25539,393 @@ try:
 except Exception:
     pass
 
+
+
+# =============================================================================
+# v153 · MANUAL NODE EVIDENCE + ADMIN RESET
+# =============================================================================
+# Objetivo:
+# 1) Un nodo fijo como XRPL, RLUSD, SWIFT, Treasury, etc. no debe mostrarse como
+#    "sin conexión" si todavía no se investigaron sus documentos. Debe mostrarse
+#    como "pendiente documental".
+# 2) Permitir al admin limpiar rutas/pruebas/caché dinámicas para reconstruir el
+#    mapa manualmente nodo por nodo, sin tocar NODES ni el esqueleto visual base.
+# 3) Resolver alias humanos como "xrpledger" → XRPL y preparar consultas útiles
+#    para buscar documentación real de nodos fijos.
+
+BUILD_ID = "v153_2026_05_12_MANUAL_NODE_EVIDENCE_RESET_FIX"
+BUILD_NOTE = "Modo manual de evidencias para nodos fijos + reset admin de rutas/pruebas dinámicas"
+
+try:
+    ENTITY_CANONICAL_ALIASES.update({
+        "xrpledger": "XRPL",
+        "xrp ledger": "XRPL",
+        "xrp ledger protocol": "XRPL",
+        "xrp ledger mainnet": "XRPL",
+        "xrpl ledger": "XRPL",
+        "xrpl mainnet": "XRPL",
+        "ledger xrp": "XRPL",
+        "xrp ledger docs": "XRPL",
+        "xrpl org": "XRPL",
+        "docs xrpl org": "XRPL",
+        "ripple cbdc platform": "Ripple CBDC Platform",
+        "ripple cbdc": "Ripple CBDC Platform",
+    })
+except Exception:
+    pass
+
+_RRP_V153_FIXED_NODE_NAMES: Set[str] = set()
+try:
+    _RRP_V153_FIXED_NODE_NAMES.update(str(x) for x in (NODES or {}).keys())
+except Exception:
+    pass
+_RRP_V153_FIXED_NODE_NAMES.update({
+    "XRPL", "RLUSD", "Ethereum", "Public Gateway", "Trustlines", "DEX/AMM",
+    "Large Transfers", "Clusters", "Ripple Payments", "Ripple CBDC Platform",
+    "Treasury", "Rail", "Hidden Road / Prime", "Custody/Metaco", "Standard Custody",
+    "Permissioned DEX", "Ripple Escrow", "SWIFT", "FedNow", "DTCC/NSCC",
+})
+_RRP_V153_FIXED_NODE_KEYS: Set[str] = set()
+try:
+    _RRP_V153_FIXED_NODE_KEYS = {_canonical_entity_key(x) for x in _RRP_V153_FIXED_NODE_NAMES}
+except Exception:
+    _RRP_V153_FIXED_NODE_KEYS = set()
+
+
+def _rrp_v153_is_fixed_node(name: Any) -> bool:
+    try:
+        canon = _canonical_entity_name(str(name or "").strip())
+        return _canonical_entity_key(canon) in _RRP_V153_FIXED_NODE_KEYS or canon in _RRP_V153_FIXED_NODE_NAMES
+    except Exception:
+        return False
+
+
+def _rrp_v153_fixed_node_kind(name: Any) -> str:
+    canon = _canonical_entity_name(name)
+    try:
+        if canon in {"XRPL", "RLUSD", "Ethereum"}:
+            return "punto público/on-chain"
+        if canon in {"Public Gateway", "Trustlines", "DEX/AMM", "Large Transfers", "Clusters"}:
+            return "zona pública de vigilancia"
+        if canon in {"Ripple Payments", "Ripple CBDC Platform", "Treasury", "Rail", "Hidden Road / Prime", "Custody/Metaco", "Standard Custody", "Permissioned DEX", "Ripple Escrow"}:
+            return "infraestructura Ripple"
+        if canon in {"SWIFT", "FedNow", "DTCC/NSCC"}:
+            return "infraestructura financiera externa"
+    except Exception:
+        pass
+    return "nodo fijo del mapa"
+
+
+def _rrp_v153_doc_queries_for_fixed_node(name: Any, peer: Any = "") -> List[str]:
+    canon = _canonical_entity_name(name)
+    peer_canon = _canonical_entity_name(peer) if peer else ""
+    q: List[str] = []
+    def add(x: str) -> None:
+        x = re.sub(r"\s+", " ", str(x or "").strip())
+        if x and x not in q:
+            q.append(x)
+    if canon == "XRPL":
+        for s in [
+            'site:xrpl.org XRPL documentation consensus ledger payments DEX AMM trustlines',
+            'site:docs.xrpl.org XRP Ledger documentation DEX AMM trustlines issued currencies',
+            'site:ripple.com XRP Ledger XRPL payments DEX trust lines AMM',
+            'site:ripple.com XRP Ledger institutional payments XRPL',
+            'site:xrpl.org RLUSD XRPL issued currency trustline',
+            'site:xrpscan.com XRPL RLUSD issuer',
+        ]:
+            add(s)
+    elif canon == "RLUSD":
+        for s in [
+            'site:ripple.com RLUSD XRPL Ethereum stablecoin official',
+            'site:ripple.com Ripple USD RLUSD XRP Ledger Ethereum',
+            'site:docs.xrpl.org RLUSD issued currency XRPL trustline',
+            'site:xrpscan.com RLUSD issuer XRPL',
+        ]:
+            add(s)
+    elif canon == "Ripple CBDC Platform":
+        for s in [
+            'site:ripple.com "Ripple CBDC Platform" XRPL',
+            'site:ripple.com "CBDC Platform" "XRP Ledger"',
+            'site:ripple.com "Ripple CBDC" "XRPL"',
+            'site:businesswire.com Ripple Launches CBDC Platform XRPL',
+        ]:
+            add(s)
+    elif canon in {"Public Gateway", "Trustlines", "DEX/AMM", "Large Transfers", "Clusters"}:
+        for s in [
+            f'site:docs.xrpl.org "{canon}" XRPL',
+            f'site:xrpl.org "{canon}" XRP Ledger',
+            f'site:ripple.com "{canon}" XRPL',
+        ]:
+            add(s)
+    else:
+        for s in [
+            f'"{canon}" Ripple XRPL official',
+            f'"{canon}" "XRP Ledger"',
+            f'"{canon}" RippleNet Ripple Payments',
+            f'site:ripple.com "{canon}"',
+            f'site:bis.org "{canon}" blockchain payments',
+        ]:
+            add(s)
+    if peer_canon:
+        add(f'"{canon}" "{peer_canon}" Ripple XRPL official')
+        add(f'"{canon}" "{peer_canon}" "XRP Ledger"')
+    return q[:10]
+
+
+_ORIG_NATIVE_QUERY_VARIANTS_V153 = globals().get("_native_query_variants")
+def _native_query_variants(entity: Any) -> List[str]:
+    variants: List[str] = []
+    def add(x: str) -> None:
+        x = re.sub(r"\s+", " ", str(x or "").strip())
+        if x and x not in variants:
+            variants.append(x)
+    try:
+        if _ORIG_NATIVE_QUERY_VARIANTS_V153:
+            for v in _ORIG_NATIVE_QUERY_VARIANTS_V153(entity):
+                add(v)
+    except Exception:
+        pass
+    try:
+        if _rrp_v153_is_fixed_node(entity):
+            for v in _rrp_v153_doc_queries_for_fixed_node(entity):
+                add(v)
+    except Exception:
+        pass
+    return variants[:24]
+
+
+_ORIG_LOCAL_SOURCE_QUERY_EXAMPLES_V153 = globals().get("_local_source_query_examples")
+def _local_source_query_examples(entity: Any, limit: int = 10) -> List[str]:
+    out: List[str] = []
+    def add(x: str) -> None:
+        x = re.sub(r"\s+", " ", str(x or "").strip())
+        if x and x not in out:
+            out.append(x)
+    try:
+        if _ORIG_LOCAL_SOURCE_QUERY_EXAMPLES_V153:
+            for q in _ORIG_LOCAL_SOURCE_QUERY_EXAMPLES_V153(entity, limit=limit):
+                add(q)
+    except Exception:
+        pass
+    try:
+        if _rrp_v153_is_fixed_node(entity):
+            for q in _rrp_v153_doc_queries_for_fixed_node(entity):
+                add(q)
+    except Exception:
+        pass
+    return out[:limit]
+
+
+def _rrp_v153_is_weak_result(result: Dict[str, Any]) -> bool:
+    try:
+        if not isinstance(result, dict):
+            return True
+        if result.get("_api_temporal_error") or result.get("_api_transient_error"):
+            return False
+        conf = float(result.get("confidence", 0) or 0)
+        ev = result.get("evidence_items") or []
+        rd = result.get("route_decisions") or []
+        src = result.get("sources") or []
+        connected = bool(result.get("connected"))
+        # Débil no significa falso: significa que aún no hay prueba específica aceptada.
+        return (not connected and conf <= 0.05 and len(ev) == 0 and len(rd) == 0)
+    except Exception:
+        return True
+
+
+def _rrp_v153_mark_fixed_pending(result: Dict[str, Any], name: Any) -> Dict[str, Any]:
+    result = dict(result or {})
+    canon = _canonical_entity_name(name)
+    result["institution"] = canon
+    result["connected"] = False
+    result["confidence"] = 0.0
+    result["_fixed_node_pending_evidence"] = True
+    result["_do_not_cache_as_negative"] = True
+    result["entity_type"] = result.get("entity_type") or _classify_entity(canon)
+    result["layer"] = result.get("layer") or _classify_entity(canon)
+    if not result.get("icon"):
+        try:
+            result["icon"] = (NODES.get(canon, {}) or {}).get("icon") or "📌"
+        except Exception:
+            result["icon"] = "📌"
+    kind = _rrp_v153_fixed_node_kind(canon)
+    queries = _rrp_v153_doc_queries_for_fixed_node(canon, limit=6) if False else _rrp_v153_doc_queries_for_fixed_node(canon)[:6]
+    old_summary = str(result.get("summary") or "").strip()
+    prefix = (
+        f"{canon} es un {kind} ya fijado en el mapa. "
+        "No se debe interpretar como 'sin conexión': todavía falta investigación documental/on-chain específica para este nodo o sus líneas. "
+        "Usa búsqueda de documentos/manual para validar fuentes antes de convertir rutas en evidencia."
+    )
+    if old_summary and "Sin conexión" not in old_summary and "JSON reconstruido" not in old_summary:
+        result["summary"] = (prefix + " Resultado previo: " + old_summary)[:900]
+    else:
+        result["summary"] = prefix
+    result["suggested_document_queries"] = queries
+    return result
+
+
+_ORIG_SEARCH_INSTITUTION_CONNECTIONS_V153 = search_institution_connections
+def search_institution_connections(institution_name: str,
+                                   conn: Optional[sqlite3.Connection] = None,
+                                   force_online: bool = False) -> Dict[str, Any]:
+    """v153: nodos fijos no se guardan ni se muestran como negativo 0% si faltan documentos."""
+    raw = str(institution_name or "").strip()
+    canon = _canonical_entity_name(raw)
+    result = _ORIG_SEARCH_INSTITUTION_CONNECTIONS_V153(canon, conn=conn, force_online=force_online)
+    try:
+        result = dict(result or {})
+        result["institution"] = _canonical_entity_name(result.get("institution") or canon)
+        if _rrp_v153_is_fixed_node(canon) and _rrp_v153_is_weak_result(result):
+            result = _rrp_v153_mark_fixed_pending(result, canon)
+        return result
+    except Exception:
+        if _rrp_v153_is_fixed_node(canon):
+            return _rrp_v153_mark_fixed_pending({"institution": canon}, canon)
+        return result
+
+
+_ORIG_RENDER_CACHE_FIRST_STATUS_V153 = globals().get("_render_cache_first_status")
+def _render_cache_first_status(conn: sqlite3.Connection, query: str, search_type: str = "discovery") -> Dict[str, Any]:
+    query = str(query or "").strip()
+    if not query:
+        return {"cache": False, "local_total": 0, "can_skip_api": False}
+    canon = _canonical_entity_name(query)
+    if _rrp_v153_is_fixed_node(canon):
+        cached = _get_search_cache(conn, canon, search_type) if "_get_search_cache" in globals() else None
+        local = _local_knowledge_bundle(conn, canon) if "_local_knowledge_bundle" in globals() else {"total": 0, "examples": []}
+        total = int(local.get("total", 0) or 0)
+        if cached:
+            st.success("✅ Caché documental para nodo fijo · 0 gasto API")
+        elif total > 0:
+            st.info(f"📌 Nodo fijo del mapa: hay {total} dato(s) internos relacionados. Puedes abrirlos o forzar novedades documentales.")
+            if local.get("examples"):
+                with st.expander("Ver datos internos del nodo fijo", expanded=False):
+                    for ex in local.get("examples", [])[:8]:
+                        st.write("• " + str(ex))
+        else:
+            st.info(
+                "📌 Nodo fijo del mapa sin investigación documental específica todavía. "
+                "No es una prueba negativa: puedes buscar documentos/manualmente para validar sus líneas."
+            )
+            with st.expander("Consultas sugeridas para buscar documentación", expanded=False):
+                for q in _rrp_v153_doc_queries_for_fixed_node(canon)[:8]:
+                    st.code(q, language="text")
+        return {"cache": bool(cached), "local_total": total, "can_skip_api": bool(cached) or total > 0, "fixed_node": True}
+    if _ORIG_RENDER_CACHE_FIRST_STATUS_V153:
+        return _ORIG_RENDER_CACHE_FIRST_STATUS_V153(conn, query, search_type)
+    return {"cache": False, "local_total": 0, "can_skip_api": False}
+
+
+def _rrp_v153_count_table(conn: sqlite3.Connection, table: str) -> int:
+    try:
+        return int((conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone() or [0])[0] or 0)
+    except Exception:
+        return 0
+
+
+def _rrp_v153_delete_table(conn: sqlite3.Connection, table: str) -> int:
+    try:
+        before = _rrp_v153_count_table(conn, table)
+        conn.execute(f"DELETE FROM {table}")
+        return before
+    except Exception:
+        return 0
+
+
+def _rrp_v153_reset_manual_discovery(conn: sqlite3.Connection,
+                                     include_cache: bool = True,
+                                     include_wallets: bool = False) -> Dict[str, int]:
+    """Limpia datos dinámicos para reconstruir pruebas manualmente. No toca NODES ni ROUTES constantes."""
+    try:
+        ensure_discovery_tables(conn)
+    except Exception:
+        pass
+    try:
+        ensure_route_paths_table(conn)
+    except Exception:
+        pass
+    tables = [
+        "dynamic_routes", "connection_proofs", "route_paths", "node_verifications",
+        "map_update_log", "api_search_audit"
+    ]
+    if include_cache:
+        tables += ["institution_search_cache", "search_cache_aliases"]
+    if include_wallets:
+        tables += ["discovered_wallets"]
+    counts: Dict[str, int] = {}
+    for t in tables:
+        counts[t] = _rrp_v153_delete_table(conn, t)
+    try:
+        conn.execute(
+            "INSERT INTO map_update_log (update_type, entity_name, details, updated_at) VALUES (?,?,?,?)",
+            ("manual_reset", "admin", json.dumps(counts, ensure_ascii=False), datetime.now(timezone.utc).isoformat())
+        )
+    except Exception:
+        pass
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    return counts
+
+
+_ORIG_RENDER_DISCOVERY_ENGINE_V153 = render_discovery_engine
+def render_discovery_engine(conn: sqlite3.Connection) -> None:
+    try:
+        is_admin = bool(_is_admin_unlimited_ai(None))
+    except Exception:
+        is_admin = False
+    if is_admin:
+        with st.expander("🧹 Admin · reconstrucción manual de evidencias", expanded=False):
+            st.markdown(
+                "Esto limpia rutas/pruebas/cachés dinámicas para empezar a validar nodos manualmente. "
+                "No borra los nodos fijos del mapa ni el esqueleto visual del radar."
+            )
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("🧹 Borrar rutas/pruebas dinámicas", key="v153_reset_routes_proofs", use_container_width=True):
+                    counts = _rrp_v153_reset_manual_discovery(conn, include_cache=False, include_wallets=False)
+                    st.success("Limpieza hecha: " + ", ".join(f"{k}={v}" for k, v in counts.items() if v))
+                    try:
+                        st.cache_data.clear()
+                    except Exception:
+                        pass
+                    st.rerun()
+            with c2:
+                if st.button("🧨 Reset manual completo + caché", key="v153_full_manual_reset", use_container_width=True):
+                    counts = _rrp_v153_reset_manual_discovery(conn, include_cache=True, include_wallets=False)
+                    st.success("Reset completo hecho: " + ", ".join(f"{k}={v}" for k, v in counts.items() if v))
+                    try:
+                        st.cache_data.clear()
+                    except Exception:
+                        pass
+                    st.rerun()
+            st.caption("Después del reset: busca cada nodo fijo manualmente, por ejemplo `xrpledger`, `RLUSD`, `Ripple CBDC Platform`, `SWIFT`, etc. El sistema ya no debe convertir un nodo fijo sin investigar en 0% negativo.")
+    _ORIG_RENDER_DISCOVERY_ENGINE_V153(conn)
+
+
+# Refuerzo visual: si un resultado fijo pendiente ya está en sesión, mostrar consultas sugeridas.
+_ORIG_RENDER_DISCOVERY_INVESTIGATION_FLOW_V153 = globals().get("_render_discovery_investigation_flow")
+def _render_discovery_investigation_flow(conn: sqlite3.Connection, root_result: Dict[str, Any]) -> None:
+    if _ORIG_RENDER_DISCOVERY_INVESTIGATION_FLOW_V153:
+        _ORIG_RENDER_DISCOVERY_INVESTIGATION_FLOW_V153(conn, root_result)
+    try:
+        if isinstance(root_result, dict) and root_result.get("_fixed_node_pending_evidence"):
+            st.warning("📌 Este es un nodo fijo del mapa: falta investigación documental/on-chain específica. No es un 0% negativo.")
+            qs = root_result.get("suggested_document_queries") or _rrp_v153_doc_queries_for_fixed_node(root_result.get("institution"))
+            with st.expander("🧾 Consultas sugeridas para validar este nodo", expanded=True):
+                for q in qs[:8]:
+                    st.code(q, language="text")
+    except Exception:
+        pass
+
+
+try:
+    # Limpieza defensiva de negativos antiguos creados antes de v153.
+    if "_rrp_v151_cleanup_all_fixed_false_negatives" in globals():
+        _rrp_v151_cleanup_all_fixed_false_negatives(get_conn())
+except Exception:
+    pass
 
 if __name__ == "__main__":
     main()
