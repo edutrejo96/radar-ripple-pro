@@ -39,6 +39,7 @@ import random
 import sqlite3
 import hashlib
 import html
+import base64
 import re
 import unicodedata
 import time as _time
@@ -171,7 +172,7 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v94_2026_05_12_CACHE_FIRST_SHARED_MEMORY_AB_LIVE"
+BUILD_ID = "v97_2026_05_12_UNLIMITED_PINS_CHAT_NOTIFICATIONS"
 BUILD_NOTE = "Cache-first obligatorio + memoria compartida + A-B limpio con números vivos"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
@@ -12139,7 +12140,7 @@ def render_real_money_warning(conn: sqlite3.Connection, key_suffix: str = "globa
 # y feedback sin convertir el radar en una red social pesada.
 
 _CHAT_MAX_LEN = 3000
-_PINNED_MAX_LEN = 18000
+_PINNED_MAX_LEN = 120000
 _CHAT_COOLDOWN_SECONDS = 4
 _CHAT_RETENTION_LIMIT = 5000
 
@@ -13014,6 +13015,288 @@ def _no_links_message() -> str:
     return "No se permiten enlaces en el chat ni en mensajes fijados para evitar estafas. Añade fuentes desde Discovery/verificación, no como links en el chat."
 
 
+# -----------------------------------------------------------------------------
+# MENSAJES FIJADOS PERSISTENTES
+# -----------------------------------------------------------------------------
+# Por qué existe esta capa:
+# - SQLite en Streamlit Cloud funciona durante la sesión, pero los cambios pueden
+#   desaparecer tras reboot/redeploy si el contenedor se reconstruye.
+# - Para que los mensajes fijados por admins sobrevivan reinicios, esta capa puede
+#   guardar una copia en GitHub mediante un token con permiso contents:write.
+# - Si no hay token configurado, el sistema cae a SQLite local y avisa en el panel admin.
+
+PIN_STORE_DEFAULT_REPO = "edutrejo96/radar-ripple-pro"
+PIN_STORE_DEFAULT_BRANCH = "main"
+PIN_STORE_DEFAULT_PATH = "data/pinned_messages.json"
+
+
+def _secret_or_env(*names: str, default: str = "") -> str:
+    """Lee secretos de Streamlit Cloud o variables de entorno sin romper si no existen."""
+    for name in names:
+        try:
+            val = st.secrets.get(name)  # type: ignore[attr-defined]
+            if val:
+                return str(val).strip()
+        except Exception:
+            pass
+        try:
+            val = _os.environ.get(name)
+            if val:
+                return str(val).strip()
+        except Exception:
+            pass
+    return default
+
+
+def _pin_store_cfg() -> Dict[str, str]:
+    return {
+        "token": _secret_or_env("RRP_PIN_STORE_TOKEN", "GITHUB_TOKEN", default=""),
+        "repo": _secret_or_env("RRP_PIN_STORE_REPO", default=PIN_STORE_DEFAULT_REPO),
+        "branch": _secret_or_env("RRP_PIN_STORE_BRANCH", default=PIN_STORE_DEFAULT_BRANCH),
+        "path": _secret_or_env("RRP_PIN_STORE_PATH", default=PIN_STORE_DEFAULT_PATH),
+    }
+
+
+def _ensure_persistent_pin_table(conn: sqlite3.Connection) -> None:
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS persistent_pinned_messages (
+                pin_id      TEXT PRIMARY KEY,
+                nickname    TEXT NOT NULL,
+                body        TEXT NOT NULL,
+                created_at  TEXT NOT NULL,
+                role        TEXT NOT NULL DEFAULT 'admin',
+                source      TEXT NOT NULL DEFAULT 'sqlite',
+                active      INTEGER NOT NULL DEFAULT 1
+            )
+        """)
+        conn.commit()
+    except Exception:
+        pass
+
+
+def _pin_id(body: str, nickname: str, created_at: str) -> str:
+    raw = f"{nickname}|{created_at}|{body}".encode("utf-8", errors="ignore")
+    return hashlib.sha256(raw).hexdigest()[:24]
+
+
+def _github_pin_api_url(cfg: Dict[str, str]) -> str:
+    path = str(cfg.get("path") or PIN_STORE_DEFAULT_PATH).strip("/")
+    return f"https://api.github.com/repos/{cfg['repo']}/contents/{path}"
+
+
+def _github_pin_headers(cfg: Dict[str, str]) -> Dict[str, str]:
+    h = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "Ripple-Radar-Pro-PinStore",
+    }
+    token = cfg.get("token") or ""
+    if token:
+        h["Authorization"] = f"Bearer {token}"
+    return h
+
+
+def _load_pins_from_github() -> Tuple[List[Dict[str, Any]], str, str]:
+    """Devuelve (pins, sha, status). status ayuda a explicar si hay persistencia real."""
+    cfg = _pin_store_cfg()
+    if not cfg.get("repo"):
+        return [], "", "repo_not_configured"
+    try:
+        r = requests.get(
+            _github_pin_api_url(cfg),
+            headers=_github_pin_headers(cfg),
+            params={"ref": cfg.get("branch") or "main"},
+            timeout=10,
+        )
+        if r.status_code == 404:
+            return [], "", "missing_file"
+        if r.status_code >= 400:
+            return [], "", f"github_error_{r.status_code}"
+        data = r.json()
+        sha = str(data.get("sha") or "")
+        content = str(data.get("content") or "")
+        if not content:
+            return [], sha, "empty"
+        raw = base64.b64decode(content).decode("utf-8", errors="replace")
+        parsed = json.loads(raw or "[]")
+        if isinstance(parsed, dict):
+            parsed = parsed.get("pins", [])
+        if not isinstance(parsed, list):
+            parsed = []
+        pins = []
+        for p in parsed:
+            if not isinstance(p, dict):
+                continue
+            if int(p.get("active", 1) or 0) != 1:
+                continue
+            body = _clean_pinned_body(str(p.get("body") or ""))
+            if not body:
+                continue
+            pins.append({
+                "pin_id": str(p.get("pin_id") or _pin_id(body, str(p.get("nickname") or "admin"), str(p.get("created_at") or ""))),
+                "nickname": str(p.get("nickname") or "admin"),
+                "body": body,
+                "created_at": str(p.get("created_at") or ""),
+                "role": str(p.get("role") or "admin"),
+                "source": "github",
+                "active": 1,
+            })
+        return pins, sha, "ok"
+    except Exception as e:
+        return [], "", f"github_exception:{type(e).__name__}"
+
+
+def _write_pins_to_github(pins: List[Dict[str, Any]]) -> Tuple[bool, str]:
+    cfg = _pin_store_cfg()
+    if not cfg.get("token"):
+        return False, "Falta RRP_PIN_STORE_TOKEN/GITHUB_TOKEN en Secrets. El fijado queda solo en SQLite local."
+    try:
+        existing, sha, status = _load_pins_from_github()
+        # Si el archivo no existe, sha queda vacío y GitHub lo crea con PUT sin sha.
+        payload_pins = []
+        seen = set()
+        for p in pins:
+            if not isinstance(p, dict):
+                continue
+            body = _clean_pinned_body(str(p.get("body") or ""))
+            if not body:
+                continue
+            pid = str(p.get("pin_id") or _pin_id(body, str(p.get("nickname") or "admin"), str(p.get("created_at") or "")))
+            if pid in seen:
+                continue
+            seen.add(pid)
+            payload_pins.append({
+                "pin_id": pid,
+                "nickname": str(p.get("nickname") or "admin"),
+                "body": body,
+                "created_at": str(p.get("created_at") or datetime.now(timezone.utc).isoformat()),
+                "role": str(p.get("role") or "admin"),
+                "active": int(p.get("active", 1) or 0),
+            })
+        content = json.dumps({"pins": payload_pins}, ensure_ascii=False, indent=2).encode("utf-8")
+        req = {
+            "message": "Actualizar mensajes fijados admin desde Ripple Radar Pro",
+            "content": base64.b64encode(content).decode("ascii"),
+            "branch": cfg.get("branch") or "main",
+        }
+        if sha:
+            req["sha"] = sha
+        r = requests.put(_github_pin_api_url(cfg), headers=_github_pin_headers(cfg), json=req, timeout=15)
+        if r.status_code not in (200, 201):
+            return False, f"GitHub no guardó pins: HTTP {r.status_code}"
+        return True, "Mensajes fijados guardados en GitHub. Persisten tras reinicio."
+    except Exception as e:
+        return False, f"No pude guardar pins en GitHub: {type(e).__name__}: {e}"
+
+
+def _load_local_persistent_pins(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    _ensure_persistent_pin_table(conn)
+    try:
+        rows = conn.execute(
+            "SELECT pin_id, nickname, body, created_at, role, source, active FROM persistent_pinned_messages WHERE active=1 ORDER BY created_at DESC"
+        ).fetchall()
+        return [
+            {
+                "pin_id": str(r[0]), "nickname": str(r[1]), "body": str(r[2]),
+                "created_at": str(r[3]), "role": str(r[4] or "admin"), "source": str(r[5] or "sqlite"), "active": int(r[6] or 0)
+            }
+            for r in rows
+        ]
+    except Exception:
+        return []
+
+
+def _load_all_persistent_pins(conn: sqlite3.Connection) -> Tuple[List[Dict[str, Any]], str]:
+    """Carga pins desde GitHub + SQLite. GitHub gana si está configurado."""
+    local = _load_local_persistent_pins(conn)
+    remote, _sha, status = _load_pins_from_github()
+    merged: List[Dict[str, Any]] = []
+    seen = set()
+    for source_list in (remote, local):
+        for p in source_list:
+            pid = str(p.get("pin_id") or "")
+            if not pid or pid in seen:
+                continue
+            seen.add(pid)
+            merged.append(p)
+    merged.sort(key=lambda x: str(x.get("created_at") or ""), reverse=True)
+    return merged, status
+
+
+def _persist_admin_pin(conn: sqlite3.Connection, nickname: str, body: str) -> Tuple[bool, str, Dict[str, Any]]:
+    """Guarda un pin en SQLite y, si hay token, también en GitHub."""
+    _ensure_persistent_pin_table(conn)
+    body = _clean_pinned_body(body)
+    now = datetime.now(timezone.utc).isoformat()
+    pin = {
+        "pin_id": _pin_id(body, nickname or "admin", now),
+        "nickname": nickname or "admin",
+        "body": body,
+        "created_at": now,
+        "role": "admin",
+        "source": "sqlite",
+        "active": 1,
+    }
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO persistent_pinned_messages (pin_id, nickname, body, created_at, role, source, active) VALUES (?, ?, ?, ?, ?, ?, 1)",
+            (pin["pin_id"], pin["nickname"], pin["body"], pin["created_at"], pin["role"], "sqlite"),
+        )
+        conn.commit()
+    except Exception:
+        pass
+    pins, _status = _load_all_persistent_pins(conn)
+    # Asegura que el pin nuevo esté en la lista que se sube.
+    if not any(str(p.get("pin_id")) == pin["pin_id"] for p in pins):
+        pins.insert(0, pin)
+    ok, msg = _write_pins_to_github(pins)
+    return ok, msg, pin
+
+
+def _deactivate_persistent_pin(conn: sqlite3.Connection, pin_id: str) -> Tuple[bool, str]:
+    _ensure_persistent_pin_table(conn)
+    try:
+        conn.execute("UPDATE persistent_pinned_messages SET active=0 WHERE pin_id=?", (pin_id,))
+        conn.commit()
+    except Exception:
+        pass
+    pins, _status = _load_all_persistent_pins(conn)
+    pins = [p for p in pins if str(p.get("pin_id")) != str(pin_id)]
+    return _write_pins_to_github(pins)
+
+
+def _render_persistent_pins_block(conn: sqlite3.Connection, is_admin: bool = False) -> None:
+    pins, status = _load_all_persistent_pins(conn)
+    if not pins:
+        return
+    st.markdown("#### 📌 Avisos fijados")
+    if status != "ok":
+        st.caption("Persistencia externa no confirmada; si no configuras GitHub token, los pins pueden perderse al reiniciar Streamlit.")
+    st.caption(f"{len(pins)} mensaje(s) fijado(s) persistente(s). Se muestran todos; no hay límite artificial de 25.")
+    for p in pins:
+        nick = html.escape(str(p.get("nickname") or "admin"))
+        body = html.escape(str(p.get("body") or "")).replace("\n", "<br>")
+        created = html.escape(str(p.get("created_at") or "")[:16].replace("T", " "))
+        src = html.escape(str(p.get("source") or ""))
+        st.markdown(f"""
+<div style='border:1px solid rgba(250,204,21,.35);background:linear-gradient(135deg,rgba(113,63,18,.35),rgba(15,23,42,.92));border-radius:16px;padding:12px 14px;margin:8px 0;'>
+  <div style='display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px;'>
+    <span style='font-weight:900;color:#FDE68A;'>📌 FIJADO</span>
+    <span style='font-weight:900;color:#E2E8F0;'>{nick}</span>
+    <span style='color:#94A3B8;font-size:.78rem;'>{created}</span>
+    <span style='color:#64748B;font-size:.72rem;'>persistencia: {src}</span>
+  </div>
+  <div style='color:#E5E7EB;line-height:1.48;font-size:.90rem;'>{body}</div>
+</div>
+""", unsafe_allow_html=True)
+        if is_admin:
+            if st.button("Desfijar aviso persistente", key=f"unpin_persistent_{p.get('pin_id')}"):
+                ok, msg = _deactivate_persistent_pin(conn, str(p.get("pin_id")))
+                st.toast(msg if msg else "Aviso desfijado.")
+                st.rerun()
+
+
 def _community_user_id() -> str:
     """Reutiliza la sesión Streamlit como identidad local anónima."""
     return _session_id()
@@ -13120,7 +13403,8 @@ def _send_chat_message(conn: sqlite3.Connection, body: str) -> Tuple[bool, str]:
         # Limpieza suave: conservar los últimos N mensajes para que la SQLite no crezca sin control.
         conn.execute("""
             DELETE FROM community_messages
-            WHERE id NOT IN (SELECT id FROM community_messages ORDER BY id DESC LIMIT ?)
+            WHERE pinned=0
+              AND id NOT IN (SELECT id FROM community_messages ORDER BY id DESC LIMIT ?)
         """, (_CHAT_RETENTION_LIMIT,))
         conn.commit()
         st.session_state["community_last_send_ts"] = now_ts
@@ -13196,6 +13480,149 @@ def render_user_window(conn: sqlite3.Connection, compact: bool = False) -> None:
             st.error("Pon un nombre válido de al menos 2 caracteres.")
 
 
+
+
+# -----------------------------------------------------------------------------
+# NOTIFICACIONES DE CHAT EN VIVO
+# -----------------------------------------------------------------------------
+# Objetivo:
+# - Avisar al usuario/admin cuando entren mensajes nuevos mientras está en otra pestaña.
+# - No depende de servicios externos: usa el autorefresh existente + session_state.
+# - Intenta notificación del navegador y sonido corto. Si el navegador lo bloquea,
+#   al menos queda una alerta visible en sidebar.
+
+
+def _chat_latest_id(conn: sqlite3.Connection) -> int:
+    try:
+        row = conn.execute("SELECT COALESCE(MAX(id),0) FROM community_messages WHERE deleted=0").fetchone()
+        return int(row[0] or 0)
+    except Exception:
+        return 0
+
+
+def _chat_unread_since(conn: sqlite3.Connection, since_id: int) -> Tuple[int, int, str, str]:
+    """Devuelve (unread_count, latest_id, latest_nick, latest_body) sin contar mensajes propios."""
+    try:
+        uid = _community_user_id()
+        rows = conn.execute(
+            """
+            SELECT id, nickname, body
+            FROM community_messages
+            WHERE deleted=0 AND id>? AND user_id<>?
+            ORDER BY id ASC
+            """,
+            (int(since_id or 0), uid),
+        ).fetchall()
+        if not rows:
+            return 0, _chat_latest_id(conn), "", ""
+        latest = rows[-1]
+        body = str(latest[2] or "").replace("\n", " ").strip()
+        if len(body) > 120:
+            body = body[:117] + "..."
+        return len(rows), int(latest[0] or 0), str(latest[1] or "Usuario"), body
+    except Exception:
+        return 0, _chat_latest_id(conn), "", ""
+
+
+def _render_chat_notification_component(unread: int, latest_id: int, nick: str, body: str) -> None:
+    """Pequeño componente JS para notificación/beep. No rompe si el navegador lo bloquea."""
+    try:
+        safe_nick = json.dumps(str(nick or "Usuario"))
+        safe_body = json.dumps(str(body or "Nuevo mensaje"))
+        html_doc = f"""
+<!doctype html><html><body style="margin:0;padding:0;background:transparent;color:#e2e8f0;font-family:system-ui,Segoe UI,Arial;">
+<div style="font-size:12px;line-height:1.35;color:#94a3b8;border:1px solid rgba(56,189,248,.22);border-radius:10px;padding:8px;background:rgba(15,23,42,.65);">
+  🔔 Avisos de chat activos en esta sesión.<br>
+  <button id="rrpNotifyBtn" style="margin-top:6px;background:#0ea5e9;color:white;border:0;border-radius:8px;padding:6px 9px;font-weight:700;cursor:pointer;">Activar avisos del navegador</button>
+  <span id="rrpNotifyStatus" style="margin-left:6px;color:#cbd5e1;"></span>
+</div>
+<script>
+(function() {{
+  const latestId = {int(latest_id)};
+  const unread = {int(unread)};
+  const nick = {safe_nick};
+  const body = {safe_body};
+  const status = document.getElementById('rrpNotifyStatus');
+  const btn = document.getElementById('rrpNotifyBtn');
+  function setStatus(txt) {{ if(status) status.textContent = txt; }}
+  function beep() {{
+    try {{
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 880;
+      gain.gain.value = 0.045;
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start();
+      setTimeout(() => {{ try {{ osc.stop(); ctx.close(); }} catch(e) {{}} }}, 140);
+    }} catch(e) {{}}
+  }}
+  async function askPerm() {{
+    try {{
+      localStorage.setItem('rrp_chat_notify_enabled','1');
+      if (!('Notification' in window)) {{ setStatus('sin soporte'); return; }}
+      if (Notification.permission === 'default') {{
+        const p = await Notification.requestPermission();
+        setStatus(p === 'granted' ? 'activadas' : 'bloqueadas');
+      }} else {{
+        setStatus(Notification.permission === 'granted' ? 'activadas' : 'bloqueadas');
+      }}
+      beep();
+    }} catch(e) {{ setStatus('bloqueado'); }}
+  }}
+  if(btn) btn.onclick = askPerm;
+  try {{
+    if ('Notification' in window) setStatus(Notification.permission === 'granted' ? 'activadas' : (Notification.permission === 'denied' ? 'bloqueadas' : 'pendientes'));
+  }} catch(e) {{}}
+  try {{
+    const enabled = localStorage.getItem('rrp_chat_notify_enabled') === '1';
+    const key = 'rrp_chat_notified_' + latestId;
+    if (enabled && unread > 0 && latestId > 0 && !localStorage.getItem(key)) {{
+      localStorage.setItem(key, '1');
+      beep();
+      if ('Notification' in window && Notification.permission === 'granted') {{
+        new Notification('Ripple Radar Pro · chat', {{ body: unread + ' mensaje(s) nuevo(s) · ' + nick + ': ' + body }});
+      }}
+    }}
+  }} catch(e) {{}}
+}})();
+</script>
+</body></html>
+"""
+        _st_components.html(html_doc, height=92, scrolling=False)
+    except Exception:
+        pass
+
+
+def render_chat_notification_hub(conn: sqlite3.Connection) -> None:
+    """Aviso global de mensajes nuevos, pensado para sidebar y resto de pestañas."""
+    try:
+        nickname = _get_current_nickname(conn)
+        if not nickname:
+            return
+        latest = _chat_latest_id(conn)
+        # Primera carga: no avisar de todo el histórico; marcar punto de partida.
+        if "rrp_chat_seen_max_id" not in st.session_state:
+            st.session_state["rrp_chat_seen_max_id"] = latest
+        seen = int(st.session_state.get("rrp_chat_seen_max_id", latest) or 0)
+        unread, latest_unread_id, nick, body = _chat_unread_since(conn, seen)
+        st.caption(f"💬 Chat: {unread} nuevo(s)" if unread else "💬 Chat: sin nuevos")
+        if unread:
+            st.warning(f"💬 {unread} mensaje(s) nuevo(s) en Comunidad. Último: {nick}")
+            _render_chat_notification_component(unread, latest_unread_id, nick, body)
+            if st.button("Marcar chat como leído", width="stretch", key="rrp_mark_chat_read_sidebar"):
+                st.session_state["rrp_chat_seen_max_id"] = _chat_latest_id(conn)
+                st.rerun()
+        else:
+            # Mostrar componente compacto para poder activar permisos aunque aún no haya mensajes.
+            _render_chat_notification_component(0, latest, "", "")
+    except Exception:
+        pass
+
+
 def render_general_chat(conn: sqlite3.Connection) -> None:
     """Chat general público con traducción automática cacheada y modo admin."""
     _touch_current_user(conn)
@@ -13211,7 +13638,16 @@ def render_general_chat(conn: sqlite3.Connection) -> None:
     if not nickname:
         st.info("Crea primero tu usuario arriba para poder escribir. Puedes leer el chat sin iniciar usuario.")
 
+    # Avisos fijados persistentes: sobreviven a limpieza del chat y pueden sobrevivir a reinicios
+    # si se configura GitHub token en Secrets.
+    _render_persistent_pins_block(conn, is_admin=is_admin)
+
     messages = _load_chat_messages(conn, limit=90)
+    # Al abrir la pestaña Comunidad se consideran leídos los mensajes visibles.
+    try:
+        st.session_state["rrp_chat_seen_max_id"] = max(int(st.session_state.get("rrp_chat_seen_max_id", 0) or 0), _chat_latest_id(conn))
+    except Exception:
+        pass
     chat_box = st.container(height=460, border=True)
     with chat_box:
         if messages.empty:
@@ -13258,6 +13694,11 @@ def render_general_chat(conn: sqlite3.Connection) -> None:
                     with ac1:
                         if st.button("📌" if not pinned else "📍", key=f"pin_msg_{msg_id}", help="Fijar/desfijar mensaje"):
                             conn.execute("UPDATE community_messages SET pinned=? WHERE id=?", (0 if pinned else 1, msg_id))
+                            if not pinned:
+                                try:
+                                    _persist_admin_pin(conn, raw_nick, original)
+                                except Exception:
+                                    pass
                             conn.commit(); st.rerun()
                     with ac2:
                         if st.button("🗑️", key=f"del_msg_{msg_id}", help="Ocultar mensaje"):
@@ -13308,30 +13749,55 @@ def render_admin_panel(conn: sqlite3.Connection) -> None:
         conn.execute("UPDATE community_messages SET pinned=0")
         conn.commit(); st.toast("Mensajes desfijados.")
 
+    st.markdown("#### Persistencia de mensajes fijados")
+    cfg = _pin_store_cfg()
+    if cfg.get("token"):
+        st.success(f"Persistencia externa activada en GitHub: {cfg.get('repo')} / {cfg.get('path')}")
+    else:
+        st.warning("Sin token GitHub en Secrets: los mensajes fijados pueden perderse al reiniciar/redeployar Streamlit. Añade RRP_PIN_STORE_TOKEN para persistencia real.")
+
     st.markdown("#### Fijar aviso admin nuevo")
-    st.caption("Puedes pegar guías largas aquí. Por seguridad, los links están bloqueados en mensajes fijados y chat.")
+    st.caption("Puedes pegar guías muy largas aquí. No hay límite artificial de cantidad de mensajes fijados. Por seguridad, los links están bloqueados en mensajes fijados y chat. Para fijar varios avisos de una vez, separa cada aviso con una línea que diga exactamente: ---PIN---")
     with st.form("admin_pin_new_message_form", clear_on_submit=True):
-        pin_body = st.text_area("Mensaje fijado", height=360, max_chars=_PINNED_MAX_LEN, key="admin_new_pin_body", help=f"Puedes pegar guías largas hasta {_PINNED_MAX_LEN} caracteres. No se permiten enlaces.")
+        pin_body = st.text_area("Mensaje fijado", height=460, max_chars=_PINNED_MAX_LEN, key="admin_new_pin_body", help=f"Puedes pegar guías largas hasta {_PINNED_MAX_LEN} caracteres. No se permiten enlaces. Usa ---PIN--- para publicar varios avisos de una vez.")
         submit_pin = st.form_submit_button("📌 Publicar y fijar", width="stretch")
         if submit_pin:
-            body = _clean_pinned_body(pin_body)
-            if len(body) < 2:
+            raw_body = str(pin_body or "")
+            chunks = [c.strip() for c in re.split(r"(?m)^---PIN---$", raw_body) if c.strip()]
+            if not chunks:
                 st.error("Escribe un mensaje válido.")
-            elif _contains_public_link(body):
+            elif any(_contains_public_link(c) for c in chunks):
                 st.error(_no_links_message())
             else:
-                now = datetime.now(timezone.utc).isoformat()
                 nick = _get_current_nickname(conn) or "admin"
-                conn.execute(
-                    "INSERT INTO community_messages (user_id, nickname, body, created_at, deleted, lang, pinned, role) VALUES (?, ?, ?, ?, 0, ?, 1, 'admin')",
-                    (_community_user_id(), nick, body, now, _preferred_lang() or "es"),
-                )
+                ok_count = 0
+                last_msg = ""
+                for chunk in chunks:
+                    body = _clean_pinned_body(chunk)
+                    if len(body) < 2:
+                        continue
+                    now = datetime.now(timezone.utc).isoformat()
+                    conn.execute(
+                        "INSERT INTO community_messages (user_id, nickname, body, created_at, deleted, lang, pinned, role) VALUES (?, ?, ?, ?, 0, ?, 1, 'admin')",
+                        (_community_user_id(), nick, body, now, _preferred_lang() or "es"),
+                    )
+                    ok_persist, persist_msg, _pin = _persist_admin_pin(conn, nick, body)
+                    last_msg = str(persist_msg)
+                    ok_count += 1
                 conn.commit()
-                st.success("Mensaje publicado y fijado.")
+                if ok_count:
+                    st.success(f"{ok_count} mensaje(s) publicado(s), fijado(s) y enviados a persistencia externa si está configurada.")
+                    if last_msg:
+                        st.caption(last_msg)
+                else:
+                    st.error("No pude publicar ningún mensaje válido.")
                 st.rerun()
 
+    st.markdown("#### Mensajes fijados persistentes")
+    _render_persistent_pins_block(conn, is_admin=True)
+
     pinned = pd.read_sql_query("SELECT id, nickname, body, created_at FROM community_messages WHERE deleted=0 AND pinned=1 ORDER BY id DESC", conn)
-    st.markdown("#### Mensajes fijados")
+    st.markdown("#### Mensajes fijados del chat actual")
     if pinned.empty:
         st.caption("No hay mensajes fijados.")
     else:
@@ -16690,6 +17156,7 @@ def main() -> None:
         render_budget_bar(conn)
         render_queue_status(conn)
         render_user_window(conn, compact=True)
+        render_chat_notification_hub(conn)
         st.divider()
         _section_options = [_section_label(k) for k in SECTION_KEYS]
         _selected_section_label = st.radio(
