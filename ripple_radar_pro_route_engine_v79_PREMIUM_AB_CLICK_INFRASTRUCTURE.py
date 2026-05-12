@@ -173,8 +173,8 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v122_2026_05_12_PLOTLY_CLICKMODE_CRASH_FIX"
-BUILD_NOTE = "Discovery ordenado por árbol · foco real de nodos · pruebas/PDF/on-chain por tarjeta"
+BUILD_ID = "v124_2026_05_12_AUTONOMOUS_NODE_CATEGORY_ROUTER"
+BUILD_NOTE = "Router autónomo de categorías: nodos nuevos se colocan por tipo o crean zona propia sin falsear conexiones"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
 import os as _os
@@ -489,6 +489,14 @@ ZONE_POS: Dict[str, Dict] = {
     "Puente":     {"x": 10.85, "y_start":  2.80, "y_step": -0.75, "box": (10.50,-2.10,11.20, 3.15), "label": "Puentes / cross-chain"},
     "Proveedor":  {"x": 11.75, "y_start":  2.80, "y_step": -0.75, "box": (11.40,-2.10,12.10, 3.15), "label": "Proveedores / APIs"},
     "Descubierto":{"x": 12.65, "y_start":  2.80, "y_step": -0.75, "box": (12.30,-2.10,13.00, 3.15), "label": "Otros descubiertos"},
+    # v124: categorías autónomas para nodos nuevos que no encajan en el mapa base.
+    # Se dibujan solo si aparece un nodo de esa familia, así no ensucian el core.
+    "TokenizacionRWA": {"x": 13.55, "y_start":  2.80, "y_step": -0.75, "box": (13.20,-2.10,13.90, 3.15), "label": "Tokenización / RWA"},
+    "ISO20022":        {"x": 14.45, "y_start":  2.80, "y_step": -0.75, "box": (14.10,-2.10,14.80, 3.15), "label": "ISO 20022 / mensajería"},
+    "Stablecoins":     {"x": 15.35, "y_start":  2.80, "y_step": -0.75, "box": (15.00,-2.10,15.70, 3.15), "label": "Stablecoins / dinero tokenizado"},
+    "IdentidadKYC":    {"x": 16.25, "y_start":  2.80, "y_step": -0.75, "box": (15.90,-2.10,16.60, 3.15), "label": "Identidad / KYC / compliance"},
+    "DataOracles":     {"x": 17.15, "y_start":  2.80, "y_step": -0.75, "box": (16.80,-2.10,17.50, 3.15), "label": "Datos / oráculos / analítica"},
+    "AgenticPayments": {"x": 18.05, "y_start":  2.80, "y_step": -0.75, "box": (17.70,-2.10,18.40, 3.15), "label": "Pagos con IA / agentes"},
 }
 
 # ── Normalización de nombres de capa devueltos por Claude ───────────────────
@@ -526,11 +534,103 @@ LAYER_NORMALIZE: Dict[str, str] = {
     "interoperability": "Puente", "interoperabilidad": "Puente", "oracle": "Puente",
     "proveedor": "Proveedor", "provider": "Proveedor", "service provider": "Proveedor",
     "api": "Proveedor", "tech provider": "Proveedor", "technology provider": "Proveedor",
-    "tokenization": "Proveedor", "tokenisation": "Proveedor", "rwa": "AssetMgmt",
+    "tokenization": "TokenizacionRWA", "tokenisation": "TokenizacionRWA", "tokenizacion": "TokenizacionRWA",
+    "rwa": "TokenizacionRWA", "real world assets": "TokenizacionRWA", "real-world assets": "TokenizacionRWA",
+    "iso 20022": "ISO20022", "iso20022": "ISO20022", "financial messaging": "ISO20022", "mensajeria financiera": "ISO20022",
+    "stablecoin": "Stablecoins", "stablecoins": "Stablecoins", "tokenized deposits": "Stablecoins", "deposit token": "Stablecoins",
+    "kyc": "IdentidadKYC", "aml": "IdentidadKYC", "compliance": "IdentidadKYC", "identity": "IdentidadKYC", "identidad": "IdentidadKYC",
+    "oracle data": "DataOracles", "data provider": "DataOracles", "analytics": "DataOracles", "analitica": "DataOracles",
+    "agentic payments": "AgenticPayments", "ai payments": "AgenticPayments", "pagos ia": "AgenticPayments", "ai agent": "AgenticPayments",
     "custody": "Ripple", "custodia": "Ripple", "prime brokerage": "Ripple",
     "bank": "Banca_AM", "banco": "Banca_AM", "commercial bank": "Banca_AM",
     "descubierto": "Descubierto", "discovered": "Descubierto", "otro": "Descubierto", "other": "Descubierto",
 }
+
+# ── v124 · Categorías autónomas para nodos no previstos ─────────────────────
+# Si Discovery/cascada encuentra una entidad que no encaja en las zonas base,
+# el sistema intenta crear/usar una categoría semántica. Si tampoco encaja, cae
+# en "Descubierto" y se dibuja como zona propia si la IA trae un layer nuevo.
+AUTONOMOUS_CATEGORY_PROFILES: Dict[str, Dict[str, Any]] = {
+    "TokenizacionRWA": {
+        "icon": "🪙",
+        "label": "Tokenización / RWA",
+        "keywords": ["tokenization", "tokenisation", "tokenizacion", "rwa", "real world asset", "real-world asset", "tokenized fund", "buidl", "vbill", "fund tokenized"],
+    },
+    "ISO20022": {
+        "icon": "🧾",
+        "label": "ISO 20022 / mensajería",
+        "keywords": ["iso 20022", "iso20022", "financial messaging", "mensajeria financiera", "payment message", "swift message", "mx message"],
+    },
+    "Stablecoins": {
+        "icon": "🪙",
+        "label": "Stablecoins / dinero tokenizado",
+        "keywords": ["stablecoin", "stablecoins", "rlusd", "usdc", "eurc", "tokenized deposit", "deposit token", "programmable money"],
+    },
+    "IdentidadKYC": {
+        "icon": "🪪",
+        "label": "Identidad / KYC / compliance",
+        "keywords": ["kyc", "aml", "compliance", "identity", "identidad", "sanctions", "travel rule", "fraud", "risk screening"],
+    },
+    "DataOracles": {
+        "icon": "📊",
+        "label": "Datos / oráculos / analítica",
+        "keywords": ["oracle", "data provider", "analytics", "analitica", "market data", "risk data", "proof of reserve", "attestation"],
+    },
+    "AgenticPayments": {
+        "icon": "🤖",
+        "label": "Pagos con IA / agentes",
+        "keywords": ["agentic", "ai agent", "autonomous agent", "machine payment", "pagos ia", "agent payments", "ai payments"],
+    },
+}
+
+
+def _autonomous_category_from_context(name: Any, *contexts: Any) -> Tuple[str, str, str]:
+    """Devuelve (layer, icon, reason) según nombre + resumen/fuentes.
+
+    No crea una conexión. Solo decide dónde colocar el nodo en el mapa.
+    Es deliberadamente conservador: una categoría semántica no equivale a prueba.
+    """
+    blob_parts = [str(name or "")]
+    for c in contexts:
+        if isinstance(c, (list, tuple, set)):
+            blob_parts.extend(str(x or "") for x in c)
+        elif isinstance(c, dict):
+            blob_parts.extend(str(v or "") for v in c.values())
+        else:
+            blob_parts.append(str(c or ""))
+    blob = _norm_key(" ".join(blob_parts))
+    for layer, profile in AUTONOMOUS_CATEGORY_PROFILES.items():
+        for kw in profile.get("keywords", []):
+            if _norm_key(kw) in blob:
+                return layer, str(profile.get("icon") or "🔎"), f"clasificado por palabra clave: {kw}"
+    return "", "", ""
+
+
+def _dynamic_category_label(layer: Any) -> str:
+    layer = str(layer or "").strip()
+    if layer in AUTONOMOUS_CATEGORY_PROFILES:
+        return str(AUTONOMOUS_CATEGORY_PROFILES[layer].get("label") or layer)
+    if layer in ZONE_POS:
+        return str(ZONE_POS[layer].get("label") or layer)
+    return layer or "Descubierto"
+
+
+def _safe_dynamic_layer_name(layer: Any) -> str:
+    """Normaliza nombres de categorías nuevas sin destruir categorías IA útiles."""
+    raw = str(layer or "").strip()
+    if not raw:
+        return "Descubierto"
+    normalized = _normalize_layer(raw)
+    if normalized in ZONE_POS:
+        return normalized
+    # Mantener categorías nuevas con nombre legible y sin caracteres raros.
+    clean = re.sub(r"[^A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ /_+-]+", "", raw).strip()
+    clean = re.sub(r"\s+", " ", clean)
+    if not clean:
+        return "Descubierto"
+    # Título compacto para capa dinámica.
+    return clean[:44].strip().title()
+
 
 # ── Mapeo connects_to → nodo exacto del mapa ────────────────────────────────
 
@@ -1000,7 +1100,13 @@ def _infer_layer_icon_from_name(name: Any, fallback_layer: str = "Descubierto", 
     if has_any([" bank", "bank ", "banco ", " banco", "commercial bank", "credit union", "unibanco"]):
         return _normalize_layer(fallback_layer if fallback_layer not in {"", "Descubierto", "Otro", "other", "discovered"} else "Banca_AM"), "🏦"
 
-    norm_fallback = _normalize_layer(fallback_layer or "Descubierto")
+    # v124: si no encaja en categorías base, intentar una categoría semántica nueva
+    # sin crear una conexión ni elevar evidencia. Solo afecta a la ubicación visual.
+    auto_layer, auto_icon, _auto_reason = _autonomous_category_from_context(raw, fallback_layer)
+    if auto_layer:
+        return auto_layer, auto_icon
+
+    norm_fallback = _safe_dynamic_layer_name(fallback_layer or "Descubierto")
     return norm_fallback, fallback_icon or "🔎"
 
 
@@ -1830,9 +1936,17 @@ def _register_dynamic_node(conn: sqlite3.Connection, name: str, layer: str, icon
     # Ejemplo: GTreasury/Gtresaury/G Treasury se absorbe dentro de Treasury.
     if cname in NODES or _canonical_target_node(cname, set(NODES.keys())) in NODES:
         return False
-    layer = _normalize_layer(layer)
+    # v124: clasificar con nombre + resumen + fuentes, no solo con el nombre.
+    # Si la IA trae una categoría nueva útil, se conserva; si trae algo genérico,
+    # el router autónomo intenta crear una categoría semántica estable.
+    layer = _safe_dynamic_layer_name(layer)
+    auto_layer, auto_icon, _auto_reason = _autonomous_category_from_context(cname, summary, source_url, layer)
     inferred_layer, inferred_icon = _infer_layer_icon_from_name(cname, layer, icon or "🔎")
-    if _layer_is_generic_for_dynamic(layer) and inferred_layer in ZONE_POS:
+    if auto_layer and (_layer_is_generic_for_dynamic(layer) or layer == "Descubierto"):
+        layer = auto_layer
+        if not icon or icon in {"?", "🔎", "•"}:
+            icon = auto_icon
+    elif _layer_is_generic_for_dynamic(layer) and inferred_layer in ZONE_POS:
         layer = inferred_layer
         if not icon or icon in {"?", "🔎", "•"}:
             icon = inferred_icon
@@ -4903,7 +5017,7 @@ def make_map(row: pd.Series,
         if _all_x_positions:
             _x_max = max(_x_max, max(_all_x_positions) + 0.55)
         # Evitar que un dato corrupto abra un lienzo infinito.
-        _x_max = min(max(_x_max, 10.10), 14.00)
+        _x_max = min(max(_x_max, 10.10), 19.00)
     except Exception:
         _x_min, _x_max = -9.30, 10.10
 
@@ -16324,6 +16438,18 @@ def apply_discovery_to_map(conn: sqlite3.Connection, result: Dict[str, Any],
         ev_urls = [e.get("url", "") for e in evidence_items if isinstance(e, dict) and e.get("url")]
         sources_blob = _safe_sources_blob((result.get("sources", []) or []) + ev_urls)
 
+    # v124: categoría autónoma por contexto completo. Por ejemplo, un nodo nuevo
+    # puede ser ISO20022, Tokenización/RWA, Stablecoins, Identidad/KYC, Datos/Oráculos
+    # o Pagos con IA aunque el nombre por sí solo no lo revele.
+    auto_layer, auto_icon, auto_reason = _autonomous_category_from_context(
+        name, result.get("summary", ""), evidence_text, result.get("sources", []) or [], result.get("route_decisions", []) or []
+    )
+    if auto_layer and (_layer_is_generic_for_dynamic(layer) or layer == "Descubierto"):
+        layer = auto_layer
+        if not icon or icon in {"?", "🔎", "•"}:
+            icon = auto_icon
+        result["category_reason"] = auto_reason
+
     added_nodes = 0
     added_routes = 0
     added_partners = 0
@@ -18088,7 +18214,20 @@ def _rrp_render_discovery_result_card(item: Dict[str, Any], conn: sqlite3.Connec
     if parent:
         label += f" · desde {parent}"
     with st.expander(label, expanded=expanded):
+        # v124: mostrar la categoría autónoma propuesta para que el usuario entienda
+        # dónde se colocará el nodo antes de añadirlo al mapa.
+        proposed_layer, proposed_icon = _infer_layer_icon_from_name(
+            name,
+            result.get("layer") or result.get("entity_type") or "Descubierto",
+            result.get("icon") or "🔎",
+        )
+        auto_layer, auto_icon, auto_reason = _autonomous_category_from_context(
+            name, result.get("summary", ""), result.get("sources", []) or [], result.get("evidence_items", []) or [], result.get("route_decisions", []) or []
+        )
+        if auto_layer and (_layer_is_generic_for_dynamic(proposed_layer) or proposed_layer == "Descubierto"):
+            proposed_layer, proposed_icon = auto_layer, auto_icon
         st.markdown(f"**Resumen:** {result.get('summary','Sin resumen')}")
+        st.caption(f"{proposed_icon} Categoría de mapa propuesta: {_dynamic_category_label(proposed_layer)}" + (f" · {auto_reason}" if auto_reason else ""))
         status_onchain, checks = _rrp_onchain_requirement(result)
         route_rows = _rrp_route_rows_for_result(result)
         src_groups = _rrp_sources_by_quality(result)
@@ -20979,6 +21118,172 @@ streamlit run ripple_radar_pro_route_engine_v118_ONE_BUTTON_CORE_FACTORY_RESET.p
 
     st.divider()
     st.caption("No es asesoramiento financiero. Es un radar de huellas públicas, topología, clusters y adopción real.")
+
+
+# =============================================================================
+# v123 — Intent-aware Discovery / cache wording / FedNow↔Ripple no-false-positive
+# =============================================================================
+# Objetivo: si el usuario busca "Ripple FedNow" no colapsar mentalmente todo a
+# "FedNow = 0". Se preserva la intención de investigación, pero sin convertir
+# artículos comparativos en prueba directa de integración.
+
+_RRP_OLD_FINALIZE_DISCOVERY_RESULT_V123 = _finalize_discovery_result
+_RRP_OLD_ROUTE_WILL_BE_ADDED_LABEL_V123 = _route_will_be_added_label
+
+
+def _rrp_text_has_any_v123(text: Any, needles: List[str]) -> bool:
+    t = _norm_key(str(text or ""))
+    return any(_norm_key(n) in t for n in needles if str(n or "").strip())
+
+
+def _rrp_discovery_context_blob_v123(result: Dict[str, Any], query_context: Any = "") -> str:
+    parts = [str(query_context or ""), str(result.get("institution", "")), str(result.get("summary", ""))]
+    for s in result.get("sources") or []:
+        if isinstance(s, dict):
+            parts.append(str(s.get("url") or s.get("source") or ""))
+            parts.append(str(s.get("title") or s.get("name") or ""))
+        else:
+            parts.append(str(s))
+    for ev in result.get("evidence_items") or []:
+        if isinstance(ev, dict):
+            parts.append(str(ev.get("title", "")))
+            parts.append(str(ev.get("claim", "")))
+            parts.append(str(ev.get("url", "")))
+    return " ".join(parts)
+
+
+def _rrp_has_fednow_ripple_intent_v123(result: Dict[str, Any], query_context: Any = "") -> bool:
+    blob = _rrp_discovery_context_blob_v123(result, query_context)
+    has_fednow = _rrp_text_has_any_v123(blob, ["fednow", "fed now", "fednow service", "federal reserve instant payment"])
+    has_ripple = _rrp_text_has_any_v123(blob, ["ripple", "ripplenet", "ripple payments", "xrp", "xrpl", "rlusd"])
+    # Patrones típicos de resultados web comparativos que antes se perdían.
+    has_comparison_url = any(x in blob.lower() for x in [
+        "fednow-and-ripple", "does-fednow-use-blockchain", "what-is-fednow", "supra.com/academy/fednow",
+    ])
+    return bool(has_fednow and (has_ripple or has_comparison_url))
+
+
+def _rrp_add_route_decision_unique_v123(result: Dict[str, Any], rd: Dict[str, Any]) -> None:
+    result.setdefault("route_decisions", [])
+    key = (
+        _canonical_entity_key(rd.get("from") or result.get("institution") or ""),
+        _canonical_entity_key(rd.get("to") or rd.get("target") or ""),
+        str(rd.get("evidence_type") or rd.get("kind") or ""),
+        str(rd.get("url") or ""),
+    )
+    for old in result.get("route_decisions") or []:
+        if not isinstance(old, dict):
+            continue
+        old_key = (
+            _canonical_entity_key(old.get("from") or result.get("institution") or ""),
+            _canonical_entity_key(old.get("to") or old.get("target") or ""),
+            str(old.get("evidence_type") or old.get("kind") or ""),
+            str(old.get("url") or ""),
+        )
+        if old_key == key:
+            return
+    result["route_decisions"].append(rd)
+
+
+def _rrp_enrich_fednow_ripple_watch_v123(result: Dict[str, Any], query_context: Any = "") -> Dict[str, Any]:
+    """Muestra bien la investigación FedNow/Ripple sin falsear conexión.
+
+    - No marca connected=True.
+    - No dibuja mapa automáticamente.
+    - Sí muestra rutas candidatas en Discovery como "solo revisión".
+    - Deja claro que las fuentes comparativas no prueban FedNow↔Ripple/XRPL.
+    """
+    result = dict(result or {})
+    canonical = _canonical_entity_name(result.get("institution") or query_context or "")
+    if canonical != "FedNow" and not _rrp_text_has_any_v123(query_context, ["fednow", "fed now"]):
+        return result
+    if not _rrp_has_fednow_ripple_intent_v123(result, query_context):
+        return result
+
+    # Mantener entidad canónica como FedNow, aunque el usuario escriba "Ripple FedNow".
+    result["institution"] = "FedNow"
+    result["entity_type"] = result.get("entity_type") or "Privado"
+    result["layer"] = result.get("layer") or "Privado"
+    result["icon"] = result.get("icon") if result.get("icon") not in {"?", "🧩", ""} else "⚡"
+    result["connected"] = False
+    result["confidence"] = max(float(result.get("confidence", 0.0) or 0.0), 0.22)
+    result["_confidence_is_research_quality"] = True
+    result["_intent_preserved"] = True
+    result["_intent_note"] = "Búsqueda interpretada como FedNow + Ripple: se muestran pistas comparativas/watch, no conexión confirmada."
+
+    base_claim = (
+        "La búsqueda contiene contexto FedNow/Ripple o fuentes comparativas. "
+        "Esto NO prueba integración oficial FedNow↔Ripple Payments, ni liquidación en XRPL/RLUSD. "
+        "Queda como pista de investigación para revisar fuentes primarias, comunicados oficiales, wallets/trustlines o pruebas on-chain."
+    )
+    old_summary = str(result.get("summary") or "").strip()
+    if not old_summary or "JSON" in old_summary or "Sin conexión" in old_summary:
+        result["summary"] = base_claim
+    elif "NO prueba" not in old_summary and "no prueba" not in old_summary.lower():
+        result["summary"] = (old_summary.rstrip(" .") + ". " + base_claim)[:900]
+
+    # Elegir la URL comparativa más útil, si existe. No se usa como prueba fuerte.
+    context_blob = _rrp_discovery_context_blob_v123(result, query_context)
+    urls = re.findall(r"https?://[^\s\]\)\}\>'\"]+", context_blob)
+    preferred = ""
+    for u in urls:
+        lu = u.lower()
+        if "fednow-and-ripple" in lu or "supra.com" in lu:
+            preferred = _canonical_source_url(u); break
+    if not preferred:
+        for u in urls:
+            lu = u.lower()
+            if "federalreserve.gov" in lu or "moderntreasury.com" in lu or "chain.link" in lu:
+                preferred = _canonical_source_url(u); break
+
+    # Rutas candidatas visibles en Discovery, pero draw_on_map=False para no ensuciar mapas.
+    for dst, c, reason in [
+        ("Ripple Payments", 0.22, "Pista comparativa FedNow/Ripple; requiere prueba oficial o técnica antes de mapear."),
+        ("Rail", 0.18, "Hipótesis de interoperabilidad entre rails; no hay prueba de integración operativa."),
+    ]:
+        _rrp_add_route_decision_unique_v123(result, {
+            "from": "FedNow",
+            "to": dst,
+            "kind": "watch",
+            "evidence_type": "context_watch",
+            "confidence": c,
+            "claim": reason + " " + base_claim,
+            "url": preferred,
+            "draw_on_map": False,
+        })
+
+    # Targets futuros para que el usuario sepa qué tendría que aparecer para subir nivel.
+    try:
+        _result_add_future_watch_target(result, "XRPL", reason="Solo subiría si aparece TX, wallet, trustline, gateway o fuente oficial que conecte FedNow/Ripple con XRPL.", source="fednow_ripple_intent", kind="onchain_watch")
+        _result_add_future_watch_target(result, "RLUSD", reason="Solo subiría si aparece emisión, trustline, movimiento o fuente oficial que conecte FedNow con RLUSD/Ripple.", source="fednow_ripple_intent", kind="stablecoin_watch")
+    except Exception:
+        pass
+    return result
+
+
+def _finalize_discovery_result(result: Dict[str, Any], institution_name: str, entity_type: str,
+                               data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # Llamamos al finalizador anterior y después aplicamos intención de búsqueda.
+    out = _RRP_OLD_FINALIZE_DISCOVERY_RESULT_V123(result, institution_name, entity_type, data)
+    query_context = " ".join(str(x or "") for x in [
+        institution_name,
+        st.session_state.get("disc_raw_query", "") if "st" in globals() else "",
+        st.session_state.get("disc_search_input", "") if "st" in globals() else "",
+    ])
+    out = _rrp_enrich_fednow_ripple_watch_v123(out, query_context)
+    return out
+
+
+def _route_will_be_added_label(rd: Dict[str, Any], result: Dict[str, Any]) -> Tuple[str, str]:
+    # v123: respetar draw_on_map=False. Antes algunas rutas de solo revisión podían
+    # salir como "se añade débil/watch" por tener confianza >0.15.
+    try:
+        if isinstance(rd, dict) and rd.get("draw_on_map") is False:
+            return "👁 solo revisión", "la fuente sirve para investigar, pero no se añade al mapa hasta tener prueba directa/deductiva suficiente"
+    except Exception:
+        pass
+    return _RRP_OLD_ROUTE_WILL_BE_ADDED_LABEL_V123(rd, result)
+
 
 
 if __name__ == "__main__":
