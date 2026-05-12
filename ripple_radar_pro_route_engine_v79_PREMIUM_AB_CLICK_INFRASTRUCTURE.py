@@ -18125,6 +18125,104 @@ def _rrp_result_key(result: Dict[str, Any]) -> str:
         return hashlib.sha256(str(result).encode()).hexdigest()[:16]
 
 
+
+# =============================================================================
+# v127 — Cascada Discovery con máquina de estado explícita
+# =============================================================================
+RRP_CASCADE_MAX_DEPTH = 4
+RRP_CASCADE_MAX_QUEUE = 24
+
+
+def _rrp_cascade_item_key(name: Any) -> str:
+    return _canonical_entity_key(_canonical_entity_name(name))
+
+
+def _rrp_cascade_done_keys() -> Set[str]:
+    """Entidades ya investigadas en este árbol Discovery, incluyendo histórico viejo."""
+    done: Set[str] = set(st.session_state.get("rrp_cascade_done_keys", set()) or set())
+    for item in st.session_state.get("rrp_discovery_tree", []) or []:
+        try:
+            done.add(_rrp_cascade_item_key(item.get("institution", "")))
+        except Exception:
+            pass
+    # La búsqueda raíz también cuenta como investigada para no reencolarse.
+    root = st.session_state.get("rrp_discovery_tree_root") or st.session_state.get("disc_root_query") or ""
+    if root:
+        done.add(_rrp_cascade_item_key(root))
+    return {x for x in done if x}
+
+
+def _rrp_normalize_cascade_queue() -> List[Dict[str, Any]]:
+    """Convierte colas antiguas de strings a items con parent/depth/reason."""
+    raw = st.session_state.get("cascade_queue", []) or []
+    out: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for obj in raw:
+        if isinstance(obj, dict):
+            name = _canonical_entity_name(obj.get("name") or obj.get("target") or obj.get("institution") or "")
+            parent = _canonical_entity_name(obj.get("parent") or "")
+            depth = int(obj.get("depth", 1) or 1)
+            reason = str(obj.get("reason") or "hilo derivado")
+        else:
+            name = _canonical_entity_name(obj)
+            parent = _canonical_entity_name(st.session_state.get("rrp_discovery_tree_root") or st.session_state.get("disc_root_query") or "")
+            depth = 1
+            reason = "hilo derivado heredado"
+        if not name or name in {"Descubierto", "?"}:
+            continue
+        key = _rrp_cascade_item_key(name)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append({"name": name, "parent": parent, "depth": max(1, min(depth, RRP_CASCADE_MAX_DEPTH)), "reason": reason})
+    st.session_state["cascade_queue"] = out[:RRP_CASCADE_MAX_QUEUE]
+    return st.session_state["cascade_queue"]
+
+
+def _rrp_cascade_push(name: Any, *, parent: Any = "", depth: int = 1, reason: str = "hilo derivado") -> bool:
+    """Añade un hilo a la cola sin duplicar ni superar profundidad."""
+    try:
+        name = _canonical_entity_name(name)
+        parent = _canonical_entity_name(parent or st.session_state.get("rrp_discovery_tree_root") or st.session_state.get("disc_root_query") or "")
+        if not name or name in {"Descubierto", "?"}:
+            return False
+        if depth > RRP_CASCADE_MAX_DEPTH:
+            return False
+        key = _rrp_cascade_item_key(name)
+        if key in _rrp_cascade_done_keys():
+            return False
+        q = _rrp_normalize_cascade_queue()
+        if key in {_rrp_cascade_item_key(x.get("name")) for x in q}:
+            return False
+        q.append({"name": name, "parent": parent, "depth": max(1, depth), "reason": reason})
+        st.session_state["cascade_queue"] = q[:RRP_CASCADE_MAX_QUEUE]
+        return True
+    except Exception:
+        return False
+
+
+def _rrp_cascade_pop_next() -> Optional[Dict[str, Any]]:
+    """Saca el siguiente hilo no investigado. Si solo quedan duplicados, limpia la cola."""
+    q = _rrp_normalize_cascade_queue()
+    done = _rrp_cascade_done_keys()
+    while q:
+        item = q.pop(0)
+        key = _rrp_cascade_item_key(item.get("name"))
+        if key and key not in done:
+            st.session_state["cascade_queue"] = q
+            return item
+    st.session_state["cascade_queue"] = []
+    return None
+
+
+def _rrp_mark_cascade_done(name: Any) -> None:
+    key = _rrp_cascade_item_key(name)
+    if not key:
+        return
+    done = set(st.session_state.get("rrp_cascade_done_keys", set()) or set())
+    done.add(key)
+    st.session_state["rrp_cascade_done_keys"] = done
+
 def _rrp_record_discovery_step(result: Dict[str, Any], *, source: str = "auto") -> None:
     """Guarda un árbol ordenado de Discovery para que la cascada no parezca que se actualiza 'arriba'."""
     try:
@@ -18135,17 +18233,24 @@ def _rrp_record_discovery_step(result: Dict[str, Any], *, source: str = "auto") 
             return
         parent = str(st.session_state.get("disc_cascade_parent", "") or "").strip()
         is_cascade = bool(st.session_state.get("disc_cascade_active")) or bool(parent)
+        explicit_depth = st.session_state.get("disc_cascade_depth", None)
         root = str(st.session_state.get("disc_root_query", "") or st.session_state.get("disc_query", "") or name)
         if not st.session_state.get("rrp_discovery_tree") or (not is_cascade and _canonical_entity_key(name) != _canonical_entity_key(st.session_state.get("rrp_discovery_tree_root", name)) and source == "manual"):
             st.session_state["rrp_discovery_tree"] = []
             st.session_state["rrp_discovery_tree_root"] = name
+            st.session_state["rrp_cascade_done_keys"] = set()
         tree = st.session_state.setdefault("rrp_discovery_tree", [])
         rkey = _rrp_result_key(result)
         if any(x.get("key") == rkey for x in tree):
             return
-        # calcular profundidad por padre
+        # calcular profundidad por padre. v127: si la cola ya trae profundidad explícita, usarla.
         depth = 0
-        if is_cascade and parent:
+        if is_cascade and explicit_depth is not None:
+            try:
+                depth = max(1, min(int(explicit_depth), RRP_CASCADE_MAX_DEPTH))
+            except Exception:
+                depth = 1
+        elif is_cascade and parent:
             parent_key = _canonical_entity_key(parent)
             parent_depths = [int(x.get("depth", 0)) for x in tree if _canonical_entity_key(x.get("institution", "")) == parent_key]
             depth = (max(parent_depths) + 1) if parent_depths else 1
@@ -18161,9 +18266,11 @@ def _rrp_record_discovery_step(result: Dict[str, Any], *, source: str = "auto") 
             "result": result,
         })
         st.session_state["rrp_discovery_tree"] = tree[-40:]
+        _rrp_mark_cascade_done(name)
         if is_cascade:
             st.session_state["disc_cascade_active"] = False
             st.session_state["disc_cascade_parent"] = ""
+            st.session_state.pop("disc_cascade_depth", None)
     except Exception:
         pass
 
@@ -18410,11 +18517,11 @@ def _rrp_render_discovery_result_card(item: Dict[str, Any], conn: sqlite3.Connec
                         st.caption(reason)
                 with col2:
                     if st.button("Investigar", key=f"cascade_from_card_{item.get('key')}_{_canonical_entity_key(node)}", use_container_width=True):
-                        st.session_state.setdefault("cascade_queue", [])
-                        if node not in st.session_state["cascade_queue"]:
-                            st.session_state["cascade_queue"].insert(0, str(node))
-                        st.session_state["disc_cascade_parent"] = name
-                        st.success(f"Añadido a cascada: {node}")
+                        next_depth = min(int(item.get("depth", 0) or 0) + 1, RRP_CASCADE_MAX_DEPTH)
+                        if _rrp_cascade_push(node, parent=name, depth=next_depth, reason=reason or "nodo derivado de esta tarjeta"):
+                            st.success(f"Añadido a cascada: {node} · nivel {next_depth}")
+                        else:
+                            st.info(f"{node} ya estaba investigado/en cola o supera la profundidad máxima.")
                         st.rerun()
 
 
@@ -18433,24 +18540,34 @@ def _render_discovery_investigation_flow(conn: sqlite3.Connection, current_resul
     for i, item in enumerate(tree, 1):
         _rrp_render_discovery_result_card(item, conn, expanded=(i == len(tree)))
 
-    q = st.session_state.get("cascade_queue", []) or []
+    q = _rrp_normalize_cascade_queue()
     if q:
         st.markdown("### 🔗 Siguiente hilo de cascada")
-        st.caption("Nada se investiga en secreto: cada click ejecuta una entidad, muestra su resultado debajo y decide si añade rutas al mapa o solo queda en revisión.")
+        st.caption("La cascada ahora es una cola controlada: cada hilo guarda padre, nivel y motivo. No repite entidades ya investigadas y se detiene al nivel máximo.")
         cols = st.columns([3,1,1])
         with cols[0]:
-            st.info("Pendientes: " + ", ".join(str(x) for x in q[:8]))
+            rows_txt = []
+            for item in q[:8]:
+                rows_txt.append(f"Nivel {int(item.get('depth',1))}: {item.get('name')} ← {item.get('parent') or 'raíz'}")
+            st.info("Pendientes:\n" + "\n".join(rows_txt))
         with cols[1]:
-            if st.button("⚡ Investigar siguiente", key="btn_cascade_next_v121", use_container_width=True):
-                _next = st.session_state["cascade_queue"].pop(0)
-                parent = str((current_result or {}).get("institution") or (tree[-1].get("institution") if tree else ""))
+            if st.button("⚡ Investigar siguiente", key="btn_cascade_next_v127", use_container_width=True):
+                _item = _rrp_cascade_pop_next()
+                if not _item:
+                    st.info("No quedan hilos nuevos sin investigar.")
+                    st.rerun()
+                _next = str(_item.get("name") or "").strip()
+                parent = str(_item.get("parent") or "").strip()
+                depth = int(_item.get("depth", 1) or 1)
                 st.session_state["disc_pending_query"] = _next
                 st.session_state["disc_cascade_active"] = True
                 st.session_state["disc_cascade_parent"] = parent
+                st.session_state["disc_cascade_depth"] = depth
+                st.session_state["disc_cascade_reason"] = str(_item.get("reason") or "hilo derivado")
                 st.session_state.pop("disc_result", None)
                 st.rerun()
         with cols[2]:
-            if st.button("🗑️ Vaciar cola", key="btn_cascade_clear_v121", use_container_width=True):
+            if st.button("🗑️ Vaciar cola", key="btn_cascade_clear_v127", use_container_width=True):
                 st.session_state["cascade_queue"] = []
                 st.rerun()
 
@@ -18533,6 +18650,9 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
         st.session_state["disc_root_query"] = _raw_q
         st.session_state["disc_cascade_active"] = False
         st.session_state["disc_cascade_parent"] = ""
+        st.session_state.pop("disc_cascade_depth", None)
+        st.session_state["cascade_queue"] = []
+        st.session_state["rrp_cascade_done_keys"] = set()
         if clean_research:
             ensure_sanitizer_tables(conn)
             if not st.session_state.get("safe_sanitizer_admin_ok") and _admin_secret_value():
@@ -19131,15 +19251,21 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
                 if not candidates:
                     return []
 
-                st.session_state.setdefault("cascade_queue", [])
                 queued: List[str] = []
-                existing_keys = {_canonical_entity_key(x) for x in st.session_state.get("cascade_queue", [])}
+                try:
+                    current_depth = 0
+                    root_key_for_depth = _rrp_cascade_item_key(root_name)
+                    for _it in st.session_state.get("rrp_discovery_tree", []) or []:
+                        if _rrp_cascade_item_key(_it.get("institution", "")) == root_key_for_depth:
+                            current_depth = max(current_depth, int(_it.get("depth", 0) or 0))
+                    if st.session_state.get("disc_cascade_depth") is not None:
+                        current_depth = max(current_depth, int(st.session_state.get("disc_cascade_depth") or 0))
+                except Exception:
+                    current_depth = 0
+                next_depth = min(current_depth + 1, RRP_CASCADE_MAX_DEPTH)
                 for cand in candidates[:limit]:
-                    ck = _canonical_entity_key(cand)
-                    if ck not in existing_keys:
-                        st.session_state["cascade_queue"].append(cand)
-                        existing_keys.add(ck)
-                        queued.append(cand)
+                    if _rrp_cascade_push(cand, parent=root_name, depth=next_depth, reason="derivado por Discovery/Proof-First"):
+                        queued.append(_canonical_entity_name(cand))
 
                 if queued:
                     st.session_state["cascade_last_added"] = queued
