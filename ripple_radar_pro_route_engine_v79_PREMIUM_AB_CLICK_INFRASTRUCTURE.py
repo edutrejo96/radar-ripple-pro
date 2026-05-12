@@ -34,6 +34,7 @@
 from __future__ import annotations
 
 import json
+import ast
 import math
 import random
 import sqlite3
@@ -721,6 +722,30 @@ ENTITY_CANONICAL_ALIASES: Dict[str, str] = {
     "usdc": "USDC",
     "volante technologies": "Volante Technologies",
     "finastra": "Finastra",
+    # GTreasury / Ripple Treasury — ABSORBIDO EN EL NODO FIJO "Treasury".
+    # No debe crearse un nodo dinámico separado: GTreasury es la marca/producto
+    # que alimenta Ripple Treasury, pero en el grafo se guarda dentro de Treasury.
+    "gtreasury": "Treasury",
+    "g treasury": "Treasury",
+    "gt treasury": "Treasury",
+    "g treasaury": "Treasury",
+    "gtresaury": "Treasury",
+    "gtresury": "Treasury",
+    "gtresauri": "Treasury",
+    "g tresaury": "Treasury",
+    "g tresauri": "Treasury",
+    "g treasuri": "Treasury",
+    "g treassury": "Treasury",
+    "g tresasury": "Treasury",
+    "g treasary": "Treasury",
+    "gtresaury ripple": "Treasury",
+    "gtreasury ripple": "Treasury",
+    "ripple gtreasury": "Treasury",
+    "ripple gt treasury": "Treasury",
+    "ripple gtresaury": "Treasury",
+    "ripple treasury powered by gtreasury": "Treasury",
+    "ripple treasury powered by gt treasury": "Treasury",
+    "ripple treasury powered by gtresaury": "Treasury",
     # JP Morgan / Kinexys — banco + plataforma blockchain propia (antes Onyx)
     "jp morgan": "JPMorgan Chase",
     "j p morgan": "JPMorgan Chase",
@@ -929,7 +954,7 @@ def _infer_layer_icon_from_name(name: Any, fallback_layer: str = "Descubierto", 
         return "Ripple", "🛣️"
     if has_any(["metaco", "ripple custody", "standard custody"]):
         return "Ripple", "🔐"
-    if has_any(["ripple treasury", "ripple escrow"]):
+    if has_any(["ripple treasury", "gtreasury", "gt treasury", "gtresaury", "gtresury", "gtresauri", "ripple escrow"]):
         return "Ripple", "🏛️"
     if has_any(["fednow", "fedwire", "swift", "sepa", "ach"]):
         return "Privado", "⚡"
@@ -1023,6 +1048,26 @@ def _canonical_entity_key(name: Any) -> str:
     key = _norm_key(canonical).replace(" ", "")
     return key or _norm_key(name).replace(" ", "") or str(name or "").strip().lower()
 
+
+
+
+def _is_static_or_absorbed_node(name: Any) -> bool:
+    """True si el texto resuelve a un nodo fijo del mapa.
+
+    Sirve para impedir duplicados visuales como GTreasury/Gtresaury al lado de
+    Treasury. La regla es: si una entidad es alias/producto de un nodo fijo,
+    se guarda dentro del nodo fijo y no se crea un círculo nuevo.
+    """
+    try:
+        return _canonical_entity_name(name) in NODES
+    except Exception:
+        return False
+
+
+def _canonical_display_node(name: Any) -> str:
+    """Nombre final que debe verse/guardarse en mapa y DB."""
+    cname = _canonical_entity_name(name)
+    return cname if cname else str(name or "").strip()
 
 def _canonical_pair_key(node_a: Any, node_b: Any) -> str:
     """Clave NO dirigida para una conexión A↔B. Evita verificar dos veces A→B y B→A."""
@@ -1641,9 +1686,10 @@ def _register_dynamic_node(conn: sqlite3.Connection, name: str, layer: str, icon
                            confidence: float, summary: str, source_url: str,
                            now: str) -> bool:
     """Inserta/actualiza un nodo descubierto sin duplicar alias."""
-    cname = _canonical_entity_name(name)
-    # Si el nombre canónico resuelve a un nodo estático existente, no crear duplicado dinámico
-    if _canonical_target_node(cname, set(NODES.keys())) in NODES:
+    cname = _canonical_display_node(name)
+    # Si el nombre canónico resuelve a un nodo estático existente, no crear duplicado dinámico.
+    # Ejemplo: GTreasury/Gtresaury/G Treasury se absorbe dentro de Treasury.
+    if cname in NODES or _canonical_target_node(cname, set(NODES.keys())) in NODES:
         return False
     layer = _normalize_layer(layer)
     inferred_layer, inferred_icon = _infer_layer_icon_from_name(cname, layer, icon or "🔎")
@@ -1668,8 +1714,8 @@ def _register_dynamic_route(conn: sqlite3.Connection, src: str, dst: str, kind: 
                             signal_col: str, label: str, confidence: float,
                             evidence: str, source_urls: str, now: str) -> bool:
     """Inserta/actualiza una ruta descubierta con pruebas y sin duplicados."""
-    src = _canonical_entity_name(src)
-    dst = _canonical_entity_name(dst)
+    src = _canonical_display_node(src)
+    dst = _canonical_display_node(dst)
     if not src or not dst or src == dst:
         return False
     route_id = hashlib.sha256(f"{_norm_key(src)}>{_norm_key(dst)}>{_norm_key(kind)}".encode()).hexdigest()[:12]
@@ -1711,7 +1757,7 @@ CONNECTS_TO_NODE: Dict[str, str] = {
     "santander": "Santander", "standard chartered": "Standard Chartered",
     "bank of america": "Bank of America", "boa": "Bank of America",
     "pnc": "PNC Bank", "itau": "Itaú Unibanco",
-    "treasury": "Treasury", "ripple treasury": "Treasury", "gtreasury": "Treasury", "gt treasury": "Treasury",
+    "treasury": "Treasury", "ripple treasury": "Treasury", "gtreasury": "Treasury", "gt treasury": "Treasury", "gtresaury": "Treasury", "gtresury": "Treasury", "gtresauri": "Treasury",
     "swift certified partner": "SWIFT", "swift alliance lite2": "SWIFT", "alliance lite2": "SWIFT", "swiftref": "SWIFT",
     "prime": "Hidden Road / Prime", "ripple prime": "Hidden Road / Prime", "rail": "Rail",
     "permissioned dex": "Permissioned DEX", "dex": "DEX/AMM",
@@ -1735,6 +1781,8 @@ ROUTES = [
     ("SWIFT", "Treasury", "watch", "institutional_route_score", "SWIFT ↔ Ripple Treasury/GTreasury · conector certificado/vigilancia"),
     ("SWIFT", "Permissioned DEX", "future", "institutional_route_score", "SWIFT ledger/tokenised value → zona permissioned on-chain a vigilar"),
     ("SWIFT", "DEX/AMM", "future", "dex_score", "SWIFT → DEX/AMM XRPL · solo watch futuro, requiere huella on-chain"),
+    ("SWIFT", "XRPL", "deductive_watch", "public_xrpl_score", "SWIFT → Treasury/infra Ripple → XRPL · ruta indirecta a vigilar, no prueba de liquidación"),
+    ("SWIFT", "RLUSD", "deductive_watch", "public_xrpl_score", "SWIFT → Treasury/infra Ripple → RLUSD · ruta indirecta a vigilar, no prueba de uso directo"),
     ("FedNow", "Topology Engine", "watch", "institutional_route_score", "FedNow → vigilancia topológica"),
     ("Mastercard", "Topology Engine", "watch", "institutional_route_score", "Mastercard → vigilancia topológica"),
     ("SEPA/ACH", "Topology Engine", "watch", "institutional_route_score", "SEPA/ACH → vigilancia topológica"),
@@ -1758,8 +1806,17 @@ ROUTES = [
 
     # Núcleo Ripple como nodos de vigilancia, no como prueba directa contra entidades externas
     ("Ripple Payments", "Public Gateway", "watch", "payment_flow_score", "Ripple Payments → huella pública observable"),
+    ("Ripple Payments", "Rail", "deductive_watch", "payment_flow_score", "Ripple Payments → Rail · capa interna Ripple a vigilar"),
+    ("Rail", "XRPL", "deductive_watch", "public_xrpl_score", "Rail → XRPL · borde público potencial, requiere huella/confirmación"),
+    ("Treasury", "Ripple Payments", "deductive_watch", "institutional_route_score", "Treasury → Ripple Payments · deducción interna de infraestructura"),
+    ("Treasury", "Rail", "deductive_watch", "institutional_route_score", "Treasury → Rail · deducción interna de infraestructura"),
+    ("Treasury", "XRPL", "deductive_watch", "public_xrpl_score", "Treasury → XRPL · borde público a vigilar, no prueba de operación concreta"),
+    ("Treasury", "RLUSD", "deductive_watch", "public_xrpl_score", "Treasury → RLUSD · stablecoin/tesorería a vigilar"),
+    ("Treasury", "DEX/AMM", "deductive_watch", "dex_score", "Treasury → DEX/AMM · liquidez pública XRPL a vigilar"),
     ("Custody/Metaco", "Fingerprint Engine", "watch", "custody_score", "Custody/Metaco → fingerprints institucionales"),
+    ("Custody/Metaco", "XRPL", "deductive_watch", "custody_score", "Custody/Metaco → XRPL · custodia institucional a vigilar"),
     ("Hidden Road / Prime", "Fingerprint Engine", "watch", "prime_brokerage_score", "Prime brokerage → fingerprints institucionales"),
+    ("Hidden Road / Prime", "XRPL", "deductive_watch", "prime_brokerage_score", "Prime brokerage → XRPL · borde público a vigilar"),
     ("Treasury", "Fingerprint Engine", "watch", "institutional_route_score", "Treasury → fingerprints institucionales"),
     ("Rail", "Topology Engine", "watch", "institutional_route_score", "Rail → vigilancia topológica"),
     ("Ripple Escrow", "Large Transfers", "watch", "large_transfer_score", "Ripple Escrow → grandes transferencias"),
@@ -11373,7 +11430,11 @@ def _set_search_cache(conn: sqlite3.Connection, name: str,
                       result: Dict, search_type: str = "discovery") -> None:
     """Guarda resultado en caché compartida con TTL y aliases normalizados."""
     try:
-        canonical_name = _canonical_entity_name(name)
+        canonical_name = _canonical_display_node(name)
+        # Guardar también el payload con nombre canónico para que la UI no vuelva a pintar alias.
+        if isinstance(result, dict):
+            result = dict(result)
+            result["institution"] = canonical_name
         key = _cache_key_search(canonical_name, search_type)
         ttl = _CACHE_TTL.get(search_type, 7)
         now = datetime.now(timezone.utc)
@@ -11854,8 +11915,40 @@ def _extract_first_balanced_json(raw: str) -> str:
 
 
 def _repair_common_json_issues(js: str) -> str:
-    """Repara fallos típicos de LLM: comas finales y comas omitidas entre campos/objetos."""
+    """Repara fallos típicos de LLM: comas finales, comas omitidas, rangos y claves sin comillas."""
     t = str(js or "").strip()
+    # Normalizaciones de texto que rompen json.loads.
+    t = (t.replace("\ufeff", "")
+           .replace("\u00a0", " ")
+           .replace("“", '"').replace("”", '"')
+           .replace("‘", "'").replace("’", "'"))
+    # Quitar comentarios tipo // o /* */ fuera de JSON estricto.
+    t = re.sub(r"/\*.*?\*/", "", t, flags=re.DOTALL)
+    t = re.sub(r"(^|\n)\s*//.*?(?=\n|$)", r"\1", t)
+    # Convertir porcentajes de confianza: "confidence": 68% -> 0.68
+    def _pct(m):
+        try:
+            return f'{m.group(1)}{max(0.0, min(1.0, float(m.group(2))/100.0)):.2f}'
+        except Exception:
+            return m.group(0)
+    t = re.sub(r'("confidence"\s*:\s*)(\d{1,3})\s*%', _pct, t)
+    # Convertir rangos numéricos: "confidence": 0.60-0.75 -> 0.675
+    def _rng(m):
+        try:
+            a = float(m.group(2)); b = float(m.group(3))
+            mid = max(0.0, min(1.0, (a + b) / 2.0))
+            return f'{m.group(1)}{mid:.3f}'
+        except Exception:
+            return m.group(0)
+    t = re.sub(r'("confidence"\s*:\s*)(0?\.\d+|1(?:\.0+)?)\s*[–—-]\s*(0?\.\d+|1(?:\.0+)?)', _rng, t)
+    # true/false/null con mayúsculas tipo Python.
+    t = re.sub(r"\bTrue\b", "true", t)
+    t = re.sub(r"\bFalse\b", "false", t)
+    t = re.sub(r"\bNone\b", "null", t)
+    # Claves sin comillas: {connected: true, confidence: .68}
+    t = re.sub(r'([\{,]\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:)', r'\1"\2"\3', t)
+    # Números empezando por punto: : .68 -> : 0.68
+    t = re.sub(r'(:\s*)\.(\d+)', r'\g<1>0.\2', t)
     # Comas finales antes de cerrar objeto/lista.
     t = re.sub(r",\s*([}\]])", r"\1", t)
     # Objetos consecutivos dentro de listas: } {  -> }, {
@@ -11869,8 +11962,52 @@ def _repair_common_json_issues(js: str) -> str:
     return t
 
 
+def _json_safe(obj: Any) -> Any:
+    """Convierte objetos de ast.literal_eval a estructuras JSON serializables."""
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+    return str(obj)
+
+
+def _loads_json_or_python_literal(txt: str) -> Optional[Dict[str, Any]]:
+    """Intenta cargar JSON estricto y luego diccionario estilo Python/single quotes."""
+    if not str(txt or "").strip():
+        return None
+    try:
+        parsed = json.loads(txt)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+    # Fallback: muchas respuestas vienen como {'connected': True, ...}
+    try:
+        py_txt = txt
+        py_txt = re.sub(r"\btrue\b", "True", py_txt, flags=re.IGNORECASE)
+        py_txt = re.sub(r"\bfalse\b", "False", py_txt, flags=re.IGNORECASE)
+        py_txt = re.sub(r"\bnull\b", "None", py_txt, flags=re.IGNORECASE)
+        parsed = ast.literal_eval(py_txt)
+        if isinstance(parsed, dict):
+            return _json_safe(parsed)
+    except Exception:
+        return None
+    return None
+
+
+def _discovery_result_is_structurally_valid(obj: Dict[str, Any]) -> bool:
+    """Valida estructura mínima para no cachear basura aunque el JSON parsee."""
+    if not isinstance(obj, dict):
+        return False
+    # Debe contener al menos uno de los campos principales del schema.
+    primary = {"connected", "confidence", "summary", "sources", "evidence_items", "connects_to", "route_decisions", "future_watch_targets"}
+    return bool(primary.intersection(obj.keys()))
+
+
 def _loads_discovery_json_lenient(raw: str) -> Dict[str, Any]:
-    """Carga JSON del Discovery sin tirar todo el resultado por un error menor de formato."""
+    """Carga JSON del Discovery con JSON Doctor local antes de activar fallback."""
     raw = str(raw or "").strip()
     candidates: List[str] = []
     balanced = _extract_first_balanced_json(raw)
@@ -11888,18 +12025,64 @@ def _loads_discovery_json_lenient(raw: str) -> Dict[str, Any]:
         if not cand or cand in seen:
             continue
         seen.add(cand)
-        for variant in (cand, _repair_common_json_issues(cand)):
+        variants = [
+            cand,
+            _repair_common_json_issues(cand),
+            _repair_common_json_issues(_extract_first_balanced_json(cand) or cand),
+        ]
+        for variant in variants:
+            variant = str(variant or "").strip()
             if not variant or variant in seen:
                 continue
             seen.add(variant)
             try:
-                parsed = json.loads(variant)
-                if isinstance(parsed, dict):
+                parsed = _loads_json_or_python_literal(variant)
+                if isinstance(parsed, dict) and _discovery_result_is_structurally_valid(parsed):
+                    if variant != cand:
+                        parsed["_json_auto_repaired"] = True
                     return parsed
             except Exception as exc:
                 last_error = exc
-    raise ValueError(f"Respuesta AI con JSON inválido: {last_error}")
+    raise ValueError(f"Respuesta AI con JSON inválido tras JSON Doctor local: {last_error}")
 
+
+def _salvage_discovery_from_text_and_sources(institution_name: str, entity_type: str,
+                                             raw_text: str, data: Optional[Dict[str, Any]],
+                                             err: Exception) -> Dict[str, Any]:
+    """Último recurso: reconstruye un JSON válido desde el texto libre + URLs web_search.
+
+    No inventa pruebas: solo crea un contenedor válido con fuentes, resumen y señales
+    que después pasan por _finalize_discovery_result y el gate Proof-First.
+    """
+    blob = str(raw_text or "")[:4000]
+    urls = re.findall(r"https?://[^\s\]\)\}\>'\"]+", blob)
+    result = {
+        "institution": institution_name,
+        "entity_type": entity_type,
+        "connected": False,
+        "confidence": 0.0,
+        "summary": "JSON reconstruido automáticamente desde texto/fuentes porque la respuesta de IA no era parseable. Se aplicará Proof‑First antes de dibujar rutas.",
+        "ripple_products": [],
+        "layer": _classify_entity(institution_name) if entity_type else "Descubierto",
+        "icon": "🧩",
+        "connects_to": [],
+        "route_kind": "private",
+        "sources": urls,
+        "wallets": [], "corridors": [], "partners": [], "map_points": [],
+        "evidence_items": [], "route_decisions": [], "future_watch_targets": [],
+        "_json_salvaged": True,
+        "_json_repair_error": str(err)[:160],
+    }
+    low = (blob + " " + " ".join(urls)).lower()
+    # Señales fuertes para Treasury/GTreasury/SWIFT sin afirmar XRP directo.
+    if any(x in low for x in ("swift certified partner", "alliance lite2", "swiftref", "treasury.ripple.com", "ripple treasury", "gtreasury", "gt treasury", "gtresaury")):
+        result["connected"] = True
+        result["confidence"] = 0.62
+        result["summary"] = "Reconstruido: detectada ruta de infraestructura SWIFT↔Ripple Treasury/GTreasury; no prueba liquidación XRP directa."
+        result["ripple_products"] = ["Ripple Treasury"]
+        result["connects_to"] = ["Treasury"]
+        result["route_kind"] = "institutional"
+    return _merge_discovery_sources(result, data, max_sources=8)
 
 def _extract_anthropic_web_sources(data: Dict[str, Any], max_items: int = 10) -> List[Dict[str, str]]:
     """Recupera URLs/títulos de bloques web_search y citations aunque el JSON final venga mal formado."""
@@ -11990,7 +12173,7 @@ def _fallback_discovery_from_partial_response(institution_name: str, entity_type
         "entity_type": entity_type,
         "connected": False,
         "confidence": 0.0,
-        "summary": f"La búsqueda respondió, pero el JSON vino mal formado. Recuperé fuentes web para revisión. No cuento esas fuentes como pruebas hasta que el JSON sea válido o una verificación A→B las confirme. Error técnico: {str(err)[:120]}",
+        "summary": f"La búsqueda respondió, pero el JSON vino mal formado. Recuperé fuentes web para revisión. JSON Doctor no pudo reconstruir estructura suficiente. Error técnico: {str(err)[:120]}",
         "ripple_products": [], "layer": _classify_entity(institution_name) if entity_type else "Descubierto", "icon": "🧩",
         "connects_to": [], "route_kind": "private", "sources": [],
         "wallets": [], "corridors": [], "partners": [], "map_points": [], "evidence_items": [],
@@ -12014,7 +12197,7 @@ def _enrich_discovery_with_chain_seeds(result: Dict[str, Any], institution_name:
     blob = _infra_blob(result, institution_name)
 
     is_swift_context = (key == _canonical_entity_key("SWIFT") or " swift " in f" {blob} " or "swift" == blob)
-    is_treasury_context = any(x in blob for x in ("ripple treasury", "gtreasury", "gt treasury", "swift certified partner", "alliance lite2", "swiftref", "treasury ripple com company partners"))
+    is_treasury_context = any(x in blob for x in ("ripple treasury", "gtreasury", "gt treasury", "gtresaury", "gtresury", "gtresauri", "swift certified partner", "alliance lite2", "swiftref", "treasury ripple com company partners"))
 
     # 1) SWIFT ↔ Ripple Treasury / GTreasury: conexión infra documentada, no XRP settlement.
     if is_swift_context or is_treasury_context:
@@ -12074,6 +12257,22 @@ def _enrich_discovery_with_chain_seeds(result: Dict[str, Any], institution_name:
         _result_add_future_watch_target(result, "XRPL", reason="No confirmado: solo se activaría con TX, trustline, wallet, gateway o fuente oficial XRPL/Ripple.", source="xrpl_public_edge", kind="onchain_watch")
         _result_add_future_watch_target(result, "RLUSD", reason="No confirmado: vigilar emisión/movimientos/trustlines RLUSD asociados a gateways o tesorería.", source="rlusd_public_edge", kind="stablecoin_watch")
 
+        # Deducción transitiva visible: SWIFT no se conecta a XRPL por prueba directa,
+        # pero si ya existe prueba SWIFT↔Treasury/GTreasury, el mapa debe enseñar los
+        # bordes Ripple que habría que vigilar. Se dibujan como deductive_watch.
+        transitive_url = treasury_url
+        transitive_targets = {
+            "Permissioned DEX": (0.50, "SWIFT→Treasury/GTreasury deja una ruta institucional permissioned a vigilar. No prueba uso directo de XRP."),
+            "DEX/AMM": (0.46, "SWIFT→Treasury/GTreasury conecta con una zona de liquidez XRPL/DEX a vigilar. No prueba operación on-chain."),
+            "XRPL": (0.48, "SWIFT→Treasury/GTreasury conecta indirectamente con el borde XRPL que debe vigilarse. No prueba liquidación SWIFT en XRPL."),
+            "RLUSD": (0.45, "SWIFT→Treasury/GTreasury conecta indirectamente con el borde RLUSD/stablecoin a vigilar. No prueba uso directo de RLUSD."),
+        }
+        for _target, (_c, _claim) in transitive_targets.items():
+            _result_add_route_decision(
+                result, to=_target, claim=_claim, url=transitive_url,
+                evidence_type="deductive_watch", confidence=_c, kind="deductive_watch", draw_on_map=True,
+            )
+
     return result
 
 
@@ -12081,7 +12280,7 @@ def _finalize_discovery_result(result: Dict[str, Any], institution_name: str, en
                                data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Aplica defaults, normaliza fuentes y enriquece rutas semilla antes de pintar/cachar."""
     result = dict(result or {})
-    result["institution"] = institution_name
+    result["institution"] = _canonical_display_node(institution_name)
     result["entity_type"] = entity_type
     defaults = {
         "connected": False, "confidence": 0.0, "summary": "", "ripple_products": [],
@@ -12104,6 +12303,11 @@ def _finalize_discovery_result(result: Dict[str, Any], institution_name: str, en
         result["_confidence_is_research_quality"] = True
     result["evidence_items"] = _valid_discovery_evidence_items(result)
     result = _enrich_discovery_with_chain_seeds(result, institution_name)
+    # Si un caché viejo venía marcado como JSON roto pero el enriquecimiento/semillas
+    # ya lo convirtió en estructura útil, no lo pintamos como error: queda como reconstruido.
+    if result.get("_json_recovered") and (result.get("connected") or result.get("route_decisions") or result.get("evidence_items")):
+        result["_json_salvaged"] = True
+        result.pop("_json_recovered", None)
     return result
 
 def _resolve_native_search_identity(entity: str) -> Tuple[str, Optional[str], bool]:
@@ -14493,6 +14697,169 @@ def _ensure_static_verifications(conn: sqlite3.Connection) -> int:
     return inserted
 
 
+
+def normalize_static_aliases_in_db(conn: sqlite3.Connection) -> Dict[str, int]:
+    """Sanea la SQLite para que los alias de nodos fijos no dupliquen círculos.
+
+    Problema que corrige:
+    - El usuario busca "G treasaury" o la IA devuelve "Gtresaury".
+    - La entidad se guardaba como nodo dinámico aparte.
+    - El mapa acababa con Treasury y GTreasury/Gtresaury conectados entre sí.
+
+    Regla nueva:
+    - Si un nombre resuelve a un nodo fijo de NODES, se absorbe en ese nodo.
+    - Se eliminan nodos dinámicos absorbidos.
+    - Se reescriben rutas/pruebas/fichas A→B hacia el nombre canónico.
+    - Se borran auto-rutas tipo Treasury→Treasury.
+    """
+    ensure_discovery_tables(conn)
+    try:
+        ensure_route_paths_table(conn)
+    except Exception:
+        pass
+    counters = {"nodes_deleted": 0, "nodes_renamed": 0, "routes_rewritten": 0, "routes_deleted": 0,
+                "proofs_rewritten": 0, "proofs_deleted": 0, "paths_rewritten": 0, "paths_deleted": 0,
+                "verifications_rewritten": 0, "cache_aliases": 0}
+
+    def canon(x: Any) -> str:
+        return _canonical_display_node(x)
+
+    # 1) Nodos dinámicos: borrar absorbidos por nodos fijos; renombrar alias dinámicos no fijos.
+    try:
+        rows = conn.execute("SELECT node_id, name, layer, icon, confidence, source_url, summary, added_at FROM dynamic_nodes").fetchall()
+        for node_id, name, layer, icon, confidence, source_url, summary, added_at in rows:
+            cname = canon(name)
+            if cname in NODES:
+                cur = conn.execute("DELETE FROM dynamic_nodes WHERE node_id=?", (node_id,))
+                counters["nodes_deleted"] += int(cur.rowcount or 0)
+                continue
+            if cname and cname != name:
+                new_id = hashlib.sha256(_norm_key(cname).encode()).hexdigest()[:12]
+                exists = conn.execute("SELECT 1 FROM dynamic_nodes WHERE node_id=?", (new_id,)).fetchone()
+                if exists:
+                    cur = conn.execute("DELETE FROM dynamic_nodes WHERE node_id=?", (node_id,))
+                    counters["nodes_deleted"] += int(cur.rowcount or 0)
+                else:
+                    conn.execute("UPDATE dynamic_nodes SET node_id=?, name=? WHERE node_id=?", (new_id, cname, node_id))
+                    counters["nodes_renamed"] += 1
+    except Exception:
+        pass
+
+    # 2) Rutas dinámicas: reescribir extremos a nombres canónicos; borrar self-routes y duplicados.
+    try:
+        rows = conn.execute("SELECT route_id, src, dst, kind, signal_col, label, confidence, evidence, source_urls, added_at FROM dynamic_routes").fetchall()
+        seen = set()
+        for route_id, src, dst, kind, signal_col, label, confidence, evidence, source_urls, added_at in rows:
+            csrc, cdst = canon(src), canon(dst)
+            if not csrc or not cdst or csrc == cdst:
+                cur = conn.execute("DELETE FROM dynamic_routes WHERE route_id=?", (route_id,))
+                counters["routes_deleted"] += int(cur.rowcount or 0)
+                continue
+            new_id = hashlib.sha256(f"{_norm_key(csrc)}>{_norm_key(cdst)}>{_norm_key(kind)}".encode()).hexdigest()[:12]
+            dedup_key = (new_id, csrc, cdst, str(kind or ""))
+            if dedup_key in seen:
+                cur = conn.execute("DELETE FROM dynamic_routes WHERE route_id=?", (route_id,))
+                counters["routes_deleted"] += int(cur.rowcount or 0)
+                continue
+            seen.add(dedup_key)
+            new_label = str(label or "")
+            if src != csrc or dst != cdst or not new_label:
+                new_label = f"{csrc} -> {cdst}"
+            if new_id != route_id or csrc != src or cdst != dst or new_label != label:
+                exists = conn.execute("SELECT 1 FROM dynamic_routes WHERE route_id=? AND route_id<>?", (new_id, route_id)).fetchone()
+                if exists:
+                    cur = conn.execute("DELETE FROM dynamic_routes WHERE route_id=?", (route_id,))
+                    counters["routes_deleted"] += int(cur.rowcount or 0)
+                else:
+                    conn.execute("""
+                        UPDATE dynamic_routes
+                        SET route_id=?, src=?, dst=?, label=?
+                        WHERE route_id=?
+                    """, (new_id, csrc, cdst, new_label, route_id))
+                    counters["routes_rewritten"] += 1
+    except Exception:
+        pass
+
+    # 3) Pruebas A↔B: normalizar nodos y claves canónicas.
+    try:
+        rows = conn.execute("SELECT proof_id, node_a, node_b FROM connection_proofs").fetchall()
+        for proof_id, node_a, node_b in rows:
+            ca, cb = canon(node_a), canon(node_b)
+            if not ca or not cb or ca == cb:
+                cur = conn.execute("DELETE FROM connection_proofs WHERE proof_id=?", (proof_id,))
+                counters["proofs_deleted"] += int(cur.rowcount or 0)
+                continue
+            new_pid = _canonical_pair_proof_id(ca, cb)
+            pk = _canonical_pair_key(ca, cb)
+            na_key, nb_key = _canonical_entity_key(ca), _canonical_entity_key(cb)
+            if new_pid != proof_id:
+                exists = conn.execute("SELECT 1 FROM connection_proofs WHERE proof_id=?", (new_pid,)).fetchone()
+                if exists:
+                    cur = conn.execute("DELETE FROM connection_proofs WHERE proof_id=?", (proof_id,))
+                    counters["proofs_deleted"] += int(cur.rowcount or 0)
+                    continue
+            conn.execute("""
+                UPDATE connection_proofs
+                SET proof_id=?, node_a=?, node_b=?, node_a_key=?, node_b_key=?, pair_key=?
+                WHERE proof_id=?
+            """, (new_pid, ca, cb, na_key, nb_key, pk, proof_id))
+            if ca != node_a or cb != node_b or new_pid != proof_id:
+                counters["proofs_rewritten"] += 1
+    except Exception:
+        pass
+
+    # 4) Fichas A→B premium: normalizar origen/hop/destino.
+    try:
+        rows = conn.execute("SELECT rowid, path_id, origin, public_hop, destination FROM route_paths").fetchall()
+        for rowid, path_id, origin, public_hop, destination in rows:
+            co, ch, cd = canon(origin), canon(public_hop), canon(destination)
+            if not co or not ch or not cd or len({co, ch, cd}) < 2:
+                cur = conn.execute("DELETE FROM route_paths WHERE rowid=?", (rowid,))
+                counters["paths_deleted"] += int(cur.rowcount or 0)
+                continue
+            if (co, ch, cd) != (origin, public_hop, destination):
+                new_path_id = hashlib.sha256(f"{co}|{ch}|{cd}|{path_id}".encode()).hexdigest()[:16]
+                conn.execute("UPDATE route_paths SET path_id=?, origin=?, public_hop=?, destination=? WHERE rowid=?",
+                             (new_path_id, co, ch, cd, rowid))
+                counters["paths_rewritten"] += 1
+    except Exception:
+        pass
+
+    # 5) Verificaciones de nodos: absorber alias.
+    try:
+        rows = conn.execute("SELECT node FROM node_verifications").fetchall()
+        for (node,) in rows:
+            cn = canon(node)
+            if cn and cn != node:
+                exists = conn.execute("SELECT 1 FROM node_verifications WHERE node=?", (cn,)).fetchone()
+                if exists:
+                    conn.execute("DELETE FROM node_verifications WHERE node=?", (node,))
+                else:
+                    conn.execute("UPDATE node_verifications SET node=? WHERE node=?", (cn, node))
+                counters["verifications_rewritten"] += 1
+    except Exception:
+        pass
+
+    # 6) Alias de caché explícitos para que futuras búsquedas entren al mismo resultado.
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        canonical_cache_key = _cache_key_search("Treasury", "discovery")
+        for alias in ["GTreasury", "G Treasury", "Gtresaury", "Gtresury", "Gtresauri", "G treasaury", "Ripple GTreasury", "Ripple Treasury powered by GTreasury"]:
+            for alias_key in _cache_alias_keys(alias, "discovery"):
+                # Eliminar cachés directas antiguas del alias para que no ganen al alias→Treasury.
+                if alias_key != canonical_cache_key:
+                    conn.execute("DELETE FROM institution_search_cache WHERE query=?", (alias_key,))
+                conn.execute("""
+                    INSERT OR REPLACE INTO search_cache_aliases(alias_key, canonical_query, canonical_name, search_type, created_at, hit_count)
+                    VALUES (?, ?, ?, 'discovery', ?, COALESCE((SELECT hit_count FROM search_cache_aliases WHERE alias_key=?),0))
+                """, (alias_key, canonical_cache_key, "Treasury", now, alias_key))
+                counters["cache_aliases"] += 1
+    except Exception:
+        pass
+
+    conn.commit()
+    return counters
+
 def reclassify_all_dynamic_nodes(conn: sqlite3.Connection) -> int:
     """
     Recorre todos los nodos dinamicos y corrige la capa de cualquiera que
@@ -14597,7 +14964,7 @@ def _classify_entity(name: str) -> str:
                               "cross-chain","cross chain","interoperab","bridge protocol","oracle"]):
         return "Puente"
     # Proveedores tecnológicos / middleware / core banking
-    if any(k in n for k in ["volante","finastra","temenos","service provider","technology provider",
+    if any(k in n for k in ["gtreasury","gt treasury","gtresaury","gtresury","gtresauri","ripple treasury","volante","finastra","temenos","service provider","technology provider",
                               "api provider","middleware","payment processor","core banking",
                               "banking software","fintech platform","payment infrastructure"]):
         return "Proveedor"
@@ -14988,8 +15355,9 @@ def search_institution_connections(institution_name: str,
             try:
                 result = _loads_discovery_json_lenient(raw) if raw else {}
             except Exception as parse_exc:
-                # Antes esto devolvía Error + 0 fuentes. Ahora recuperamos URLs reales de web_search/citations.
-                result = _fallback_discovery_from_partial_response(institution_name, entity_type, data, parse_exc)
+                # JSON Doctor v105: si el JSON viene roto, reconstruimos un objeto válido
+                # desde texto libre + fuentes web_search para no perder rutas deducibles.
+                result = _salvage_discovery_from_text_and_sources(institution_name, entity_type, raw, data, parse_exc)
             result = _finalize_discovery_result(result, institution_name, entity_type, data)
             # CostGuard: guardar respuesta compacta para no hinchar BD ni tokens futuros.
             # ── Auto-promote RippleNet entities from evidence_items to partners[] ──
@@ -15075,6 +15443,16 @@ DIRECT_EVIDENCE_TYPES: Set[str] = {
     "explorer_label", "partner_page", "primary_source", "company_page",
 }
 
+# Tipos de evidencia que NO prueban integración directa, pero sí permiten dibujar
+# una línea separada como deducción/watch. Esto arregla el caso SWIFT→Treasury:
+# la ruta oficial llega a Treasury, y desde ahí el radar debe mostrar los bordes
+# XRPL/RLUSD/DEX como vigilancia transitiva, sin venderlo como prueba cerrada.
+DEDUCTIVE_EVIDENCE_TYPES: Set[str] = {
+    "deductive_watch", "infra_deduction", "transitive_watch",
+    "future_watch", "permissioned_onchain_watch", "dex_amm_watch",
+    "stablecoin_watch", "onchain_watch",
+}
+
 
 def _norm_target_for_gate(x: Any, known_nodes: Optional[Set[str]] = None) -> str:
     try:
@@ -15152,19 +15530,37 @@ def _route_allowed_by_proof_first(result: Dict[str, Any], src: str, dst: str,
     conf = float(result.get("confidence", 0) or 0)
     decisions = _route_decisions_for_target(result, src, dst)
     usable = [rd for rd in decisions if _decision_has_real_proof(rd) and bool(rd.get("draw_on_map", True))]
+    deductive = [
+        rd for rd in decisions
+        if bool(rd.get("draw_on_map", True))
+        and str(rd.get("evidence_type") or rd.get("type") or "").strip().lower() in DEDUCTIVE_EVIDENCE_TYPES
+        and not _is_generic_route_claim(rd.get("claim") or rd.get("summary") or "")
+    ]
     urls = []
-    for rd in usable:
+    for rd in usable + deductive:
         u = _canonical_source_url(str(rd.get("url", "")))
         if u.startswith("http") and u not in urls:
             urls.append(u)
-    # Los nodos de infraestructura sensible requieren decisión específica con prueba.
+    # Los nodos de infraestructura sensible requieren decisión específica.
+    # Antes solo se permitían pruebas directas; eso ocultaba rutas indirectas útiles
+    # como SWIFT→Treasury→XRPL. Ahora las dibujamos como DEDUCTIVE/WATCH, con
+    # confianza capada y texto explícito de que NO son prueba directa.
     if dst in STRICT_PROOF_TARGETS:
         if not usable:
-            return False, "watch", f"Watch no dibujado: falta prueba directa A↔{dst}. {evidence_text or ''}".strip(), min(conf, 0.45), urls
+            if deductive:
+                best_d = max(deductive, key=lambda x: float(x.get("confidence", conf) or conf))
+                ev = str(best_d.get("claim") or evidence_text or f"Ruta indirecta hacia {dst}")
+                if "no prueba" not in ev.lower() and "indirect" not in ev.lower():
+                    ev = (ev.rstrip(" .") + ". Ruta deductiva/watch: no prueba integración directa ni liquidación operativa.")
+                return True, "deductive_watch", ev, min(float(best_d.get("confidence", conf) or conf), 0.58), urls
+            return False, "watch", f"Watch no dibujado: falta prueba directa o deducción A↔{dst}. {evidence_text or ''}".strip(), min(conf, 0.45), urls
         best = max(usable, key=lambda x: float(x.get("confidence", conf) or conf))
         et = str(best.get("evidence_type") or "official").lower()
-        # XRPL/RLUSD no se dibujan como operativo salvo onchain/direct official fuerte; si no, quedan para panel de pruebas/watch.
+        # XRPL/RLUSD no se dibujan como operativo salvo onchain/direct official fuerte; si no, quedan como deducción/watch.
         if dst in WATCH_ONLY_TARGETS_DYNAMIC and et not in {"onchain", "wallet_tagged", "explorer_label", "official", "official_announcement", "filing", "regulatory_filing_pdf"}:
+            if deductive:
+                best_d = max(deductive, key=lambda x: float(x.get("confidence", conf) or conf))
+                return True, "deductive_watch", str(best_d.get("claim") or evidence_text or f"Ruta indirecta hacia {dst}"), min(float(best_d.get("confidence", conf) or conf), 0.55), urls
             return False, "watch", str(best.get("claim") or evidence_text or f"Ruta hacia {dst} queda como watch"), min(float(best.get("confidence", conf) or conf), 0.45), urls
         ev = str(best.get("claim") or evidence_text or f"Prueba directa hacia {dst}")
         return True, kind if kind not in {"watch", "inferred"} else "verified", ev, float(best.get("confidence", conf) or conf), urls
@@ -15224,7 +15620,7 @@ def apply_discovery_to_map(conn: sqlite3.Connection, result: Dict[str, Any],
 
     result = dict(result or {})
     raw_name = str(result.get("institution", "") or "").strip()
-    name = _canonical_entity_name(raw_name)
+    name = _canonical_display_node(raw_name)
     result["institution"] = name
 
     entity_type = str(result.get("entity_type") or _classify_entity(name) or "Otro")
@@ -15427,9 +15823,85 @@ def apply_discovery_to_map(conn: sqlite3.Connection, result: Dict[str, Any],
         _add_route(name, target, direct_kind, f"{name} -> {target}",
                    _route_signal_for_kind(direct_kind), evidence_text)
 
-    # CLEAN MODE: cascada Ripple desactivada.
-    # No se heredan conexiones a Rail, Treasury, Hidden Road, Metaco, Standard Custody,
-    # XRPL o RLUSD por estar conectado a una pieza del ecosistema.
+    # Rutas futuras/deductivas declaradas por el motor. No son conexiones confirmadas:
+    # el gate Proof-First solo las deja pasar si existe route_decision deductive_watch.
+    for ft in result.get("future_watch_targets", []) or []:
+        if not isinstance(ft, dict):
+            continue
+        ft_target = ft.get("target")
+        ft_kind = ft.get("kind", "future_watch")
+        ft_reason = ft.get("reason", "Ruta futura a vigilar")
+        _add_route(
+            name, ft_target, "deductive_watch",
+            f"{name} -> {ft_target} (watch deductivo)",
+            _route_signal_for_kind(str(ft_kind), "institutional_route_score"),
+            ft_reason,
+        )
+
+    # Cascada infra Ripple restaurada de forma controlada.
+    # Si una entidad conecta con un nodo intermedio fijo (ej. Treasury/GTreasury),
+    # el mapa debe enseñar los bordes lógicos hacia XRPL/RLUSD/DEX/AMM como
+    # DEDUCTIVE WATCH, nunca como prueba directa de liquidación.
+    known_for_cascade = _known_nodes()
+    direct_cascade_targets = {
+        _canonical_target_node(t, known_for_cascade) or _canonical_display_node(t)
+        for t in direct_targets_raw
+    }
+    DEDUCTIVE_INFRA_CASCADE: Dict[str, List[Tuple[str, float, str]]] = {
+        "Treasury": [
+            ("XRPL", 0.52, "Cadena infra: la entidad conecta con Treasury/GTreasury, y Treasury pertenece al grafo Ripple con borde público XRPL a vigilar. No prueba liquidación directa."),
+            ("RLUSD", 0.50, "Cadena infra: Treasury/Ripple Treasury puede tocar stablecoin/liquidez Ripple; se vigila RLUSD. No prueba uso directo."),
+            ("DEX/AMM", 0.48, "Cadena infra: Treasury conecta con la zona de liquidez XRPL/DEX/AMM a vigilar. No prueba operación on-chain concreta."),
+            ("Permissioned DEX", 0.46, "Cadena infra: Treasury deja ruta institucional permissioned a vigilar. No prueba integración operativa directa."),
+            ("Ripple Payments", 0.54, "Cadena infra interna: Treasury forma parte del stack Ripple y puede alimentar Payments/Rail como vigilancia deductiva."),
+            ("Rail", 0.50, "Cadena infra interna: Treasury puede alimentar Rail/Payments como vigilancia deductiva; no prueba flujo específico."),
+        ],
+        "Ripple Payments": [
+            ("Rail", 0.54, "Cadena infra: Ripple Payments implica vigilancia de Rail como capa de pagos. No prueba flujo operativo concreto."),
+            ("XRPL", 0.50, "Cadena infra: Ripple Payments puede tocar XRPL/public edge; ruta deductiva a vigilar, no prueba liquidación directa."),
+            ("RLUSD", 0.48, "Cadena infra: Ripple Payments puede tocar RLUSD como stablecoin/liquidez; ruta deductiva a vigilar."),
+        ],
+        "Rail": [
+            ("XRPL", 0.48, "Cadena infra: Rail puede dejar borde público XRPL a vigilar. No prueba liquidación directa."),
+            ("RLUSD", 0.46, "Cadena infra: Rail puede interactuar con stablecoin/liquidez; ruta deductiva a vigilar."),
+        ],
+        "Custody/Metaco": [
+            ("XRPL", 0.47, "Cadena infra: Custody/Metaco custodia activos digitales y puede dejar borde XRPL a vigilar. No prueba movimiento concreto."),
+            ("RLUSD", 0.45, "Cadena infra: Custody/Metaco puede custodiar stablecoins/activos Ripple; ruta deductiva a vigilar."),
+        ],
+        "Hidden Road / Prime": [
+            ("XRPL", 0.47, "Cadena infra: Prime/Hidden Road puede tocar liquidez pública XRPL; ruta deductiva a vigilar."),
+            ("DEX/AMM", 0.45, "Cadena infra: Prime/Hidden Road puede tocar zonas de liquidez DEX/AMM; ruta deductiva a vigilar."),
+        ],
+    }
+
+    cascade_triggers = set(direct_cascade_targets)
+    if name in DEDUCTIVE_INFRA_CASCADE:
+        cascade_triggers.add(name)
+    for trigger, targets in DEDUCTIVE_INFRA_CASCADE.items():
+        if trigger not in cascade_triggers:
+            continue
+        for target, cap_conf, reason in targets:
+            matched_target = _canonical_target_node(target, known_for_cascade)
+            if not matched_target or matched_target == name:
+                continue
+            # Añadir decisión explícita para que Proof-First permita la arista como deductive_watch.
+            _result_add_route_decision(
+                result, to=matched_target, claim=reason,
+                url="", evidence_type="deductive_watch",
+                confidence=min(float(confidence or 0.0), cap_conf),
+                kind="deductive_watch", draw_on_map=True,
+            )
+            _add_route(
+                name, matched_target, "deductive_watch",
+                f"{name} -> {matched_target} (cadena infra por {trigger})",
+                _route_signal_for_kind("deductive_watch", "institutional_route_score"),
+                reason, confidence_override=min(float(confidence or 0.0), cap_conf),
+            )
+
+    # Cascada Ripple restaurada de forma controlada.
+    # No hereda como 'verified'; solo genera rutas deductive_watch capadas y auditables
+    # cuando el resultado contiene route_decisions específicas.
     confirmed_targets = {
         _canonical_target_node(t, _known_nodes()) or _canonical_entity_name(t)
         for t in direct_targets_raw
@@ -15620,8 +16092,12 @@ def load_dynamic_map_elements(conn: sqlite3.Connection) -> Tuple[Dict, List, Lis
         ).fetchall()
         all_nodes = {**NODES, **dyn_nodes}
         for src, dst, kind, signal, label in route_rows:
-            if src in all_nodes and dst in all_nodes:
-                dyn_routes.append((src, dst, kind, signal, label))
+            csrc = _canonical_display_node(src)
+            cdst = _canonical_display_node(dst)
+            if not csrc or not cdst or csrc == cdst:
+                continue
+            if csrc in all_nodes and cdst in all_nodes:
+                dyn_routes.append((csrc, cdst, kind, signal, label or f"{csrc} -> {cdst}"))
     except Exception:
         pass
     return dyn_nodes, dyn_routes, new_zone_boxes
@@ -16854,7 +17330,7 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
         result = _finalize_discovery_result(result, _display_name, result.get("entity_type", _classify_entity(_display_name)), None)
         st.session_state["disc_result"] = result
         # Mostrar y guardar siempre el nombre canónico para evitar duplicados visuales.
-        result["institution"] = _canonical_entity_name(result.get("institution", ""))
+        result["institution"] = _canonical_display_node(result.get("institution", ""))
         _raw_query_seen = str(st.session_state.get("disc_raw_query", "") or "").strip()
         _canonical_seen = _canonical_entity_name(_raw_query_seen) if _raw_query_seen else result.get("institution", "")
         if _raw_query_seen and _norm_key(_raw_query_seen) != _norm_key(_canonical_seen):
@@ -16864,14 +17340,38 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
         conf = float(result.get("confidence", 0))
         css  = "rrp-green" if conf >= 0.65 else "rrp-orange" if conf >= 0.35 else "rrp-red"
         icon = result.get("icon", "?")
-        connected_txt = "Conexión confirmada" if result.get("connected") else "Sin conexión encontrada"
-        conf_label = "Calidad búsqueda" if result.get("_confidence_is_research_quality") else "Confianza"
+        # Evitar etiquetas engañosas: una ruta infra/deductiva no es lo mismo que
+        # "SWIFT usa XRP" o integración operativa directa.
+        _rd_types = {
+            str(rd.get("evidence_type") or rd.get("type") or rd.get("kind") or "").lower()
+            for rd in (result.get("route_decisions") or []) if isinstance(rd, dict)
+        }
+        _connect_targets = {_canonical_entity_name(x) for x in (result.get("connects_to") or [])}
+        if result.get("connected"):
+            if "Treasury" in _connect_targets and any(x in _rd_types for x in {"official_partner", "institutional", "deductive_watch"}):
+                connected_txt = "Ruta infra documentada"
+            elif any(x in _rd_types for x in DEDUCTIVE_EVIDENCE_TYPES):
+                connected_txt = "Ruta deductiva/watch"
+            else:
+                connected_txt = "Conexión confirmada"
+        else:
+            connected_txt = "Sin conexión encontrada"
+        if result.get("_confidence_is_research_quality"):
+            conf_label = "Calidad búsqueda"
+        elif connected_txt in {"Ruta infra documentada", "Ruta deductiva/watch"}:
+            conf_label = "Confianza infra"
+        else:
+            conf_label = "Confianza"
         st.markdown(f"""
 <div class='rrp-alert {css}'>
   <b>{icon} {result.get('institution','')}</b> — {connected_txt} · {conf_label}: <b>{conf*100:.0f}%</b>
 </div>""", unsafe_allow_html=True)
-        if result.get("_json_recovered"):
-            st.warning("La IA buscó en web pero devolvió JSON inválido. Las URLs se muestran como fuentes de revisión; no se añaden como pruebas ni rutas confirmadas.")
+        if result.get("_json_auto_repaired"):
+            st.success("🧰 JSON reparado automáticamente por JSON Doctor: se pudo convertir a estructura válida antes de aplicar Proof‑First.")
+        elif result.get("_json_salvaged"):
+            st.info("🧰 JSON reconstruido desde texto/fuentes: no se aceptan pruebas a ciegas; las rutas pasan por Proof‑First y las deducciones quedan como watch.")
+        elif result.get("_json_recovered"):
+            st.warning("La IA buscó en web pero devolvió JSON inválido y no se pudo reparar. Las URLs quedan solo como fuentes de revisión; no se añaden como pruebas ni rutas confirmadas.")
 
         if result.get("summary"):
             st.caption(result["summary"])
@@ -17088,17 +17588,15 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
             """
             try:
                 root_name = _canonical_entity_name(_result.get("institution", ""))
+                # No bloqueamos Treasury/Rail/DEX/Metaco/Prime: son precisamente las
+                # piezas que deben activar investigación en cascada. Solo evitamos el
+                # propio nodo raíz y nodos demasiado genéricos que generan ruido.
                 skip = {
                     _canonical_entity_key(root_name),
                     _canonical_entity_key("XRPL"),
                     _canonical_entity_key("RLUSD"),
-                    _canonical_entity_key("Ripple Payments"),
                     _canonical_entity_key("RippleNet"),
                     _canonical_entity_key("Ripple Escrow"),
-                    _canonical_entity_key("Treasury"),
-                    _canonical_entity_key("Rail"),
-                    _canonical_entity_key("Custody/Metaco"),
-                    _canonical_entity_key("Hidden Road / Prime"),
                 }
 
                 candidates: List[str] = []
@@ -17128,6 +17626,16 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
                 for t in (_result.get("connects_to") or []):
                     _push(t)
 
+                for ft in (_result.get("future_watch_targets") or []):
+                    if isinstance(ft, dict):
+                        _push(ft.get("target"))
+                    else:
+                        _push(ft)
+
+                for rd in (_result.get("route_decisions") or []):
+                    if isinstance(rd, dict) and bool(rd.get("draw_on_map", True)):
+                        _push(rd.get("to") or rd.get("target") or rd.get("connects_to"))
+
                 if not candidates:
                     return []
 
@@ -17147,6 +17655,15 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
             except Exception as _cascade_err:
                 st.caption(f"⚠️ Cascada no encolada por error interno: {_cascade_err}")
                 return []
+
+        # Activar la cascada nada más tener resultado: antes solo se encolaba
+        # después de añadir/restaurar, por eso parecía apagada en nodos fijos como SWIFT.
+        _cascade_seed_key = "cascade_seeded_" + _canonical_entity_key(result.get("institution", _raw_q))
+        if not st.session_state.get(_cascade_seed_key):
+            _queued_seed = _queue_cascade_entities_from_result(result)
+            st.session_state[_cascade_seed_key] = True
+            if _queued_seed:
+                st.info("🔗 Cascada preparada: " + ", ".join(_queued_seed[:6]))
 
         if _effectively_connected and conf >= min_conf_manual:
             already = conn.execute(
@@ -17825,7 +18342,9 @@ def main() -> None:
     ensure_discovery_tables(conn)
     purge_legacy_preconfigured_routes(conn)
     _ensure_static_verifications(conn)   # pre-poblar verificaciones de nodos estáticos
+    normalize_static_aliases_in_db(conn)  # v106: absorbe alias fijos como GTreasury dentro de Treasury
     reclassify_all_dynamic_nodes(conn)
+    normalize_static_aliases_in_db(conn)  # segunda pasada tras reclasificar nodos legacy
     bootstrap_static_node_routes(conn)
     _heartbeat(conn, "idle")
 
