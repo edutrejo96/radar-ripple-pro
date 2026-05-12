@@ -171,7 +171,7 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v91_2026_05_12_LIVE_ROUTE_NUMBERS_NO_DUP_SIGNAL"
+BUILD_ID = "v92_2026_05_12_CHAT_PASTE_NO_LINKS_PINS"
 BUILD_NOTE = "A-B con números vivos por ficha + Pump/Adopción explicado sin duplicar señales"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
@@ -12130,7 +12130,8 @@ def render_real_money_warning(conn: sqlite3.Connection, key_suffix: str = "globa
 # sin email, sin contraseña y sin datos personales. Sirve para crear comunidad
 # y feedback sin convertir el radar en una red social pesada.
 
-_CHAT_MAX_LEN = 500
+_CHAT_MAX_LEN = 3000
+_PINNED_MAX_LEN = 18000
 _CHAT_COOLDOWN_SECONDS = 4
 _CHAT_RETENTION_LIMIT = 5000
 
@@ -12973,8 +12974,36 @@ def _clean_nickname(value: str) -> str:
 def _clean_chat_body(value: str) -> str:
     """Limpia mensaje de chat y limita longitud."""
     value = (value or "").replace("\x00", "").strip()
-    value = re.sub(r"\n{3,}", "\n\n", value)
+    value = re.sub(r"\n{4,}", "\n\n\n", value)
     return value[:_CHAT_MAX_LEN].strip()
+
+
+def _clean_pinned_body(value: str) -> str:
+    """Limpia mensajes fijados largos sin romper pegado de guías."""
+    value = (value or "").replace("\x00", "").strip()
+    value = re.sub(r"\n{5,}", "\n\n\n", value)
+    return value[:_PINNED_MAX_LEN].strip()
+
+
+def _contains_public_link(value: str) -> bool:
+    """Detecta links y dominios para evitar spam/estafas en chat público.
+
+    Bloquea URLs explícitas, dominios frecuentes, acortadores y enlaces sociales.
+    Las pruebas/fuentes deben ir en módulos de verificación, no en el chat.
+    """
+    s = str(value or "").lower()
+    patterns = [
+        r"https?\s*:\s*/\s*/",
+        r"www\s*\.",
+        r"\b(?:t\.me|telegram\.me|discord\.gg|discord\.com/invite|bit\.ly|tinyurl\.com|linktr\.ee)\b",
+        r"\b[a-z0-9][a-z0-9\-]{1,63}\s*\.\s*(?:com|net|org|io|app|dev|xyz|link|site|online|finance|co|me|ai|gg|ru|cn|info|biz)\b",
+        r"\[[^\]]{1,80}\]\s*\(\s*[^)]+\)",  # markdown links
+    ]
+    return any(re.search(p, s, flags=re.IGNORECASE) for p in patterns)
+
+
+def _no_links_message() -> str:
+    return "No se permiten enlaces en el chat ni en mensajes fijados para evitar estafas. Añade fuentes desde Discovery/verificación, no como links en el chat."
 
 
 def _community_user_id() -> str:
@@ -13060,6 +13089,8 @@ def _send_chat_message(conn: sqlite3.Connection, body: str) -> Tuple[bool, str]:
         return False, "El mensaje está vacío."
     if len(body) > _CHAT_MAX_LEN:
         return False, f"Máximo {_CHAT_MAX_LEN} caracteres."
+    if _contains_public_link(body):
+        return False, _no_links_message()
     now_ts = _time.time()
     last_ts = float(st.session_state.get("community_last_send_ts", 0.0) or 0.0)
     remaining = _CHAT_COOLDOWN_SECONDS - (now_ts - last_ts)
@@ -13225,8 +13256,9 @@ def render_general_chat(conn: sqlite3.Connection) -> None:
                             conn.execute("UPDATE community_messages SET deleted=1 WHERE id=?", (msg_id,))
                             conn.commit(); st.rerun()
 
+    st.caption("🔒 Seguridad: no se permiten links en el chat para evitar estafas. Las fuentes se añaden desde Discovery/verificación.")
     with st.form("community_chat_form", clear_on_submit=True):
-        body = st.text_area(_t("Mensaje"), placeholder=_t("Escribe al chat general..."), height=80, max_chars=_CHAT_MAX_LEN, disabled=not bool(nickname))
+        body = st.text_area(_t("Mensaje"), placeholder=_t("Escribe al chat general...") + " · Sin enlaces", height=130, max_chars=_CHAT_MAX_LEN, disabled=not bool(nickname), help=f"Máximo {_CHAT_MAX_LEN} caracteres. No se permiten enlaces para evitar estafas.")
         send = st.form_submit_button(_t("Enviar"), width="stretch", disabled=not bool(nickname))
         if send:
             ok, msg = _send_chat_message(conn, body)
@@ -13269,13 +13301,16 @@ def render_admin_panel(conn: sqlite3.Connection) -> None:
         conn.commit(); st.toast("Mensajes desfijados.")
 
     st.markdown("#### Fijar aviso admin nuevo")
+    st.caption("Puedes pegar guías largas aquí. Por seguridad, los links están bloqueados en mensajes fijados y chat.")
     with st.form("admin_pin_new_message_form", clear_on_submit=True):
-        pin_body = st.text_area("Mensaje fijado", height=90, max_chars=_CHAT_MAX_LEN, key="admin_new_pin_body")
+        pin_body = st.text_area("Mensaje fijado", height=360, max_chars=_PINNED_MAX_LEN, key="admin_new_pin_body", help=f"Puedes pegar guías largas hasta {_PINNED_MAX_LEN} caracteres. No se permiten enlaces.")
         submit_pin = st.form_submit_button("📌 Publicar y fijar", width="stretch")
         if submit_pin:
-            body = _clean_chat_body(pin_body)
+            body = _clean_pinned_body(pin_body)
             if len(body) < 2:
                 st.error("Escribe un mensaje válido.")
+            elif _contains_public_link(body):
+                st.error(_no_links_message())
             else:
                 now = datetime.now(timezone.utc).isoformat()
                 nick = _get_current_nickname(conn) or "admin"
@@ -13316,6 +13351,7 @@ Empieza simple: usuario local + chat público. Más adelante se puede añadir lo
         st.markdown("#### Reglas mínimas")
         st.markdown("""
 - No claves API, seeds ni claves privadas.
+- No links en el chat: evita estafas y phishing. Las fuentes van por Discovery/verificación.
 - No promesas de rentabilidad ni señales financieras como certeza.
 - Usa el chat para feedback, bugs, pruebas y debate.
 - Si una conexión es especulativa, dilo claramente.
