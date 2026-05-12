@@ -173,7 +173,7 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v121_2026_05_12_DISCOVERY_FLOW_MAP_FOCUS_ONCHAIN_FIX"
+BUILD_ID = "v122_2026_05_12_PLOTLY_CLICKMODE_CRASH_FIX"
 BUILD_NOTE = "Discovery ordenado por árbol · foco real de nodos · pruebas/PDF/on-chain por tarjeta"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
@@ -4651,8 +4651,6 @@ def make_map(row: pd.Series,
         customdata=node_names,
         hoverinfo="text", hovertext=hovers, showlegend=False,
         hoverlabel=dict(bgcolor="#1e293b", font=dict(color="#FFFFFF", size=13), bordercolor="#5AD7FF"),
-        clickmode="event+select",
-        dragmode="select",
     ))
 
     # Etiqueta del nodo foco encima del mapa
@@ -4922,6 +4920,10 @@ def make_map(row: pd.Series,
         legend=dict(orientation="h", y=1.04, x=0, font=dict(color="#FFFFFF", size=11),
                     bgcolor="rgba(15,23,42,.85)", bordercolor="rgba(255,255,255,.25)", borderwidth=1),
         hoverlabel=dict(bgcolor="#1e293b", font=dict(color="#FFFFFF", size=13), bordercolor="#5AD7FF"),
+        # Plotly: clickmode/dragmode son propiedades del layout, no del trace Scatter.
+        # Mantiene selección/click sin romper go.Scatter en Streamlit Cloud.
+        clickmode="event+select",
+        dragmode="pan",
     )
     try:
         # v109: usar firma de SQLite, no time.time(). time.time() fuerza refresco en
