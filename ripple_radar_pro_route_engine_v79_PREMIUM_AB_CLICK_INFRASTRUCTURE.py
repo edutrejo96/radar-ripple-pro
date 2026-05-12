@@ -171,8 +171,8 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v90_2026_05_12_ADMIN_GATE_CHAT_PINS_LIMITS"
-BUILD_NOTE = "Fix cinematica _safe_float + Radar FM funcionando con GitHub Raw/static + A-B premium deduplicado"
+BUILD_ID = "v91_2026_05_12_LIVE_ROUTE_NUMBERS_NO_DUP_SIGNAL"
+BUILD_NOTE = "A-B con números vivos por ficha + Pump/Adopción explicado sin duplicar señales"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
 import os as _os
@@ -6499,7 +6499,30 @@ def render_cards(state: Dict[str, str], row: pd.Series) -> None:
     a.markdown(f"<div class='rrp-card'><b>Precio XRP</b><br><span class='desc'>{state['price']}</span></div>", unsafe_allow_html=True)
     b.markdown(f"<div class='rrp-card'><b>Riesgo</b><br><span class='desc'>{state['risk']}</span></div>", unsafe_allow_html=True)
     c.markdown(f"<div class='rrp-card'><b>Adopción real</b><br><span class='desc'>{state['adoption']}</span></div>", unsafe_allow_html=True)
-    d.markdown(f"<div class='rrp-card'><b>Pump vs Adopción</b><br><span class='desc'>Pump: {row['pump_score']:.1f}%<br>Adopción técnica: {row['adoption_score']:.1f}%</span></div>", unsafe_allow_html=True)
+
+    # v91: Pump y adopción NO son porcentajes de un pastel que deban sumar 100.
+    # Son dos señales independientes normalizadas. Para evitar miedo a duplicación,
+    # mostramos además el diferencial y una zona no concluyente solo como lectura visual.
+    pump = float(row.get('pump_score', 0.0) or 0.0)
+    adoption = float(row.get('adoption_score', 0.0) or 0.0)
+    neutral = max(0.0, 100.0 - min(100.0, pump + adoption))
+    delta = adoption - pump
+    if delta >= 12:
+        lectura = "adopción domina"
+    elif delta <= -12:
+        lectura = "pump domina"
+    else:
+        lectura = "zona mixta"
+    d.markdown(
+        f"<div class='rrp-card'><b>Pump vs Adopción</b><br>"
+        f"<span class='desc'>Pump: {pump:.1f}%<br>"
+        f"Adopción técnica: {adoption:.1f}%<br>"
+        f"Zona no concluyente: {neutral:.1f}%<br>"
+        f"Diferencial: {delta:+.1f} pp · {lectura}</span>"
+        f"<div class='small' style='margin-top:6px;color:#94A3B8'>"
+        f"No duplica datos fijados: son señales cruzadas independientes y deduplicadas antes de agregarse.</div></div>",
+        unsafe_allow_html=True,
+    )
 
 
 def render_metric_explanations() -> None:
@@ -7770,6 +7793,44 @@ def _rrp_route_urls_list(value: Any, limit: int = 8) -> List[str]:
     return clean
 
 
+
+def _rrp_count_evidence_fragments(value: Any) -> int:
+    raw = str(value or "").strip()
+    if not raw or raw.lower().startswith("sin evidencia"):
+        return 0
+    parts = [p.strip() for p in re.split(r"\s*[·|;]\s*", raw) if p.strip()]
+    return max(1, len(parts))
+
+
+def _rrp_route_live_score(conf: float, count: int, source_count: int, evidence_count: int, status_css: str) -> float:
+    # Score vivo para vigilancia: no vuelve a sumar pruebas fijadas como rutas nuevas;
+    # pondera confianza, observaciones agregadas, fuentes y evidencia sin duplicar por spam.
+    score = conf * 58.0
+    score += min(max(count, 0), 10) * 2.2
+    score += min(max(source_count, 0), 6) * 4.0
+    score += min(max(evidence_count, 0), 8) * 2.0
+    if status_css == "verified":
+        score += 8.0
+    elif status_css == "deductive":
+        score += 4.0
+    elif status_css == "hypothesis":
+        score -= 4.0
+    elif status_css in {"weak", "discarded"}:
+        score -= 8.0
+    return round(max(0.0, min(100.0, score)), 1)
+
+
+def _rrp_route_live_label(score: float) -> str:
+    if score >= 78:
+        return "🔥 vigilancia alta"
+    if score >= 60:
+        return "🟢 vigilancia activa"
+    if score >= 40:
+        return "🟡 vigilancia media"
+    if score >= 22:
+        return "🟠 señal débil"
+    return "⚪ ruido/baja señal"
+
 def _rrp_build_premium_route_payload(chart: pd.DataFrame) -> List[Dict[str, Any]]:
     payload: List[Dict[str, Any]] = []
     if not isinstance(chart, pd.DataFrame) or chart.empty:
@@ -7777,6 +7838,13 @@ def _rrp_build_premium_route_payload(chart: pd.DataFrame) -> List[Dict[str, Any]
     for _, row in chart.iterrows():
         status, color, css = _rrp_route_status_from_row(row)
         conf = float(row.get("confidence", 0) or 0)
+        source_list = _rrp_route_urls_list(row.get("source_urls"))
+        count = int(row.get("count", 1) or 1)
+        evidence_count = _rrp_count_evidence_fragments(row.get("evidence"))
+        source_count = len(source_list)
+        live_score = _rrp_route_live_score(conf, count, source_count, evidence_count, css)
+        mean_conf = float(row.get("confidence_mean", conf) or conf)
+        visual_weight = float(row.get("value", conf) or conf)
         payload.append({
             "id": str(row.get("route_key") or row.get("path_id") or hashlib.sha256(str(row.to_dict()).encode()).hexdigest()[:12]),
             "origin": str(row.get("origin_clean") or row.get("origin") or ""),
@@ -7784,7 +7852,8 @@ def _rrp_build_premium_route_payload(chart: pd.DataFrame) -> List[Dict[str, Any]
             "destination": str(row.get("destination_clean") or row.get("destination") or ""),
             "route_label": str(row.get("route_label") or "Ruta A-B"),
             "confidence": round(conf * 100, 1),
-            "count": int(row.get("count", 1) or 1),
+            "confidence_mean": round(mean_conf * 100, 1),
+            "count": count,
             "path_type": str(row.get("path_type") or "Ruta"),
             "status": status,
             "status_color": color,
@@ -7793,7 +7862,13 @@ def _rrp_build_premium_route_payload(chart: pd.DataFrame) -> List[Dict[str, Any]
             "explanation": str(row.get("explanation") or "sin explicación"),
             "deduction_mode": str(row.get("deduction_mode") or "generic"),
             "deduction_note": str(row.get("deduction_note") or ""),
-            "source_urls": _rrp_route_urls_list(row.get("source_urls")),
+            "source_urls": source_list,
+            "source_count": source_count,
+            "evidence_count": evidence_count,
+            "live_score": live_score,
+            "live_label": _rrp_route_live_label(live_score),
+            "visual_weight": round(visual_weight, 3),
+            "dedup_note": f"{count} observación(es) fusionadas en una sola línea canónica; las pruebas fijadas no se vuelven a contar como rutas nuevas.",
             "raw_nodes": str(row.get("raw_nodes") or ""),
             "raw_path_ids": str(row.get("raw_path_ids") or ""),
             "day": str(row.get("day") or ""),
@@ -7807,7 +7882,7 @@ def render_premium_clickable_ab_graph(chart: pd.DataFrame, key_prefix: str = "pr
         st.info("Grafo premium preparado. Aún no hay rutas aprobadas para abrir ficha.")
         return
     routes_json = json.dumps(routes, ensure_ascii=False).replace("</", "<\/")
-    html_doc = '\n<div id="rrp-premium-ab-root" class="rrp-premium-ab-root">\n  <div class="rrp-premium-head"><div><div class="rrp-premium-kicker">Route Path Engine A-B · modo premium</div><div class="rrp-premium-title">Haz clic en una línea para abrir su ficha completa</div><div class="rrp-premium-sub">Cada banda conserva origen, punto público, destino, confianza, capa deductiva, evidencias, URLs y nodos agregados.</div></div><div class="rrp-premium-stats" id="rrpStats"></div></div>\n  <div class="rrp-premium-toolbar"><input id="rrpSearch" class="rrp-premium-search" placeholder="Filtrar ruta: XRPL, RLUSD, Treasury, mBridge, Hidden Road..." /><select id="rrpStatus" class="rrp-premium-select"><option value="all">Todos los estados</option><option value="verified">Verificadas</option><option value="deductive">Deducciones</option><option value="hypothesis">Hipótesis</option><option value="watch">Watchlist</option><option value="weak">Débiles</option></select></div>\n  <div class="rrp-premium-layout"><div class="rrp-premium-canvas-wrap"><svg id="rrpGraph" class="rrp-premium-svg" viewBox="0 0 1180 640" preserveAspectRatio="xMidYMid meet"></svg><div class="rrp-premium-legend"><span><i style="background:#3CFF9B"></i> Verificada</span><span><i style="background:#FACC15"></i> Deducción</span><span><i style="background:#FFB84D"></i> Hipótesis</span><span><i style="background:#38BDF8"></i> Watchlist</span></div></div><div class="rrp-premium-card" id="rrpFicha"></div></div>\n</div>\n<style>\n.rrp-premium-ab-root{font-family:Inter,Segoe UI,Arial,sans-serif;background:linear-gradient(135deg,#020617 0%,#07111f 56%,#0f172a 100%);border:1px solid rgba(56,189,248,.35);border-radius:22px;padding:16px;color:#E5E7EB;box-shadow:0 18px 48px rgba(0,0,0,.45)}.rrp-premium-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;margin-bottom:12px}.rrp-premium-kicker{color:#38BDF8;text-transform:uppercase;font-size:12px;font-weight:900;letter-spacing:.12em}.rrp-premium-title{font-size:22px;font-weight:950;color:white}.rrp-premium-sub{font-size:13px;color:#94A3B8;max-width:820px}.rrp-premium-stats{border:1px solid rgba(148,163,184,.25);background:rgba(15,23,42,.85);border-radius:16px;padding:10px 12px;font-size:12px;color:#CBD5E1;white-space:nowrap}.rrp-premium-toolbar{display:flex;gap:10px;margin:10px 0 14px}.rrp-premium-search,.rrp-premium-select{background:#0f172a;color:#E5E7EB;border:1px solid rgba(148,163,184,.35);border-radius:12px;padding:10px;font-size:13px}.rrp-premium-search{flex:1}.rrp-premium-layout{display:grid;grid-template-columns:minmax(520px,1.25fr) minmax(330px,.75fr);gap:14px}.rrp-premium-canvas-wrap{background:rgba(2,6,23,.62);border:1px solid rgba(148,163,184,.18);border-radius:18px;padding:8px}.rrp-premium-svg{width:100%;height:590px;display:block}.rrp-premium-card{background:rgba(15,23,42,.92);border:1px solid rgba(56,189,248,.28);border-radius:18px;padding:14px;min-height:590px;overflow:auto}.rrp-node rect{fill:#0f172a;stroke:#38BDF8;stroke-width:1.2;rx:11}.rrp-node text{fill:#E5E7EB;font-size:12px;font-weight:800}.rrp-link{fill:none;stroke-linecap:round;opacity:.62;cursor:pointer;transition:opacity .15s,stroke-width .15s,filter .15s}.rrp-link:hover,.rrp-link.active{opacity:1;filter:drop-shadow(0 0 7px rgba(56,189,248,.8))}.rrp-link-label{fill:#CBD5E1;font-size:10px;pointer-events:none}.rrp-col-title{fill:#38BDF8;font-size:12px;font-weight:950;letter-spacing:.12em;text-transform:uppercase}.rrp-premium-legend{display:flex;flex-wrap:wrap;gap:10px;padding:0 6px 8px;color:#94A3B8;font-size:12px}.rrp-premium-legend i{display:inline-block;width:10px;height:10px;border-radius:999px;margin-right:5px}.ficha-kicker{color:#38BDF8;font-size:12px;font-weight:900;text-transform:uppercase;letter-spacing:.10em}.ficha-title{font-size:19px;font-weight:950;color:#fff;margin:3px 0 8px}.pill{display:inline-block;border:1px solid rgba(148,163,184,.30);background:rgba(2,6,23,.55);border-radius:999px;padding:5px 8px;margin:3px 4px 3px 0;color:#CBD5E1;font-size:12px}.box{border:1px solid rgba(148,163,184,.20);background:rgba(2,6,23,.42);border-radius:14px;padding:10px;margin:9px 0}.box b{color:white}.small{color:#94A3B8;font-size:12px;line-height:1.45}.url{display:block;color:#7DD3FC;text-decoration:none;word-break:break-all;margin:4px 0}.empty{color:#94A3B8;text-align:center;padding:120px 20px}@media(max-width:900px){.rrp-premium-layout{grid-template-columns:1fr}.rrp-premium-card{min-height:320px}.rrp-premium-toolbar{flex-direction:column}}\n</style>\n<script>\n(function(){\nconst allRoutes = __ROUTES_JSON__; const svg=document.getElementById(\'rrpGraph\'); const ficha=document.getElementById(\'rrpFicha\'); const search=document.getElementById(\'rrpSearch\'); const statusSel=document.getElementById(\'rrpStatus\'); const stats=document.getElementById(\'rrpStats\'); let selectedId=allRoutes.length?allRoutes[0].id:null;\nfunction esc(s){return String(s==null?\'\':s).replace(/[&<>"\']/g,m=>({\'&\':\'&amp;\',\'<\':\'&lt;\',\'>\':\'&gt;\',\'"\':\'&quot;\',"\'":\'&#39;\'}[m]));}\nfunction short(s,n=32){s=String(s||\'\');return s.length>n?s.slice(0,n-1)+\'…\':s;}\nfunction routeText(r){return (r.origin+\' \'+r.hop+\' \'+r.destination+\' \'+r.evidence+\' \'+r.path_type+\' \'+r.deduction_mode).toLowerCase();}\nfunction filteredRoutes(){const q=search.value.trim().toLowerCase(); const st=statusSel.value; return allRoutes.filter(r=>(!q||routeText(r).includes(q))&&(st===\'all\'||r.status_css===st));}\nfunction layout(routes){const cols=[{key:\'origin\',title:\'ORIGEN\',x:120},{key:\'hop\',title:\'PUNTO PÚBLICO\',x:590},{key:\'destination\',title:\'DESTINO\',x:1040}]; const positions={}; cols.forEach(col=>{const names=[...new Set(routes.map(r=>r[col.key]).filter(Boolean))]; const step=Math.min(84,Math.max(42,520/Math.max(1,names.length))); const start=96; names.forEach((name,i)=>{positions[col.key+\'|\'+name]={x:col.x,y:start+i*step,label:name,col:col.key};});}); return {cols,positions};}\nfunction draw(){const routes=filteredRoutes(); stats.innerHTML=\'<b>\'+routes.length+\'</b> rutas visibles · <b>\'+allRoutes.length+\'</b> totales\'; svg.innerHTML=\'\'; if(!routes.length){svg.innerHTML=\'<text x="590" y="300" text-anchor="middle" fill="#94A3B8" font-size="18">Sin rutas para ese filtro</text>\'; ficha.innerHTML=\'<div class="empty">Ajusta el filtro para ver rutas.</div>\'; return;} const L=layout(routes), cols=L.cols, positions=L.positions; cols.forEach(c=>{const t=document.createElementNS(\'http://www.w3.org/2000/svg\',\'text\'); t.setAttribute(\'x\',c.x); t.setAttribute(\'y\',36); t.setAttribute(\'text-anchor\',\'middle\'); t.setAttribute(\'class\',\'rrp-col-title\'); t.textContent=c.title; svg.appendChild(t);}); routes.forEach(r=>{const a=positions[\'origin|\'+r.origin], b=positions[\'hop|\'+r.hop], c=positions[\'destination|\'+r.destination]; if(!a||!b||!c)return; [[a,b],[b,c]].forEach((pair,seg)=>{const p1=pair[0], p2=pair[1]; const path=document.createElementNS(\'http://www.w3.org/2000/svg\',\'path\'); const mid=(p1.x+p2.x)/2; const d=`M ${p1.x+74} ${p1.y} C ${mid} ${p1.y}, ${mid} ${p2.y}, ${p2.x-74} ${p2.y}`; path.setAttribute(\'d\',d); path.setAttribute(\'class\',\'rrp-link \'+(r.id===selectedId?\'active\':\'\')); path.setAttribute(\'stroke\',r.status_color||\'#38BDF8\'); path.setAttribute(\'stroke-width\',String(3+Math.min(12,Math.max(1,r.confidence/9)))); path.addEventListener(\'click\',()=>{selectedId=r.id; showFicha(r); draw();}); svg.appendChild(path); if(seg===0){const label=document.createElementNS(\'http://www.w3.org/2000/svg\',\'text\'); label.setAttribute(\'x\',mid); label.setAttribute(\'y\',(p1.y+p2.y)/2-8); label.setAttribute(\'text-anchor\',\'middle\'); label.setAttribute(\'class\',\'rrp-link-label\'); label.textContent=r.confidence+\'%\'; svg.appendChild(label);}});}); Object.values(positions).forEach(p=>{const g=document.createElementNS(\'http://www.w3.org/2000/svg\',\'g\'); g.setAttribute(\'class\',\'rrp-node\'); const rect=document.createElementNS(\'http://www.w3.org/2000/svg\',\'rect\'); rect.setAttribute(\'x\',p.x-78); rect.setAttribute(\'y\',p.y-18); rect.setAttribute(\'width\',156); rect.setAttribute(\'height\',36); g.appendChild(rect); const txt=document.createElementNS(\'http://www.w3.org/2000/svg\',\'text\'); txt.setAttribute(\'x\',p.x); txt.setAttribute(\'y\',p.y+4); txt.setAttribute(\'text-anchor\',\'middle\'); txt.textContent=short(p.label,24); g.appendChild(txt); svg.appendChild(g);}); const selected=routes.find(r=>r.id===selectedId)||routes[0]; selectedId=selected.id; showFicha(selected);}\nfunction showFicha(r){const urls=(r.source_urls||[]).map(u=>`<a class="url" href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u)}</a>`).join(\'\') || \'<span class="small">Sin URL fija asociada todavía.</span>\'; ficha.innerHTML=`<div class="ficha-kicker">Ficha completa de línea A-B</div><div class="ficha-title">${esc(r.origin)} → ${esc(r.hop)} → ${esc(r.destination)}</div><span class="pill">${esc(r.status)}</span><span class="pill">Confianza ${esc(r.confidence)}%</span><span class="pill">Obs. ${esc(r.count)}</span><span class="pill">${esc(r.path_type)}</span><div class="box"><b>Origen</b><br><span class="small">${esc(r.origin)}</span></div><div class="box"><b>Punto público / capa visible</b><br><span class="small">${esc(r.hop)}</span></div><div class="box"><b>Destino</b><br><span class="small">${esc(r.destination)}</span></div><div class="box"><b>Evidencia resumida</b><br><span class="small">${esc(r.evidence)}</span></div><div class="box"><b>Explicación</b><br><span class="small">${esc(r.explanation)}</span></div><div class="box"><b>Capa deductiva</b><br><span class="small">Modo: ${esc(r.deduction_mode||\'generic\')}<br>${esc(r.deduction_note||\'Sin nota deductiva específica.\')}</span></div><div class="box"><b>Fuentes verificables</b><br>${urls}</div><div class="box"><b>Nodos reales agregados</b><br><span class="small">${esc(r.raw_nodes||\'Sin nodos agregados.\')}</span></div><div class="box"><b>IDs internos / trazabilidad</b><br><span class="small">${esc(r.raw_path_ids||r.id)}</span></div><div class="small">Última fecha: ${esc(r.day||\'sin fecha\')} · ID ruta: ${esc(r.id)}</div>`;}\nsearch.addEventListener(\'input\',draw); statusSel.addEventListener(\'change\',draw); draw();\n})();\n</script>\n'.replace("__ROUTES_JSON__", routes_json)
+    html_doc = '\n<div id="rrp-premium-ab-root" class="rrp-premium-ab-root">\n  <div class="rrp-premium-head"><div><div class="rrp-premium-kicker">Route Path Engine A-B · modo premium</div><div class="rrp-premium-title">Haz clic en una línea para abrir su ficha completa</div><div class="rrp-premium-sub">Cada línea muestra datos vivos de vigilancia: confianza, observaciones, fuentes, evidencias, señal agregada, deduplicación y trazabilidad.</div></div><div class="rrp-premium-stats" id="rrpStats"></div></div>\n  <div class="rrp-premium-toolbar"><input id="rrpSearch" class="rrp-premium-search" placeholder="Filtrar ruta: XRPL, RLUSD, Treasury, mBridge, Hidden Road..." /><select id="rrpStatus" class="rrp-premium-select"><option value="all">Todos los estados</option><option value="verified">Verificadas</option><option value="deductive">Deducciones</option><option value="hypothesis">Hipótesis</option><option value="watch">Watchlist</option><option value="weak">Débiles</option></select></div>\n  <div class="rrp-premium-layout"><div class="rrp-premium-canvas-wrap"><svg id="rrpGraph" class="rrp-premium-svg" viewBox="0 0 1180 640" preserveAspectRatio="xMidYMid meet"></svg><div class="rrp-premium-legend"><span><i style="background:#3CFF9B"></i> Verificada</span><span><i style="background:#FACC15"></i> Deducción</span><span><i style="background:#FFB84D"></i> Hipótesis</span><span><i style="background:#38BDF8"></i> Watchlist</span></div></div><div class="rrp-premium-card" id="rrpFicha"></div></div>\n</div>\n<style>\n.rrp-premium-ab-root{font-family:Inter,Segoe UI,Arial,sans-serif;background:linear-gradient(135deg,#020617 0%,#07111f 56%,#0f172a 100%);border:1px solid rgba(56,189,248,.35);border-radius:22px;padding:16px;color:#E5E7EB;box-shadow:0 18px 48px rgba(0,0,0,.45)}.rrp-premium-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;margin-bottom:12px}.rrp-premium-kicker{color:#38BDF8;text-transform:uppercase;font-size:12px;font-weight:900;letter-spacing:.12em}.rrp-premium-title{font-size:22px;font-weight:950;color:white}.rrp-premium-sub{font-size:13px;color:#94A3B8;max-width:820px}.rrp-premium-stats{border:1px solid rgba(148,163,184,.25);background:rgba(15,23,42,.85);border-radius:16px;padding:10px 12px;font-size:12px;color:#CBD5E1;white-space:nowrap}.rrp-premium-toolbar{display:flex;gap:10px;margin:10px 0 14px}.rrp-premium-search,.rrp-premium-select{background:#0f172a;color:#E5E7EB;border:1px solid rgba(148,163,184,.35);border-radius:12px;padding:10px;font-size:13px}.rrp-premium-search{flex:1}.rrp-premium-layout{display:grid;grid-template-columns:minmax(520px,1.25fr) minmax(330px,.75fr);gap:14px}.rrp-premium-canvas-wrap{background:rgba(2,6,23,.62);border:1px solid rgba(148,163,184,.18);border-radius:18px;padding:8px}.rrp-premium-svg{width:100%;height:590px;display:block}.rrp-premium-card{background:rgba(15,23,42,.92);border:1px solid rgba(56,189,248,.28);border-radius:18px;padding:14px;min-height:590px;overflow:auto}.rrp-node rect{fill:#0f172a;stroke:#38BDF8;stroke-width:1.2;rx:11}.rrp-node text{fill:#E5E7EB;font-size:12px;font-weight:800}.rrp-link{fill:none;stroke-linecap:round;opacity:.62;cursor:pointer;transition:opacity .15s,stroke-width .15s,filter .15s}.rrp-link:hover,.rrp-link.active{opacity:1;filter:drop-shadow(0 0 7px rgba(56,189,248,.8))}.rrp-link-label{fill:#CBD5E1;font-size:10px;pointer-events:none}.rrp-col-title{fill:#38BDF8;font-size:12px;font-weight:950;letter-spacing:.12em;text-transform:uppercase}.rrp-premium-legend{display:flex;flex-wrap:wrap;gap:10px;padding:0 6px 8px;color:#94A3B8;font-size:12px}.rrp-premium-legend i{display:inline-block;width:10px;height:10px;border-radius:999px;margin-right:5px}.ficha-kicker{color:#38BDF8;font-size:12px;font-weight:900;text-transform:uppercase;letter-spacing:.10em}.ficha-title{font-size:19px;font-weight:950;color:#fff;margin:3px 0 8px}.pill{display:inline-block;border:1px solid rgba(148,163,184,.30);background:rgba(2,6,23,.55);border-radius:999px;padding:5px 8px;margin:3px 4px 3px 0;color:#CBD5E1;font-size:12px}.box{border:1px solid rgba(148,163,184,.20);background:rgba(2,6,23,.42);border-radius:14px;padding:10px;margin:9px 0}.box b{color:white}.small{color:#94A3B8;font-size:12px;line-height:1.45}.url{display:block;color:#7DD3FC;text-decoration:none;word-break:break-all;margin:4px 0}.empty{color:#94A3B8;text-align:center;padding:120px 20px}@media(max-width:900px){.rrp-premium-layout{grid-template-columns:1fr}.rrp-premium-card{min-height:320px}.rrp-premium-toolbar{flex-direction:column}}\n</style>\n<script>\n(function(){\nconst allRoutes = __ROUTES_JSON__; const svg=document.getElementById(\'rrpGraph\'); const ficha=document.getElementById(\'rrpFicha\'); const search=document.getElementById(\'rrpSearch\'); const statusSel=document.getElementById(\'rrpStatus\'); const stats=document.getElementById(\'rrpStats\'); let selectedId=allRoutes.length?allRoutes[0].id:null;\nfunction esc(s){return String(s==null?\'\':s).replace(/[&<>"\']/g,m=>({\'&\':\'&amp;\',\'<\':\'&lt;\',\'>\':\'&gt;\',\'"\':\'&quot;\',"\'":\'&#39;\'}[m]));}\nfunction short(s,n=32){s=String(s||\'\');return s.length>n?s.slice(0,n-1)+\'…\':s;}\nfunction routeText(r){return (r.origin+\' \'+r.hop+\' \'+r.destination+\' \'+r.evidence+\' \'+r.path_type+\' \'+r.deduction_mode).toLowerCase();}\nfunction filteredRoutes(){const q=search.value.trim().toLowerCase(); const st=statusSel.value; return allRoutes.filter(r=>(!q||routeText(r).includes(q))&&(st===\'all\'||r.status_css===st));}\nfunction layout(routes){const cols=[{key:\'origin\',title:\'ORIGEN\',x:120},{key:\'hop\',title:\'PUNTO PÚBLICO\',x:590},{key:\'destination\',title:\'DESTINO\',x:1040}]; const positions={}; cols.forEach(col=>{const names=[...new Set(routes.map(r=>r[col.key]).filter(Boolean))]; const step=Math.min(84,Math.max(42,520/Math.max(1,names.length))); const start=96; names.forEach((name,i)=>{positions[col.key+\'|\'+name]={x:col.x,y:start+i*step,label:name,col:col.key};});}); return {cols,positions};}\nfunction draw(){const routes=filteredRoutes(); stats.innerHTML=\'<b>\'+routes.length+\'</b> rutas visibles · <b>\'+allRoutes.length+\'</b> totales\'; svg.innerHTML=\'\'; if(!routes.length){svg.innerHTML=\'<text x="590" y="300" text-anchor="middle" fill="#94A3B8" font-size="18">Sin rutas para ese filtro</text>\'; ficha.innerHTML=\'<div class="empty">Ajusta el filtro para ver rutas.</div>\'; return;} const L=layout(routes), cols=L.cols, positions=L.positions; cols.forEach(c=>{const t=document.createElementNS(\'http://www.w3.org/2000/svg\',\'text\'); t.setAttribute(\'x\',c.x); t.setAttribute(\'y\',36); t.setAttribute(\'text-anchor\',\'middle\'); t.setAttribute(\'class\',\'rrp-col-title\'); t.textContent=c.title; svg.appendChild(t);}); routes.forEach(r=>{const a=positions[\'origin|\'+r.origin], b=positions[\'hop|\'+r.hop], c=positions[\'destination|\'+r.destination]; if(!a||!b||!c)return; [[a,b],[b,c]].forEach((pair,seg)=>{const p1=pair[0], p2=pair[1]; const path=document.createElementNS(\'http://www.w3.org/2000/svg\',\'path\'); const mid=(p1.x+p2.x)/2; const d=`M ${p1.x+74} ${p1.y} C ${mid} ${p1.y}, ${mid} ${p2.y}, ${p2.x-74} ${p2.y}`; path.setAttribute(\'d\',d); path.setAttribute(\'class\',\'rrp-link \'+(r.id===selectedId?\'active\':\'\')); path.setAttribute(\'stroke\',r.status_color||\'#38BDF8\'); path.setAttribute(\'stroke-width\',String(3+Math.min(12,Math.max(1,r.confidence/9)))); path.addEventListener(\'click\',()=>{selectedId=r.id; showFicha(r); draw();}); svg.appendChild(path); if(seg===0){const label=document.createElementNS(\'http://www.w3.org/2000/svg\',\'text\'); label.setAttribute(\'x\',mid); label.setAttribute(\'y\',(p1.y+p2.y)/2-8); label.setAttribute(\'text-anchor\',\'middle\'); label.setAttribute(\'class\',\'rrp-link-label\'); label.textContent=r.confidence+\'%\'; svg.appendChild(label);}});}); Object.values(positions).forEach(p=>{const g=document.createElementNS(\'http://www.w3.org/2000/svg\',\'g\'); g.setAttribute(\'class\',\'rrp-node\'); const rect=document.createElementNS(\'http://www.w3.org/2000/svg\',\'rect\'); rect.setAttribute(\'x\',p.x-78); rect.setAttribute(\'y\',p.y-18); rect.setAttribute(\'width\',156); rect.setAttribute(\'height\',36); g.appendChild(rect); const txt=document.createElementNS(\'http://www.w3.org/2000/svg\',\'text\'); txt.setAttribute(\'x\',p.x); txt.setAttribute(\'y\',p.y+4); txt.setAttribute(\'text-anchor\',\'middle\'); txt.textContent=short(p.label,24); g.appendChild(txt); svg.appendChild(g);}); const selected=routes.find(r=>r.id===selectedId)||routes[0]; selectedId=selected.id; showFicha(selected);}\nfunction showFicha(r){const urls=(r.source_urls||[]).map(u=>`<a class="url" href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u)}</a>`).join(\'\') || \'<span class="small">Sin URL fija asociada todavía.</span>\'; ficha.innerHTML=`<div class="ficha-kicker">Ficha completa de línea A-B</div><div class="ficha-title">${esc(r.origin)} → ${esc(r.hop)} → ${esc(r.destination)}</div><span class="pill">${esc(r.status)}</span><span class="pill">Confianza ${esc(r.confidence)}%</span><span class="pill">Obs. ${esc(r.count)}</span><span class="pill">${esc(r.path_type)}</span><span class="pill">Señal vivo ${esc(r.live_score)}%</span><span class="pill">Fuentes ${esc(r.source_count)}</span><div class="box"><b>📡 Números vivos de esta línea</b><br><span class="small">Señal de vigilancia: ${esc(r.live_score)}% · ${esc(r.live_label)}<br>Confianza máxima: ${esc(r.confidence)}% · Confianza media: ${esc(r.confidence_mean)}%<br>Observaciones fusionadas: ${esc(r.count)} · Fuentes URL: ${esc(r.source_count)} · Evidencias resumidas: ${esc(r.evidence_count)}<br>Peso visual de línea: ${esc(r.visual_weight)} · Deduplicación: ${esc(r.dedup_note)}</span></div><div class="box"><b>Origen</b><br><span class="small">${esc(r.origin)}</span></div><div class="box"><b>Punto público / capa visible</b><br><span class="small">${esc(r.hop)}</span></div><div class="box"><b>Destino</b><br><span class="small">${esc(r.destination)}</span></div><div class="box"><b>Evidencia resumida</b><br><span class="small">${esc(r.evidence)}</span></div><div class="box"><b>Explicación</b><br><span class="small">${esc(r.explanation)}</span></div><div class="box"><b>Capa deductiva</b><br><span class="small">Modo: ${esc(r.deduction_mode||\'generic\')}<br>${esc(r.deduction_note||\'Sin nota deductiva específica.\')}</span></div><div class="box"><b>Fuentes verificables</b><br>${urls}</div><div class="box"><b>Nodos reales agregados</b><br><span class="small">${esc(r.raw_nodes||\'Sin nodos agregados.\')}</span></div><div class="box"><b>IDs internos / trazabilidad</b><br><span class="small">${esc(r.raw_path_ids||r.id)}</span></div><div class="small">Última fecha: ${esc(r.day||\'sin fecha\')} · ID ruta: ${esc(r.id)}</div>`;}\nsearch.addEventListener(\'input\',draw); statusSel.addEventListener(\'change\',draw); draw();\n})();\n</script>\n'.replace("__ROUTES_JSON__", routes_json)
     _st_components.html(html_doc, height=780, scrolling=True)
 
 
@@ -7825,7 +7900,7 @@ def render_route_path_graph_and_fichas(paths: pd.DataFrame, key_prefix: str = "l
     """
     chart = _route_prepare_chart_df(paths, max_paths=50)
     st.markdown("#### 🧬 Gráfico A→B premium — líneas clicables")
-    st.caption("Pincha directamente una línea para abrir la ficha completa de esa conexión, con fuentes, deducción, nodos e IDs internos.")
+    st.caption("Pincha una línea para abrir la ficha completa con números vivos: señal, confianza, observaciones, fuentes, evidencias, deduplicación e IDs internos.")
     render_premium_clickable_ab_graph(chart, key_prefix=key_prefix)
 
     # v81: evitamos sensación de gráficos duplicados.
