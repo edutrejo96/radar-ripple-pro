@@ -173,8 +173,8 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v118_2026_05_12_ONE_BUTTON_CORE_FACTORY_RESET"
-BUILD_NOTE = "Un solo botón admin limpia investigación, XRPL histórico, clusters, fingerprints, métricas y cachés; conserva comunidad, pins y presupuesto"
+BUILD_ID = "v120_2026_05_12_NODE_CLICK_CASCADE_PROOF_UI_FIX"
+BUILD_NOTE = "Node click direct drilldown + cascade results + proof impact panel + anti-truncation UI"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
 import os as _os
@@ -7042,6 +7042,25 @@ input[type="search"],
 .rrp-proof-card-title { font-size:.94rem; font-weight:900; color:#FFFFFF !important; margin:.20rem 0 .35rem 0; line-height:1.25; }
 .rrp-proof-url { font-size:.78rem; color:#7DD3FC !important; word-break:break-all; }
 .rrp-proof-note { font-size:.82rem; color:#CBD5E1 !important; line-height:1.36; margin-top:.35rem; }
+
+/* === v120: anti-corte de textos largos en conclusiones, fuentes y fichas === */
+.rrp-note, .rrp-warning, .rrp-card, .rrp-mini-card, .rrp-path-panel,
+.rrp-path-text, .rrp-proof-card, .rrp-proof-note, .rrp-route-picker-card,
+.rrp-cinema-frame, .rrp-alert, .rrp-node-proof-card,
+[data-testid="stMarkdownContainer"], [data-testid="stMarkdownContainer"] * {
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    overflow-wrap: anywhere !important;
+    word-break: normal !important;
+    hyphens: auto !important;
+    max-height: none !important;
+}
+.rrp-proof-url, a, code {
+    overflow-wrap: anywhere !important;
+    word-break: break-word !important;
+}
+
 .rrp-checkline { margin:.20rem 0; font-size:.88rem; color:#E2E8F0 !important; }
 
 /* Fichas clicables A→B: no usar texto negro sobre panel oscuro */
@@ -13224,11 +13243,40 @@ def _consume_apply_updates_query(conn: sqlite3.Connection) -> bool:
     return False
 
 
-def render_global_update_notice(conn: sqlite3.Connection) -> None:
-    """Aviso flotante de cambios compartidos sin aplicar rerun automáticamente."""
+def _apply_shared_updates_now(conn: sqlite3.Connection) -> None:
+    """Aplica los cambios compartidos en la pestaña actual, sin enlaces externos."""
     try:
+        last = _get_last_map_update(conn)
+        if last:
+            st.session_state["map_last_seen_global"] = last
+            st.session_state["map_last_seen"] = last
+        st.session_state["rrp_pending_shared_updates"] = 0
+        st.session_state["rrp_live_seen_change"] = False
+        st.toast("✅ Cambios del radar aplicados en esta pestaña.")
+    except Exception:
+        pass
+
+
+def render_global_update_notice(conn: sqlite3.Connection) -> None:
+    """
+    Aviso de cambios compartidos sin abrir ventanas nuevas.
+
+    v119:
+    - Se elimina el <a href="?rrp_apply_updates=1"> que en algunos navegadores/
+      embeds/Cloudflare abría una pestaña nueva.
+    - Se usa un botón Streamlit real. Al pulsarlo, el estado se actualiza en la
+      sesión actual y se fuerza un rerun controlado de la misma pestaña.
+    """
+    try:
+        # Compatibilidad: si alguien entra con el query param antiguo, lo consume
+        # sin abrir nada y vuelve a la URL limpia.
         if _consume_apply_updates_query(conn):
+            try:
+                st.rerun()
+            except Exception:
+                pass
             return
+
         last = _get_last_map_update(conn)
         seen = st.session_state.get("map_last_seen_global", "")
         if not last:
@@ -13237,37 +13285,50 @@ def render_global_update_notice(conn: sqlite3.Connection) -> None:
             st.session_state["map_last_seen_global"] = last
             st.session_state["map_last_seen"] = last
             return
+
         pending = _get_pending_updates(conn, seen)
         if pending <= 0:
+            st.session_state["rrp_pending_shared_updates"] = 0
             return
+
         st.session_state["rrp_pending_shared_updates"] = pending
+
+        # CSS ligero para que el aviso se vea como tarjeta flotante, pero el botón
+        # es Streamlit nativo; no hay links, no hay target=_blank, no hay ventana nueva.
         if ENABLE_FLOATING_UPDATE_NOTICE:
             st.markdown(f"""
 <style>
-#rrp-floating-update {{
-  position: fixed; right: 18px; bottom: 22px; z-index: 999999;
-  max-width: 340px; padding: 14px 16px; border-radius: 18px;
-  background: rgba(15,23,42,.96); color: #E2E8F0;
+.rrp-update-card-v119 {{
   border: 1px solid rgba(34,211,238,.45);
-  box-shadow: 0 18px 60px rgba(0,0,0,.38); font-family: system-ui, sans-serif;
+  background: rgba(15,23,42,.92);
+  color: #E2E8F0;
+  border-radius: 18px;
+  padding: 12px 14px;
+  margin: 8px 0 10px 0;
+  box-shadow: 0 10px 34px rgba(0,0,0,.22);
 }}
-#rrp-floating-update b {{ color:#67E8F9; }}
-#rrp-floating-update a {{
-  display:inline-block; margin-top:10px; padding:8px 12px;
-  border-radius:999px; text-decoration:none; font-weight:800;
-  background: linear-gradient(90deg,#22D3EE,#A78BFA); color:#020617;
-}}
-#rrp-floating-update small {{ display:block; color:#94A3B8; margin-top:6px; line-height:1.3; }}
+.rrp-update-card-v119 b {{ color:#67E8F9; }}
+.rrp-update-card-v119 small {{ display:block; color:#94A3B8; margin-top:4px; line-height:1.3; }}
 </style>
-<div id="rrp-floating-update">
+<div class="rrp-update-card-v119">
   <div>🔔 <b>{pending} dato(s) nuevos detectados</b></div>
   <div style="font-size:.88rem;margin-top:4px">Hay rutas/pruebas/mapas actualizados por otra sesión.</div>
-  <a href="?rrp_apply_updates=1">Aplicar ahora</a>
-  <small>No se aplica solo para no cortar música, formularios ni investigación.</small>
+  <small>No se aplica solo para no cortar música, formularios ni investigación. Pulsa el botón de abajo para actualizar esta misma pestaña.</small>
 </div>
 """, unsafe_allow_html=True)
         else:
-            st.info(f"🔔 {pending} cambios compartidos pendientes. Recarga/aplica cambios cuando quieras.")
+            st.info(f"🔔 {pending} cambios compartidos pendientes. Aplica cambios cuando quieras.")
+
+        if st.button(
+            "🔄 Aplicar cambios en esta pestaña",
+            key=f"rrp_apply_shared_updates_current_tab_{pending}",
+            use_container_width=True,
+        ):
+            _apply_shared_updates_now(conn)
+            try:
+                st.rerun()
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -17662,6 +17723,160 @@ def validate_connection_onchain(
     return {"from_cache": False, **result_data}
 
 
+
+# =============================================================================
+# v120 — helpers UI: click robusto de mapas + ledger de cascada + explicación
+# =============================================================================
+
+def _rrp_plotly_points(selection_obj: Any) -> List[Dict[str, Any]]:
+    """Devuelve puntos seleccionados de st.plotly_chart en Streamlit moderno o legacy.
+
+    Streamlit puede devolver dict, PlotlyState o un objeto con atributo selection.
+    Centralizar esto evita que el click del mapa falle silenciosamente.
+    """
+    try:
+        if not selection_obj:
+            return []
+        if isinstance(selection_obj, dict):
+            sel = selection_obj.get("selection", {}) or {}
+            return list(sel.get("points", []) or [])
+        sel = getattr(selection_obj, "selection", None)
+        if isinstance(sel, dict):
+            return list(sel.get("points", []) or [])
+        pts = getattr(sel, "points", None)
+        if pts is not None:
+            return list(pts or [])
+    except Exception:
+        return []
+    return []
+
+
+def _rrp_node_from_plotly_selection(selection_obj: Any) -> str:
+    """Extrae el nombre de nodo desde customdata del punto seleccionado."""
+    pts = _rrp_plotly_points(selection_obj)
+    if not pts:
+        return ""
+    cd = pts[0].get("customdata") if isinstance(pts[0], dict) else None
+    if isinstance(cd, (list, tuple)):
+        cd = cd[0] if cd else None
+    node = str(cd or "").strip()
+    return node
+
+
+def _remember_cascade_result(result: Dict[str, Any]) -> None:
+    """Guarda un resumen visible de resultados obtenidos por investigación en cascada."""
+    try:
+        if not result or not st.session_state.get("disc_cascade_active"):
+            return
+        name = _canonical_display_node(result.get("institution", ""))
+        if not name:
+            return
+        st.session_state.setdefault("cascade_results", [])
+        key = _canonical_entity_key(name)
+        existing = {_canonical_entity_key(x.get("institution", "")) for x in st.session_state["cascade_results"]}
+        if key in existing:
+            return
+        route_decisions = result.get("route_decisions") or []
+        map_points = result.get("map_points") or []
+        evidence_items = _valid_discovery_evidence_items(result) if callable(globals().get("_valid_discovery_evidence_items")) else (result.get("evidence_items") or [])
+        st.session_state["cascade_results"].insert(0, {
+            "institution": name,
+            "confidence": float(result.get("confidence", 0.0) or 0.0),
+            "connected": bool(result.get("connected")),
+            "summary": str(result.get("summary", ""))[:600],
+            "routes": len(route_decisions),
+            "map_points": len(map_points),
+            "evidence": len(evidence_items),
+            "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        })
+        st.session_state["cascade_results"] = st.session_state["cascade_results"][:12]
+    except Exception:
+        pass
+
+
+def _render_cascade_results_panel() -> None:
+    """Muestra resultados reales ya obtenidos por cascada, no solo la cola pendiente."""
+    rows = st.session_state.get("cascade_results", []) or []
+    if not rows:
+        return
+    st.markdown("### 🔗 Resultados obtenidos por investigación en cascada")
+    st.caption("Cada fila es una búsqueda ya ejecutada desde la cola de cascada. No equivale a conexión confirmada: mira rutas añadidas/no añadidas y pruebas.")
+    for item in rows[:8]:
+        conf = float(item.get("confidence", 0.0) or 0.0) * 100
+        status = "✅ conectada" if item.get("connected") else "👁 sin conexión confirmada"
+        st.markdown(f"""
+<div class='rrp-mini-card'>
+  <b>{html.escape(str(item.get('institution','')))} · {status} · {conf:.0f}%</b>
+  <div class='small'>🧾 pruebas: {int(item.get('evidence',0))} · 🧭 rutas propuestas: {int(item.get('routes',0))} · 🗺 puntos mapa: {int(item.get('map_points',0))} · {html.escape(str(item.get('ts','')))}</div>
+  <div class='small'>{html.escape(str(item.get('summary','')))}</div>
+</div>
+""", unsafe_allow_html=True)
+
+
+def _route_will_be_added_label(rd: Dict[str, Any], result: Dict[str, Any]) -> Tuple[str, str]:
+    """Clasifica visualmente si una ruta candidata se añadirá al mapa o queda solo como revisión."""
+    try:
+        kind = str(rd.get("evidence_type") or rd.get("type") or rd.get("kind") or result.get("route_kind") or "watch").lower()
+        src = str(rd.get("from") or rd.get("src") or result.get("institution") or "")
+        dst = str(rd.get("to") or rd.get("dst") or rd.get("target") or "")
+        conf = float(rd.get("confidence", result.get("confidence", 0.0)) or 0.0)
+        valid_evidence = _valid_discovery_evidence_items(result) if callable(globals().get("_valid_discovery_evidence_items")) else []
+        if kind in {"model", "watch_only", "future"}:
+            return "🚫 no se añade", "motor interno/watch/futuro: no es conexión"
+        if not dst:
+            return "🚫 no se añade", "falta destino claro"
+        if conf < 0.15 and not valid_evidence:
+            return "🚫 no se añade", "confianza/evidencia insuficiente"
+        if kind in {"official", "verified", "public", "public_wallet", "core_infra", "institutional", "government_payment_rail"}:
+            return "✅ se añade", "ruta fuerte o core/documental"
+        if valid_evidence or conf >= 0.15:
+            return "🟠 se añade débil/watch", "visible como evidencia débil/vigilancia, no certeza"
+        return "👁 solo revisión", "queda como pista hasta más prueba"
+    except Exception:
+        return "👁 solo revisión", "clasificación no disponible"
+
+
+def _render_discovery_route_impact_panel(result: Dict[str, Any]) -> None:
+    """Panel claro: qué rutas se añaden al mapa y cuáles no."""
+    try:
+        route_decisions = [rd for rd in (result.get("route_decisions") or []) if isinstance(rd, dict)]
+        map_points = [mp for mp in (result.get("map_points") or []) if isinstance(mp, dict)]
+        connects = result.get("connects_to") or []
+        if not route_decisions and not map_points and not connects:
+            st.info("🧭 Esta investigación no aporta rutas nuevas al mapa. Solo queda como resumen/fuentes si son útiles.")
+            return
+        st.markdown("### 🧭 Impacto en el mapa: qué se añade y qué no")
+        st.caption("El radar separa ruta visual, evidencia débil y prueba fuerte. Una fuente recuperada no basta por sí sola para confirmar conexión.")
+        if route_decisions:
+            for i, rd in enumerate(route_decisions[:12], start=1):
+                src = str(rd.get("from") or rd.get("src") or result.get("institution") or "?")
+                dst = str(rd.get("to") or rd.get("dst") or rd.get("target") or "?")
+                kind = str(rd.get("evidence_type") or rd.get("type") or rd.get("kind") or result.get("route_kind") or "watch")
+                claim = str(rd.get("claim") or rd.get("evidence") or rd.get("reason") or rd.get("summary") or "")
+                verdict, reason = _route_will_be_added_label(rd, result)
+                st.markdown(f"""
+<div class='rrp-proof-card {'rrp-proof-card-ok' if verdict.startswith('✅') else 'rrp-proof-card-watch' if 'débil' in verdict or 'revisión' in verdict else 'rrp-proof-card-bad'}'>
+  <div class='rrp-proof-kicker'>ruta candidata {i} · {html.escape(kind)}</div>
+  <div class='rrp-proof-card-title'>{html.escape(src)} → {html.escape(dst)}</div>
+  <div class='rrp-proof-note'><b>{html.escape(verdict)}</b> · {html.escape(reason)}</div>
+  <div class='rrp-proof-note'>{html.escape(claim[:500])}</div>
+</div>
+""", unsafe_allow_html=True)
+        if map_points:
+            st.markdown("**Puntos/nodos propuestos para el mapa**")
+            for mp in map_points[:10]:
+                n = str(mp.get("name", "?")); layer = str(mp.get("layer", "Descubierto")); conn_to = mp.get("connects_to", [])
+                if isinstance(conn_to, list):
+                    conn_to = ", ".join(str(x) for x in conn_to)
+                st.markdown(f"- 🗺 `{n}` · capa **{layer}**" + (f" · conecta a: `{conn_to}`" if conn_to else " · sin conexión clara todavía"))
+        if connects and not route_decisions:
+            st.markdown("**Conexiones textuales detectadas**")
+            for c in connects[:10]:
+                st.markdown(f"- 👁 `{result.get('institution','?')}` → `{c}` · pendiente de prueba estructurada")
+    except Exception as exc:
+        st.caption(f"No se pudo renderizar el impacto de mapa: {exc}")
+
+
 def render_discovery_engine(conn: sqlite3.Connection) -> None:
     """Panel UI del motor de descubrimiento."""
     st.subheader("Discovery Engine — busqueda y reescritura automatica")
@@ -17999,6 +18214,7 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
         _display_name = result.get("institution", st.session_state.get("disc_query", ""))
         result = _finalize_discovery_result(result, _display_name, result.get("entity_type", _classify_entity(_display_name)), None)
         st.session_state["disc_result"] = result
+        _remember_cascade_result(result)
         # Mostrar y guardar siempre el nombre canónico para evitar duplicados visuales.
         result["institution"] = _canonical_display_node(result.get("institution", ""))
         _raw_query_seen = str(st.session_state.get("disc_raw_query", "") or "").strip()
@@ -18076,6 +18292,9 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
                         st.markdown(f"- `{src}` → `{dst}` · **{rr.get('kind','candidate')}** · {rr.get('source','resultado')}")
                 else:
                     st.caption("La investigación actual no propone conexiones nuevas aparte de las fuentes/resumen.")
+
+        _render_discovery_route_impact_panel(result)
+        _render_cascade_results_panel()
 
         # ── Columnas: info principal | descubrimientos extra ──────────────────
         col_main, col_extra = st.columns([3, 2])
@@ -18433,6 +18652,8 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
                     if st.button("⚡ Investigar siguiente en cascada", use_container_width=True, key="btn_cascade_next"):
                         _next = st.session_state["cascade_queue"].pop(0)
                         st.session_state["disc_pending_query"] = _next
+                        st.session_state["disc_cascade_active"] = True
+                        st.session_state["disc_cascade_parent"] = str(result.get("institution", ""))
                         st.session_state.pop("disc_result", None)
                         st.rerun()
                 with col_cas2:
@@ -19782,28 +20003,8 @@ def main() -> None:
         st.caption(_focus_hint)
         st.caption(f"🧬 Revisión de mapa: `{_map_rev}` · las 3 vistas leen las mismas rutas/nodos/pruebas guardadas.")
 
-        # v111: fallback manual por si el navegador/Streamlit no captura el click del Plotly.
-        # Esto evita que el usuario se quede sin ficha, sin botón de verificar y sin pruebas.
-        with st.expander("🔎 Seleccionar nodo manualmente / abrir ficha de pruebas", expanded=False):
-            try:
-                _picker_dyn_nodes, _, _ = load_dynamic_map_elements(conn)
-                _picker_nodes = sorted({**NODES, **_picker_dyn_nodes}.keys())
-            except Exception:
-                _picker_nodes = sorted(NODES.keys())
-            _qnode = st.text_input("Escribe parte del nombre del nodo", value="", key="map_focus_manual_query")
-            _matches = [n for n in _picker_nodes if _qnode.strip().lower() in n.lower()] if _qnode.strip() else _picker_nodes[:18]
-            if focused:
-                st.caption(f"Nodo activo: {focused}")
-            if _matches:
-                _cols = st.columns(3)
-                for _i, _n in enumerate(_matches[:18]):
-                    with _cols[_i % 3]:
-                        if st.button(_n, key=f"manual_focus_{_canonical_entity_key(_n)}", use_container_width=True):
-                            st.session_state["map_focus_node"] = _n
-                            st.rerun()
-            if focused and st.button("✕ Quitar filtro de nodo", key="manual_clear_focus", use_container_width=True):
-                st.session_state.pop("map_focus_node", None)
-                st.rerun()
+        # v120: se elimina el panel manual confuso. El mapa debe responder al click del nodo.
+        # Si no hay foco, se muestran todos los nodos; si hay foco, se muestran solo sus rutas directas.
 
         with tab_conn:
             st.caption("Rutas verificadas + core interno XRPL/Ripple + cualquier conexión con evidencia guardada. Si la evidencia es poca, aparece en naranja como “evidencia débil”, no como certeza fuerte.")
@@ -19818,7 +20019,7 @@ def main() -> None:
                 make_map(row, title="Vigilancia e inferencias", route_filter="surveillance", **_map_kwargs),
                 width="stretch", on_select="rerun", selection_mode="points", key=f"radar_map_surv_{_map_rev}",
             )
-            pts_surv = (sel_surv or {}).get("selection", {}).get("points", [])
+            pts_surv = _rrp_plotly_points(sel_surv)
             if pts_surv:
                 sel = sel_surv  # solo sobreescribir si vigilancia tiene selección propia
 
@@ -19829,23 +20030,18 @@ def main() -> None:
                 width="stretch", on_select="rerun", selection_mode="points", key=f"radar_map_all_{_map_rev}",
             )
             # Permitir selección también desde el mapa completo
-            pts_all = (sel_all or {}).get("selection", {}).get("points", [])
-            if pts_all and not (sel or {}).get("selection", {}).get("points"):
+            pts_all = _rrp_plotly_points(sel_all)
+            if pts_all and not _rrp_plotly_points(sel):
                 sel = sel_all
         # Procesar click — customdata puede volver como lista o string.
         # IMPORTANTE: Streamlit preserva la selección entre reruns.
         # Solo actuamos si el nodo clickado es DIFERENTE al foco actual
         # (evita el bucle toggle donde el mismo click se procesa dos veces).
         # Para des-focusar usar el botón "✕ Ver todo".
-        pts = (sel or {}).get("selection", {}).get("points", [])
-        if pts:
-            cd = pts[0].get("customdata")
-            if isinstance(cd, (list, tuple)):
-                cd = cd[0] if cd else None
-            clicked_name = str(cd).strip() if cd is not None else None
-            if clicked_name and clicked_name != (focused or "").strip():
-                st.session_state["map_focus_node"] = clicked_name
-                st.rerun()
+        clicked_name = _rrp_node_from_plotly_selection(sel)
+        if clicked_name and clicked_name != (focused or "").strip():
+            st.session_state["map_focus_node"] = clicked_name
+            st.rerun()
 
         render_color_legend()
 
