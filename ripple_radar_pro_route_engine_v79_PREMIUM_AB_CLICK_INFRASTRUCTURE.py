@@ -173,8 +173,8 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v134_2026_05_12_ADMIN_UNLIMITED_SEARCH_FIX"
-BUILD_NOTE = "Admin sin límites de sesión/cupo/cola + cascada y líneas de mapa protegidas"
+BUILD_ID = "v141_2026_05_12_PUBLIC_WATCHPOINT_CASCADE_GUARD_FIX"
+BUILD_NOTE = "Notificaciones visuales en nodos: verificar, vigilar huella pública, revisar alcance documental y evitar repeticiones"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
 import os as _os
@@ -426,6 +426,9 @@ NODES = {
     "Rail":                {"pos": (-3.05,-1.10), "layer": "Ripple", "icon": "🚄"},
     "Hidden Road / Prime": {"pos": (-3.05,-1.90), "layer": "Ripple", "icon": "🛣️"},
     "Ripple Escrow":       {"pos": (-3.05,-2.70), "layer": "Ripple", "icon": "🔒"},
+    # Producto Ripple: no es banco central. Si una CBDC piloto lo usa, la vigilancia pública
+    # se hace siguiendo su base técnica hacia XRPL/Public Gateway, no moviéndolo a la zona CBDC.
+    "Ripple CBDC Platform": {"pos": (-3.05,-3.50), "layer": "Ripple", "icon": "💠"},
 
     # ── INSTITUCIONAL ───────────────────────────────────────────────────────
     "DTCC/NSCC":        {"pos": (-0.95, 0.30), "layer": "Institucional", "icon": "🏢"},
@@ -472,7 +475,7 @@ ZONE_POS: Dict[str, Dict] = {
     "Banca_EU":      {"x": -7.55, "y_start": -1.10, "y_step": -0.80, "box": (-7.90,-0.70,-7.20, 1.85), "label": "Europa"},
     "Banca_AP":      {"x": -6.50, "y_start": -2.50, "y_step": -0.80, "box": (-6.85,-2.05,-6.15, 2.05), "label": "Asia-Pac"},
     "Privado":       {"x": -5.20, "y_start": -1.65, "y_step": -0.80, "box": (-5.60,-1.10,-4.80, 2.70), "label": "Infraestructura"},
-    "Ripple":        {"x": -3.05, "y_start": -3.50, "y_step": -0.80, "box": (-3.45,-3.10,-2.65, 2.45), "label": "Ripple"},
+    "Ripple":        {"x": -3.05, "y_start": -4.30, "y_step": -0.80, "box": (-3.45,-3.90,-2.65, 2.45), "label": "Ripple"},
     "Institucional": {"x": -0.95, "y_start": -2.45, "y_step": -0.80, "box": (-1.35,-1.95,-0.55, 2.55), "label": "Institucional"},
     "Exchange":      {"x":  1.15, "y_start": -0.20, "y_step": -0.70, "box": ( 0.75, 2.20, 1.55, 2.95), "label": "Exchanges"},
     "ODL":           {"x": -8.60, "y_start": -2.10, "y_step": -0.80, "box": (-8.95,-1.65,-8.25, 2.25), "label": "Americas"},
@@ -900,6 +903,17 @@ ENTITY_CANONICAL_ALIASES: Dict[str, str] = {
     "pboc": "People's Bank of China (PBoC)",
     "p b o c": "People's Bank of China (PBoC)",
     "banco popular de china": "People's Bank of China (PBoC)",
+    "banco popular chino": "People's Bank of China (PBoC)",
+    "banco central chino": "People's Bank of China (PBoC)",
+    "banco central de china": "People's Bank of China (PBoC)",
+    "banco del pueblo de china": "People's Bank of China (PBoC)",
+    "people bank of china": "People's Bank of China (PBoC)",
+    "peoples bank china": "People's Bank of China (PBoC)",
+    "people s bank china": "People's Bank of China (PBoC)",
+    "people's bank china": "People's Bank of China (PBoC)",
+    "pbo china": "People's Bank of China (PBoC)",
+    "人民银行": "People's Bank of China (PBoC)",
+    "中國人民銀行": "People's Bank of China (PBoC)",
     "digital yuan": "e-CNY (Digital Yuan)",
     "e-cny": "e-CNY (Digital Yuan)",
     "ecny": "e-CNY (Digital Yuan)",
@@ -945,6 +959,12 @@ ENTITY_CANONICAL_ALIASES: Dict[str, str] = {
     "fmi": "IMF",
     "ecb": "European Central Bank",
     "bce": "European Central Bank",
+    "banco central europeo": "European Central Bank",
+    "european central bank": "European Central Bank",
+    "european centrakl bank": "European Central Bank",
+    "banco centakl europeo": "European Central Bank",
+    "banco centrakl europeo": "European Central Bank",
+    "eurosystem": "European Central Bank",
     "boe": "Bank of England",
     "mas": "MAS Singapore",
     "rbi": "Reserve Bank of India",
@@ -1040,8 +1060,79 @@ ENTITY_CANONICAL_ALIASES: Dict[str, str] = {
     "banco republica colombia ripple": "Banco de la República",
     "banco de la republica ripple": "Banco de la República",
     "banco de la republica colombia ripple": "Banco de la República",
+    # Ripple CBDC Platform — producto Ripple, no banco central.
+    "ripple cbdc platform": "Ripple CBDC Platform",
+    "cbdc platform": "Ripple CBDC Platform",
+    "ripple cbdc": "Ripple CBDC Platform",
+    "ripple central bank digital currency platform": "Ripple CBDC Platform",
+    # Actores Colombia.
+    "peersyst": "Peersyst",
+    "peer syst": "Peersyst",
+    "peersyst technology": "Peersyst",
+    "mintic": "MinTIC Colombia",
+    "min tic": "MinTIC Colombia",
+    "mintic colombia": "MinTIC Colombia",
+    "ministerio tic": "MinTIC Colombia",
+    "ministerio de tecnologias": "MinTIC Colombia",
+    "ministerio de tecnologias de la informacion y las comunicaciones": "MinTIC Colombia",
+    "cbdc mdbc": "CBDC / MDBC",
+    "cbdc / mdbc": "CBDC / MDBC",
+    "mdbc": "CBDC / MDBC",
+    "moneda digital banco central": "CBDC / MDBC",
+    "sistema de pagos de alto valor": "Sistema de pagos de alto valor",
+    "high value payment system": "Sistema de pagos de alto valor",
+    "large value payment system": "Sistema de pagos de alto valor",
 }
 
+
+
+# ── Clasificación fuerte para nodos sensibles del Discovery ────────────────
+# Estas reglas pisan capas contaminadas por palabras del texto fuente. Ejemplo:
+# "Ripple CBDC Platform" contiene CBDC/stablecoin, pero visualmente pertenece a
+# infraestructura Ripple; "Peersyst" es proveedor; "MinTIC" es gobierno.
+def _forced_layer_icon_for_node_name(name: Any) -> Tuple[str, str]:
+    key = _norm_key(name)
+    compact = key.replace(" ", "")
+    forced = {
+        "ripple cbdc platform": ("Ripple", "💠"),
+        "ripplecbdcplatform": ("Ripple", "💠"),
+        "cbdc platform": ("Ripple", "💠"),
+        "cbdcplatform": ("Ripple", "💠"),
+        "ripple cbdc": ("Ripple", "💠"),
+        "ripplecbdc": ("Ripple", "💠"),
+        "peersyst": ("Proveedor", "🧰"),
+        "peer syst": ("Proveedor", "🧰"),
+        "peersyst technology": ("Proveedor", "🧰"),
+        "peersysttechnology": ("Proveedor", "🧰"),
+        "mintic": ("Gobierno", "🏛️"),
+        "min tic": ("Gobierno", "🏛️"),
+        "mintic colombia": ("Gobierno", "🏛️"),
+        "minticcolombia": ("Gobierno", "🏛️"),
+        "ministerio tic": ("Gobierno", "🏛️"),
+        "ministerio de tecnologias": ("Gobierno", "🏛️"),
+        "cbdc mdbc": ("CBDC", "🏦"),
+        "cbdcmdbc": ("CBDC", "🏦"),
+        "mdbc": ("CBDC", "🏦"),
+        "cbdc / mdbc": ("CBDC", "🏦"),
+        "sistema de pagos de alto valor": ("Privado", "⚙️"),
+        "sistemadepagosdealtovalor": ("Privado", "⚙️"),
+        "sistema pagos alto valor": ("Privado", "⚙️"),
+        "high value payment system": ("Privado", "⚙️"),
+        "large value payment system": ("Privado", "⚙️"),
+    }
+    return forced.get(key) or forced.get(compact) or ("", "")
+
+def _should_force_inferred_layer(name: Any, current_layer: Any, inferred_layer: Any) -> bool:
+    """Decide si una inferencia local debe pisar la capa que vino de IA/cache.
+
+    No queremos reubicar todos los nodos por capricho, pero sí corregir casos
+    conocidos en los que el texto trae stablecoin/CBDC y contamina el layer.
+    """
+    forced_layer, _forced_icon = _forced_layer_icon_for_node_name(name)
+    if forced_layer and inferred_layer == forced_layer:
+        return True
+    cl = _normalize_layer(str(current_layer or ""))
+    return cl in {"Descubierto", "Institucional", "Privado", "Stablecoins"}
 
 
 def _infer_layer_icon_from_name(name: Any, fallback_layer: str = "Descubierto", fallback_icon: str = "🔎") -> Tuple[str, str]:
@@ -1062,6 +1153,10 @@ def _infer_layer_icon_from_name(name: Any, fallback_layer: str = "Descubierto", 
 
     def has_any(words: List[str]) -> bool:
         return any(w in t for w in words for t in texts if t)
+
+    forced_layer, forced_icon = _forced_layer_icon_for_node_name(raw)
+    if forced_layer:
+        return forced_layer, forced_icon
 
     # Ripple core / productos propios: antes que Fintech para no degradar "Ripple Payments".
     if has_any(["ripple payments", "ripplenet", "on demand liquidity", "odl"]):
@@ -1743,6 +1838,12 @@ RELATION_VERBS: Tuple[str, ...] = (
     "uses", "using", "built on", "build on", "integrat", "connect", "powered by",
     "launch", "announc", "select", "choose", "customer", "client", "acquir", "acquisition",
     "custody", "custodian", "settlement", "liquidity", "off-ramp", "on-ramp",
+    # Español / portugués frecuente en resúmenes y fuentes reconstruidas
+    "colabora", "colaboracion", "colaboración", "asociacion", "asociación", "alianza",
+    "socio", "socios", "se asocia", "se asoció", "participa", "participan", "piloto",
+    "prototipo", "prueba", "explora", "explorar", "evalua", "evalúa", "usa", "utiliza",
+    "basado en", "conecta", "integracion", "integración", "liquidacion", "liquidación",
+    "pagos de alto valor", "plataforma", "anuncia", "lanzamiento",
     "ripple payments", "ripplenet", "odl", "on-demand liquidity", "xrp ledger", "xrpl", "rlusd"
 )
 
@@ -1954,7 +2055,11 @@ def _register_dynamic_node(conn: sqlite3.Connection, name: str, layer: str, icon
     layer = _safe_dynamic_layer_name(layer)
     auto_layer, auto_icon, _auto_reason = _autonomous_category_from_context(cname, summary, source_url, layer)
     inferred_layer, inferred_icon = _infer_layer_icon_from_name(cname, layer, icon or "🔎")
-    if auto_layer and (_layer_is_generic_for_dynamic(layer) or layer == "Descubierto"):
+    if _should_force_inferred_layer(cname, layer, inferred_layer) and inferred_layer in ZONE_POS:
+        layer = inferred_layer
+        if not icon or icon in {"?", "🔎", "•"} or str(layer) in {"Stablecoins", "CBDC"}:
+            icon = inferred_icon
+    elif auto_layer and (_layer_is_generic_for_dynamic(layer) or layer == "Descubierto"):
         layer = auto_layer
         if not icon or icon in {"?", "🔎", "•"}:
             icon = auto_icon
@@ -2074,6 +2179,10 @@ CONNECTS_TO_NODE: Dict[str, str] = {
 # Mastercard o SEPA/ACH no queden muertos si se limpian las rutas dinámicas.
 # Las conexiones confirmadas siguen entrando por dynamic_routes + connection_proofs.
 ROUTES = [
+    # Infraestructura Ripple descubierta/semilla: CBDC Platform pertenece a Ripple,
+    # pero sus huellas públicas a vigilar pasan por XRPL/Public Gateway.
+    ("Ripple CBDC Platform", "XRPL", "technology_basis", "public_xrpl_score", "Ripple CBDC Platform → XRPL · base tecnológica pública a vigilar"),
+    ("Ripple CBDC Platform", "Public Gateway", "watch_only", "public_gateway_score", "Ripple CBDC Platform → Public Gateway · punto de vigilancia, no prueba operativa"),
     # Rails privados / públicos vigilados por el radar
     ("SWIFT", "Topology Engine", "watch_only", "institutional_route_score", "SWIFT → vigilancia topológica"),
     ("SWIFT", "Treasury", "watch", "institutional_route_score", "SWIFT ↔ Ripple Treasury/GTreasury · conector certificado/vigilancia"),
@@ -2172,6 +2281,87 @@ ROUTES = [
     ("Rail", "Topology Engine", "watch_only", "institutional_route_score", "Rail → vigilancia topológica"),
     ("Ripple Escrow", "Large Transfers", "watch_only", "large_transfer_score", "Ripple Escrow → grandes transferencias"),
 ]
+
+# =============================================================================
+# v137 · CAPA DE VIGILANCIA PUBLICA OBLIGATORIA PARA INFRAESTRUCTURA RIPPLE
+# =============================================================================
+# Arquitectura correcta del mapa:
+# - La identidad del nodo se mantiene en su zona real: Ripple, CBDC, Gobierno,
+#   Proveedor, etc.
+# - Public Gateway NO es la categoria de toda la infraestructura Ripple.
+# - Public Gateway/XRPL son el borde donde el radar debe vigilar si una ruta
+#   privada toca liquidez publica, stablecoins, on/off-ramps o actividad ledger.
+#
+# Estas rutas NO afirman uso operativo, TX real ni RLUSD en cada caso. Son
+# aristas obligatorias de vigilancia: si la infraestructura sale al mundo publico,
+# el radar debe mirar aqui primero.
+RIPPLE_PUBLIC_TRACE_INFRA_NODES: List[str] = [
+    "Ripple Payments",
+    "Rail",
+    "Treasury",
+    "Custody/Metaco",
+    "Standard Custody",
+    "Hidden Road / Prime",
+    "Permissioned DEX",
+    "Ripple CBDC Platform",
+    "Ripple Escrow",
+]
+
+PUBLIC_TRACE_WATCHPOINTS: List[str] = [
+    "Public Gateway",
+    "XRPL",
+]
+
+PUBLIC_GATEWAY_DETAIL_WATCHPOINTS: List[str] = [
+    "Trustlines",
+    "DEX/AMM",
+    "Large Transfers",
+    "Clusters",
+]
+
+
+def _append_route_unique_v137(src: str, dst: str, kind: str, signal: str, label: str) -> None:
+    """Añade una ruta estatica sin duplicar pares existentes.
+
+    Se usa para vigilancia publica obligatoria. Si ya existe una ruta mas fuerte
+    entre A y B (por ejemplo core_infra), no se crea otra paralela que ensucie el
+    mapa. Asi evitamos que Ripple Payments→XRPL o Treasury→XRPL se dupliquen.
+    """
+    try:
+        pair = tuple(sorted([str(src).strip(), str(dst).strip()]))
+        existing_pairs = {tuple(sorted([str(r[0]).strip(), str(r[1]).strip()])) for r in ROUTES}
+        if pair in existing_pairs:
+            return
+        ROUTES.append((src, dst, kind, signal, label))
+    except Exception:
+        # Si algo falla, no debe tumbar la app.
+        pass
+
+
+for _infra_node in RIPPLE_PUBLIC_TRACE_INFRA_NODES:
+    _append_route_unique_v137(
+        _infra_node,
+        "Public Gateway",
+        "public_trace_watch",
+        "public_gateway_score",
+        f"{_infra_node} → Public Gateway · vigilancia publica obligatoria si toca on/off-ramp, gateway o liquidez publica; no prueba operativa",
+    )
+    _append_route_unique_v137(
+        _infra_node,
+        "XRPL",
+        "public_trace_watch",
+        "public_xrpl_score",
+        f"{_infra_node} → XRPL · borde publico a vigilar si toca ledger publico; no prueba de uso actual",
+    )
+
+for _watchpoint in PUBLIC_GATEWAY_DETAIL_WATCHPOINTS:
+    _append_route_unique_v137(
+        "Public Gateway",
+        _watchpoint,
+        "monitoring_link",
+        "public_gateway_score",
+        f"Public Gateway → {_watchpoint} · subzona de vigilancia publica XRPL",
+    )
 
 
 # Pares internos del stack Ripple que deben mostrarse como infraestructura core, no como "sin verificar".
@@ -3383,6 +3573,22 @@ def load_metrics(conn: sqlite3.Connection) -> pd.DataFrame:
 # INTERPRETATION
 # =============================================================================
 
+RRP_DOCUMENTED_ROUTE_KINDS_V143 = {
+    "official", "official_announcement", "official_partner", "press_release", "primary_source",
+    "partner_page", "central_bank_pdf", "official_pdf", "official_document", "filing",
+    "regulatory_filing_pdf", "technology_basis", "documented_product_platform",
+    "documented_pilot", "documented_platform", "documented_partner", "government_pilot",
+    "documented", "verified_documentary", "case_study", "partner_case_study", "product_platform",
+    "cbdc_pilot", "pilot", "ripple_infra", "payment_rail", "system_rail",
+    "documented_infra", "infrastructure", "infrastructure_partner", "institutional_route",
+}
+RRP_WATCH_ROUTE_KINDS_V143 = {
+    "watch", "watch_only", "monitoring_link", "ecosystem_watch", "discovered", "model", "future", "future_watch",
+    "deductive_watch", "infra_deduction", "transitive_watch", "onchain_watch", "stablecoin_watch",
+    "public_trace_watch", "public_watchpoint", "indirect_watch", "review", "candidate", "inferred",
+    "speculative", "public_gateway_watch", "needs_review", "pending_verification",
+}
+
 def route_signal(row: pd.Series, route: Tuple[str, str, str, str, str]) -> float:
     _, _, kind, signal, _ = route
     s = float(row.get(signal, 0.0))
@@ -3393,6 +3599,14 @@ def route_signal(row: pd.Series, route: Tuple[str, str, str, str, str]) -> float
     if kind == "weak_evidence":
         # Una prueba débil no debe desaparecer del mapa confirmado: se ve, pero con línea discontinua/naranja.
         return clamp(max(s, 0.42))
+    if kind == "public_trace_watch":
+        # Vigilancia publica obligatoria: no es prueba operativa, pero debe ser visible.
+        return clamp(max(s, 0.50))
+    if kind in RRP_DOCUMENTED_ROUTE_KINDS_V143:
+        # Ruta documental/piloto: debe verse aunque la métrica diaria esté baja.
+        return clamp(max(s, 0.46))
+    if kind in RRP_WATCH_ROUTE_KINDS_V143:
+        return clamp(max(s, 0.38))
     if kind == "future":
         s *= 0.40
     return clamp(s)
@@ -3409,6 +3623,10 @@ def route_color(row: pd.Series, route: Tuple[str, str, str, str, str]) -> str:
         return "#22C55E"    # verde confirmado — verificado por investigación
     if kind == "weak_evidence":
         return "#F59E0B"    # naranja — hay evidencia guardada, pero no suficiente para confirmación fuerte
+    if kind == "public_trace_watch":
+        return "#F97316"    # naranja vivo — punto publico obligatorio de vigilancia, no prueba operativa
+    if kind in RRP_DOCUMENTED_ROUTE_KINDS_V143:
+        return "#F59E0B"    # ámbar — prueba documental/piloto/no operativa
     if kind == "core_infra":
         return "#14F195"    # verde XRPL core — infraestructura interna Ripple
     if kind == "real":
@@ -3446,6 +3664,10 @@ def route_dash(route: Tuple[str, str, str, str, str]) -> str:
         return "solid"      # confirmado/on-chain/público/core Ripple-XRPL
     if kind == "weak_evidence":
         return "dash"       # evidencia débil: visible en confirmadas, pero sin venderla como confirmación fuerte
+    if kind == "public_trace_watch":
+        return "dash"       # vigilancia obligatoria publica: visible, pero no afirmacion operativa
+    if kind in RRP_DOCUMENTED_ROUTE_KINDS_V143:
+        return "dashdot"    # documental/piloto: visible, pero no se vende como operación on-chain
     if kind == "obligatory":
         return "dash"       # deducción técnica declarada; debe verse como regla/estructura, no como TX directa
     if kind in {"watch_only", "monitoring_link"}:
@@ -3652,6 +3874,7 @@ _ROUTE_KIND_RANK: Dict[str, int] = {
     "watch": 5,
     "watch_only": 8,
     "monitoring_link": 8,
+    "public_trace_watch": 4,
     "ecosystem_watch": 5,
     "future": 6,
     "model": 7,
@@ -3672,6 +3895,7 @@ _ROUTE_KIND_LABEL: Dict[str, Tuple[str, str]] = {
     "watch": ("👁 vigilada/indirecta", "#B673FF"),
     "watch_only": ("🔭 observación del radar", "#64748B"),
     "monitoring_link": ("🧠 vigilancia interna", "#38BDF8"),
+    "public_trace_watch": ("🛰 vigilancia pública obligatoria", "#F97316"),
     "ecosystem_watch": ("👁 contexto ecosistema", "#A78BFA"),
     "future": ("🔮 futura", "#8CA0B8"),
     "model": ("🧠 modelo", "#60A5FA"),
@@ -3688,6 +3912,193 @@ def _route_kind_badge_inline(kind: str) -> str:
         f"<span style='color:{color};border:1px solid {color}55;border-radius:999px;"
         f"padding:2px 7px;background:rgba(0,0,0,.22);font-size:.72rem;white-space:nowrap'>{lbl}</span>"
     )
+
+
+# =============================================================================
+# v140 · NOTIFICACIONES VISUALES EN NODOS DEL MAPA
+# =============================================================================
+# Objetivo UX:
+# - Que el mapa no sea solo un dibujo: cada nodo avisa si hay algo pendiente.
+# - La categoria del nodo dice "qué es"; la notificación dice "qué falta verificar".
+# - Evita confusión entre: prueba fuerte, evidencia documental, vigilancia pública
+#   obligatoria, línea débil y nodo descubierto con baja confianza.
+
+_MAP_NOTICE_VERIFY_KINDS: Set[str] = {
+    "weak_evidence", "discovered", "watch", "ecosystem_watch",
+    "deductive_watch", "infra_deduction", "transitive_watch",
+    "future", "future_watch", "onchain_watch", "stablecoin_watch",
+}
+
+_MAP_NOTICE_PUBLIC_TRACE_KINDS: Set[str] = {
+    "public_trace_watch",
+}
+
+_MAP_NOTICE_DOCUMENT_SCOPE_KINDS: Set[str] = {
+    "technology_basis", "documented_product_platform", "documented_pilot",
+    "documented_platform", "documented_partner", "government_pilot",
+    "official_announcement", "official_partner", "press_release",
+    "primary_source", "partner_page", "central_bank_pdf",
+}
+
+_MAP_NOTICE_MONITOR_KINDS: Set[str] = {
+    "monitoring_link", "watch_only", "model",
+}
+
+_MAP_NOTICE_STRONG_KINDS: Set[str] = {
+    "real", "public", "verified", "odl", "partner", "public_wallet",
+    "core_infra", "private", "institutional", "government_payment_rail",
+}
+
+
+def _map_route_notice_bucket(kind: Any) -> str:
+    k = str(kind or "").strip().lower()
+    if k in _MAP_NOTICE_VERIFY_KINDS:
+        return "verify"
+    if k in _MAP_NOTICE_PUBLIC_TRACE_KINDS:
+        return "public_trace"
+    if k in _MAP_NOTICE_DOCUMENT_SCOPE_KINDS:
+        return "document_scope"
+    if k in _MAP_NOTICE_MONITOR_KINDS:
+        return "monitor"
+    if k in _MAP_NOTICE_STRONG_KINDS:
+        return "strong"
+    return ""
+
+
+def _trim_notice_line(text: Any, limit: int = 120) -> str:
+    s = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(s) <= limit:
+        return s
+    return s[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _build_map_node_notifications(all_routes: List, all_nodes: Dict, conn: Optional[sqlite3.Connection] = None) -> Dict[str, Dict[str, Any]]:
+    """Calcula avisos por nodo para dibujarlos encima del mapa.
+
+    Devuelve por nodo:
+    - badge: texto corto del globo (⚠️2, 🛰3, 🧾1, 👁4, ✅)
+    - color: color del globo
+    - hover: explicación exacta de qué hay que mirar/verificar
+
+    No cambia la base de datos ni decide rutas. Solo traduce el estado del mapa
+    en señales visuales para que el usuario sepa dónde actuar.
+    """
+    notices: Dict[str, Dict[str, Any]] = {}
+
+    def ensure_node(n: str) -> Dict[str, Any]:
+        return notices.setdefault(n, {
+            "verify": [],
+            "public_trace": [],
+            "document_scope": [],
+            "monitor": [],
+            "strong": [],
+            "node_review": [],
+            "verified": False,
+        })
+
+    verified_nodes: Set[str] = set()
+    if conn is not None:
+        try:
+            for (vn,) in conn.execute("SELECT node FROM node_verifications WHERE connected=1").fetchall():
+                cvn = _canonical_display_node(vn)
+                if cvn:
+                    verified_nodes.add(cvn)
+        except Exception:
+            pass
+
+        # Nodos dinámicos con confianza baja/media: no son falsos, pero sí deben avisar
+        # de que falta revisar clasificación/fuentes antes de tratarlos como infraestructura estable.
+        try:
+            for name, layer, conf, summary in conn.execute(
+                "SELECT name, layer, confidence, summary FROM dynamic_nodes"
+            ).fetchall():
+                cname = _canonical_display_node(name)
+                if not cname or cname not in all_nodes:
+                    continue
+                try:
+                    c = float(conf or 0.0)
+                except Exception:
+                    c = 0.0
+                if cname not in verified_nodes and c < 0.55:
+                    ensure_node(cname)["node_review"].append(
+                        f"Validar clasificación/fuentes del nodo descubierto · confianza {c*100:.0f}% · capa {layer or '?'}"
+                    )
+        except Exception:
+            pass
+
+    for vn in verified_nodes:
+        if vn in all_nodes:
+            ensure_node(vn)["verified"] = True
+
+    seen_lines: Set[Tuple[str, str, str, str]] = set()
+    for r in all_routes or []:
+        if len(r) < 5:
+            continue
+        src = _canonical_display_node(r[0])
+        dst = _canonical_display_node(r[1])
+        if not src or not dst or src not in all_nodes or dst not in all_nodes:
+            continue
+        kind = str(r[2] or "").strip().lower()
+        bucket = _map_route_notice_bucket(kind)
+        if not bucket:
+            continue
+        label = _trim_notice_line(r[4], 130)
+        line = f"{src} → {dst} · {kind} · {label}"
+        key = (src, dst, kind, label)
+        if key in seen_lines:
+            continue
+        seen_lines.add(key)
+        for node in (src, dst):
+            ensure_node(node)[bucket].append(line)
+
+    payload: Dict[str, Dict[str, Any]] = {}
+    for node, data in notices.items():
+        verify_n = len(data.get("verify", [])) + len(data.get("node_review", []))
+        public_n = len(data.get("public_trace", []))
+        doc_n = len(data.get("document_scope", []))
+        mon_n = len(data.get("monitor", []))
+        verified = bool(data.get("verified"))
+
+        if verify_n:
+            badge, color, title = f"⚠️{verify_n}", "#F97316", "Pendiente de verificar"
+        elif public_n:
+            badge, color, title = f"🛰{public_n}", "#FB923C", "Punto de vigilancia pública"
+        elif doc_n:
+            badge, color, title = f"🧾{doc_n}", "#FCD34D", "Revisar alcance documental"
+        elif mon_n:
+            badge, color, title = f"👁{mon_n}", "#38BDF8", "Vigilancia interna del radar"
+        elif verified:
+            badge, color, title = "✅", "#22C55E", "Nodo validado"
+        else:
+            continue
+
+        lines: List[str] = []
+        if data.get("node_review"):
+            lines.append("<b>⚠️ Nodo/categoría por revisar</b>")
+            lines.extend(html.escape(_trim_notice_line(x, 150)) for x in data["node_review"][:4])
+        if data.get("verify"):
+            lines.append("<b>⚠️ Líneas que requieren verificación</b>")
+            lines.extend(html.escape(_trim_notice_line(x, 150)) for x in data["verify"][:6])
+        if data.get("public_trace"):
+            lines.append("<b>🛰 Huella pública a vigilar</b>")
+            lines.extend(html.escape(_trim_notice_line(x, 150)) for x in data["public_trace"][:6])
+        if data.get("document_scope"):
+            lines.append("<b>🧾 Documento: revisar alcance</b>")
+            lines.extend(html.escape(_trim_notice_line(x, 150)) for x in data["document_scope"][:6])
+        if data.get("monitor"):
+            lines.append("<b>👁 Motor/radar observando</b>")
+            lines.extend(html.escape(_trim_notice_line(x, 150)) for x in data["monitor"][:4])
+        if verified:
+            lines.append("<b>✅ Ya tiene validación guardada</b>")
+
+        payload[node] = {
+            "badge": badge,
+            "color": color,
+            "title": title,
+            "hover": f"<b>{html.escape(node)}</b><br>{html.escape(title)}<br>" + "<br>".join(lines[:22]),
+            "priority": 4 if verify_n else 3 if public_n else 2 if doc_n else 1 if mon_n else 0,
+        }
+    return payload
 
 
 def _build_route_adjacency(all_routes: List, all_nodes: Dict) -> Dict[str, List[Tuple[str, tuple]]]:
@@ -4569,7 +4980,7 @@ def make_map(row: pd.Series,
     route_filter:
       "all"          — todas las rutas (por defecto)
       "confirmed"    — rutas verificadas + core XRPL + evidencia débil visible
-                       (kinds: real, public, private, obligatory, odl, partner, public_wallet, core_infra, weak_evidence)
+                       (kinds: real, public, private, obligatory, odl, partner, public_wallet, core_infra, weak_evidence, public_trace_watch)
       "surveillance" — solo rutas de vigilancia/inferencia
                        (kinds: watch, discovered, model, future)
     """
@@ -4586,7 +4997,7 @@ def make_map(row: pd.Series,
         (-7.90, -0.70, -7.20, 1.85, "Europa"),
         (-6.85, -2.05, -6.15, 2.05, "Asia-Pac"),
         (-5.60, -1.10, -4.80, 2.70, "Infraestructura"),
-        (-3.45, -3.10, -2.65, 2.45, "Ripple"),
+        (-3.45, -3.90, -2.65, 2.45, "Ripple"),
         (-1.35, -1.95, -0.55, 2.55, "Institucional"),
         (0.75,  2.20,  1.55, 2.95, "Exchanges"),
         (0.75, -3.75,  1.55, 2.00, "Vigilancia"),
@@ -4686,14 +5097,24 @@ def make_map(row: pd.Series,
 
     # Filtrar rutas según el modo del mapa
     _CONFIRMED_KINDS  = {
-        "real", "public", "private", "verified", "obligatory", "odl", "partner",
+        # Operativo / público / prueba fuerte
+        "real", "onchain", "public", "private", "verified", "obligatory", "odl", "partner",
         "public_wallet", "official", "official_announcement", "official_partner",
         "press_release", "primary_source", "partner_page", "central_bank_pdf",
-        "institutional", "government_payment_rail", "core_infra", "weak_evidence"
+        "official_pdf", "official_document", "filing", "regulatory_filing_pdf",
+        "institutional", "institutional_route", "government_payment_rail", "core_infra", "weak_evidence",
+        # Documental/piloto: visible en confirmadas, pero normalmente con línea no-operativa.
+        "technology_basis", "documented_product_platform", "documented_pilot",
+        "documented_platform", "documented_partner", "government_pilot",
+        "documented", "verified_documentary", "case_study", "partner_case_study",
+        "product_platform", "cbdc_pilot", "pilot", "ripple_infra", "payment_rail",
+        "system_rail", "documented_infra", "infrastructure", "infrastructure_partner",
     }
     _SURVEILLANCE_KINDS = {
         "watch", "watch_only", "monitoring_link", "ecosystem_watch", "discovered", "model", "future", "future_watch",
-        "deductive_watch", "infra_deduction", "transitive_watch", "onchain_watch", "stablecoin_watch", "watch_only"
+        "deductive_watch", "infra_deduction", "transitive_watch", "onchain_watch", "stablecoin_watch",
+        "public_trace_watch", "public_watchpoint", "indirect_watch", "review", "candidate", "inferred",
+        "speculative", "public_gateway_watch", "needs_review", "pending_verification",
     }
     if route_filter == "confirmed":
         _all_routes = [r for r in _all_routes if r[2] in _CONFIRMED_KINDS]
@@ -4790,8 +5211,12 @@ def make_map(row: pd.Series,
         "Otro":          "#64748B",   # pizarra — sin clasificar
     }
 
+    # v140: avisos por nodo del mapa (qué verificar, qué es vigilancia pública, qué es solo documental).
+    _node_notices = _build_map_node_notifications(_all_routes, _all_nodes, conn)
+
     xs, ys, texts, colors, sizes, hovers, opacities, borders, border_widths, node_names = \
         [], [], [], [], [], [], [], [], [], []
+    _badge_xs, _badge_ys, _badge_texts, _badge_colors, _badge_hovers = [], [], [], [], []
     _big_nodes = {"XRPL", "RLUSD", "Public Gateway", "Ripple Payments", "Topology Engine"}
     for name, meta in _all_nodes.items():
         x, y = meta["pos"]
@@ -4801,25 +5226,42 @@ def make_map(row: pd.Series,
         base_size  = 62 if name in _big_nodes else 44
 
         nname = str(name).strip()
+        _visible_node = False
         if not focus_node:
             texts.append(f"{meta['icon']}<br>{name}")
             colors.append(base_color); sizes.append(base_size)
             opacities.append(0.98); borders.append("#FFFFFF"); border_widths.append(2.8)
+            _visible_node = True
         elif nname == focus_node:
             texts.append(f"{meta['icon']}<br>{name}")
             colors.append(base_color); sizes.append(base_size + 18)
             opacities.append(1.0); borders.append("#FFFFFF"); border_widths.append(5.0)
+            _visible_node = True
         elif nname in _focus_connected:
             texts.append(f"{meta['icon']}<br>{name}")
             colors.append(base_color); sizes.append(base_size)
             opacities.append(1.0); borders.append("#FFFFFF"); border_widths.append(2.8)
+            _visible_node = True
         else:
             # Nodo no conectado: completamente invisible — sin texto, sin círculo
             texts.append("")
             colors.append("rgba(0,0,0,0)"); sizes.append(0)
             opacities.append(0.0); borders.append("rgba(0,0,0,0)"); border_widths.append(0)
 
-        hovers.append(f"<b>{name}</b><br>{meta['layer']}<br><i>Click para filtrar rutas</i>")
+        _notice = _node_notices.get(nname) or {}
+        _notice_hover = _notice.get("hover") or ""
+        hovers.append(
+            f"<b>{name}</b><br>{meta['layer']}<br>"
+            + (_notice_hover + "<br>" if _notice_hover else "")
+            + "<i>Click para filtrar rutas</i>"
+        )
+        if _visible_node and _notice.get("badge"):
+            # Pequeño globo arriba/derecha del nodo. El hover explica exactamente qué falta mirar.
+            _badge_xs.append(x + 0.28)
+            _badge_ys.append(y + 0.28)
+            _badge_texts.append(str(_notice.get("badge")))
+            _badge_colors.append(str(_notice.get("color") or "#F97316"))
+            _badge_hovers.append(_notice_hover or f"<b>{html.escape(nname)}</b><br>Revisión pendiente")
 
     fig.add_trace(go.Scatter(
         x=xs, y=ys, mode="markers+text",
@@ -4831,6 +5273,18 @@ def make_map(row: pd.Series,
         hoverinfo="text", hovertext=hovers, showlegend=False,
         hoverlabel=dict(bgcolor="#1e293b", font=dict(color="#FFFFFF", size=13), bordercolor="#5AD7FF"),
     ))
+
+    if _badge_xs:
+        fig.add_trace(go.Scatter(
+            x=_badge_xs, y=_badge_ys, mode="markers+text",
+            marker=dict(size=24, color=_badge_colors, opacity=0.96,
+                        line=dict(width=2, color="#FFFFFF"), symbol="circle"),
+            text=_badge_texts, textposition="middle center",
+            textfont=dict(size=9, color="#020617", family="Arial Black"),
+            hoverinfo="text", hovertext=_badge_hovers,
+            name="🔔 Avisos de verificación", showlegend=True,
+            hoverlabel=dict(bgcolor="#1e293b", font=dict(color="#FFFFFF", size=12), bordercolor="#F97316"),
+        ))
 
     # Etiqueta del nodo foco encima del mapa
     if focus_node and focus_node in _all_nodes:
@@ -5086,13 +5540,27 @@ def make_map(row: pd.Series,
     except Exception:
         _x_min, _x_max = -9.30, 10.10
 
+    if _badge_xs:
+        fig.add_annotation(
+            xref="paper", yref="paper", x=0.0, y=1.085, xanchor="left", yanchor="bottom",
+            text=(
+                "<b>🔔 Avisos del mapa:</b> "
+                "⚠️ verificar · 🛰 vigilar huella pública · 🧾 revisar alcance documental · "
+                "👁 motor observando · ✅ validado"
+            ),
+            showarrow=False, align="left",
+            font=dict(size=11, color="#E2E8F0"),
+            bgcolor="rgba(15,23,42,0.86)", bordercolor="rgba(255,255,255,0.18)",
+            borderwidth=1, borderpad=5,
+        )
+
     fig.update_layout(
         title=dict(text=title, font=dict(size=22, color="#FFFFFF")),
         template="plotly_dark",
         paper_bgcolor="#07111f",
         plot_bgcolor="#07111f",
         height=map_height,
-        margin=dict(l=20, r=20, t=70, b=32),
+        margin=dict(l=20, r=20, t=98, b=32),
         xaxis=dict(visible=False, range=[_x_min, _x_max]),
         yaxis=dict(visible=False, range=[y_bottom, 3.70]),
         font=dict(color="#FFFFFF"),
@@ -11209,6 +11677,11 @@ _KNOWN_NATIVE_NAMES: Dict[str, tuple] = {
     "banco de la reserva de india": ("hi", "भारतीय रिज़र्व बैंक"),
 }
 
+# Compatibilidad: algunas funciones antiguas llaman NATIVE_ENTITY_HINTS.
+# Debe apuntar al diccionario real de nombres nativos para evitar que
+# búsquedas en español como "banco popular chino" pierdan el alias 中国人民银行.
+NATIVE_ENTITY_HINTS = _KNOWN_NATIVE_NAMES
+
 # System prompt compartido por las dos funciones de validación A↔B
 _AUDIT_SYSTEM_PROMPT = (
     "Eres un auditor de evidencias financieras. Buscas rastros VERIFICABLES de conexiones "
@@ -15762,22 +16235,25 @@ def reclassify_all_dynamic_nodes(conn: sqlite3.Connection) -> int:
         "FinTech", "Fintech", "RedPrivada", "Clearing", "Puente", "Proveedor",
         "Banca_AM", "Banca_EU", "Banca_AP", "Privado", "Ripple",
         "Institucional", "Vigilancia", "Inteligencia", "Publico", "Futuro",
+        "Stablecoins", "TokenizacionRWA", "ISO20022", "IdentidadKYC",
+        "DataOracles", "AgenticPayments", "Descubierto",
     }
     rows = conn.execute("SELECT node_id, name, layer, icon FROM dynamic_nodes").fetchall()
     fixed = 0
     for node_id, name, layer, icon in rows:
-        if layer in VALID_LAYERS:
-            continue
         # Intentar resolver el nombre canonico primero
         canonical = _canonical_entity_name(name)
         new_layer, new_icon = _infer_layer_icon_from_name(canonical, layer, icon or "🔎")
+        needs_fix = (layer not in VALID_LAYERS) or _should_force_inferred_layer(canonical, layer, new_layer)
+        if not needs_fix:
+            continue
         if new_layer not in VALID_LAYERS:
             # Si el nombre canonico no ayuda, intentar con _classify_entity
             et = _classify_entity(canonical)
             if et and et != "Otro":
                 new_layer = et
-        if new_layer in VALID_LAYERS and new_layer != layer:
-            final_icon = new_icon if (not icon or icon in {"?", "🔎", "•"}) else icon
+        if new_layer in VALID_LAYERS and (new_layer != layer or canonical != name):
+            final_icon = new_icon if (not icon or icon in {"?", "🔎", "•"} or _should_force_inferred_layer(canonical, layer, new_layer)) else icon
             conn.execute(
                 "UPDATE dynamic_nodes SET name=?, layer=?, icon=? WHERE node_id=?",
                 (canonical, new_layer, final_icon, node_id)
@@ -16525,6 +17001,15 @@ def _route_allowed_by_proof_first(result: Dict[str, Any], src: str, dst: str,
     if usable:
         best = max(usable, key=lambda x: float(x.get("confidence", conf) or conf))
         return True, kind, str(best.get("claim") or evidence_text), float(best.get("confidence", conf) or conf), urls
+    # v144: si la decisión viene marcada explícitamente como watch/deductiva y trae claim concreto,
+    # debe aparecer en el mapa de vigilancia aunque el destino no sea STRICT_PROOF_TARGETS.
+    # Ejemplo: Ripple CBDC Platform -> Public Gateway como punto de vigilancia pública.
+    if deductive:
+        best_d = max(deductive, key=lambda x: float(x.get("confidence", conf) or conf))
+        ev = str(best_d.get("claim") or evidence_text or f"Ruta watch hacia {dst}")
+        k_in = str(kind or "").strip().lower()
+        watch_kind = kind if k_in in {x.lower() for x in RRP_WATCH_ROUTE_KINDS_V143} else "deductive_watch"
+        return True, watch_kind, ev, min(float(best_d.get("confidence", conf) or conf), 0.55), urls
     # Fallback muy restringido: no aceptar frases genéricas tipo "partner detectado".
     # Para dibujar sin route_decision explícita debe haber texto específico y fuentes reales.
     src_urls = []
@@ -16571,6 +17056,11 @@ def apply_discovery_to_map(conn: sqlite3.Connection, result: Dict[str, Any],
     - guarda evidencias y URLs para que aparezcan en la leyenda inferior.
     """
     ensure_discovery_tables(conn)
+    try:
+        if callable(globals().get("ensure_sanitizer_tables")):
+            ensure_sanitizer_tables(conn)
+    except Exception:
+        pass
     try:
         ensure_discovered_wallets_table(conn)
     except Exception:
@@ -16679,8 +17169,11 @@ def apply_discovery_to_map(conn: sqlite3.Connection, result: Dict[str, Any],
         if not cn:
             return ""
         inferred_layer, inferred_icon = _infer_layer_icon_from_name(cn, lyr, ic)
-        final_layer = inferred_layer if _layer_is_generic_for_dynamic(lyr) and inferred_layer in ZONE_POS else _normalize_layer(lyr)
-        final_icon = inferred_icon if (not ic or ic in {"?", "🔎", "•"}) else ic
+        if _should_force_inferred_layer(cn, lyr, inferred_layer) and inferred_layer in ZONE_POS:
+            final_layer = inferred_layer
+        else:
+            final_layer = inferred_layer if _layer_is_generic_for_dynamic(lyr) and inferred_layer in ZONE_POS else _normalize_layer(lyr)
+        final_icon = inferred_icon if (not ic or ic in {"?", "🔎", "•"} or _should_force_inferred_layer(cn, lyr, inferred_layer)) else ic
         if _register_dynamic_node(conn, cn, final_layer, final_icon, confidence * conf_mult,
                                   summary or f"Punto descubierto conectado a {name}",
                                   srcs or sources_blob, now):
@@ -17054,6 +17547,11 @@ def load_dynamic_map_elements(conn: sqlite3.Connection) -> Tuple[Dict, List, Lis
     - new_zone_boxes: lista de (x0,y0,x1,y1,label,color) para zonas nuevas a dibujar
     """
     ensure_discovery_tables(conn)
+    try:
+        if callable(globals().get("ensure_sanitizer_tables")):
+            ensure_sanitizer_tables(conn)
+    except Exception:
+        pass
     dyn_nodes: Dict[str, Any] = {}
     dyn_routes: List[Tuple] = []
     new_zone_boxes: List[Tuple] = []
@@ -17084,12 +17582,13 @@ def load_dynamic_map_elements(conn: sqlite3.Connection) -> Tuple[Dict, List, Lis
                 _nl = name.lower()
                 if any(kw in _nl for kw in ("odl", "corridor", "corredor", "remit")):
                     layer = "ODL"
-            # Si el nodo quedó sin clasificar o en zona genérica, re-inferir la capa desde el nombre
-            if _layer_is_generic_for_dynamic(layer) or layer not in ZONE_POS:
+            # Si el nodo quedó sin clasificar, o si es un nodo conocido mal clasificado
+            # por palabras tipo CBDC/stablecoin, re-inferir la capa desde el nombre.
+            if _layer_is_generic_for_dynamic(layer) or layer not in ZONE_POS or _forced_layer_icon_for_node_name(name)[0]:
                 inferred_layer, inferred_icon = _infer_layer_icon_from_name(name, layer, icon or "🔎")
-                if inferred_layer in ZONE_POS:
+                if inferred_layer in ZONE_POS and (_should_force_inferred_layer(name, layer, inferred_layer) or _layer_is_generic_for_dynamic(layer) or layer not in ZONE_POS):
                     layer = inferred_layer
-                    if not icon or icon in {"?", "🔎", "•"}:
+                    if not icon or icon in {"?", "🔎", "•"} or _forced_layer_icon_for_node_name(name)[0]:
                         icon = inferred_icon
 
             if layer in ZONE_POS:
@@ -17139,10 +17638,16 @@ def load_dynamic_map_elements(conn: sqlite3.Connection) -> Tuple[Dict, List, Lis
         try:
             existing_confirmed_pairs = set()
             confirmed_like = {
-                "real", "public", "private", "verified", "obligatory", "odl", "partner",
+                "real", "onchain", "public", "private", "verified", "obligatory", "odl", "partner",
                 "public_wallet", "official", "official_announcement", "official_partner",
                 "press_release", "primary_source", "partner_page", "central_bank_pdf",
-                "institutional", "government_payment_rail", "core_infra", "weak_evidence"
+                "official_pdf", "official_document", "filing", "regulatory_filing_pdf",
+                "institutional", "institutional_route", "government_payment_rail", "core_infra", "weak_evidence",
+                "technology_basis", "documented_product_platform", "documented_pilot",
+                "documented_platform", "documented_partner", "government_pilot",
+                "documented", "verified_documentary", "case_study", "partner_case_study",
+                "product_platform", "cbdc_pilot", "pilot", "ripple_infra", "payment_rail",
+                "system_rail", "documented_infra", "infrastructure", "infrastructure_partner",
             }
             for _rs, _rd, _rk, *_rest in list(ROUTES) + list(dyn_routes):
                 if str(_rk) in confirmed_like:
@@ -18325,6 +18830,30 @@ def _rrp_cascade_item_key(name: Any) -> str:
     return _canonical_entity_key(_canonical_entity_name(name))
 
 
+# v141 · Los nodos públicos no son "instituciones" para tirar de cascada.
+# Son puntos de vigilancia del mapa: se miran desde XRPL/on-chain, no lanzando
+# una investigación documental como si XRPL fuese un banco o proveedor.
+_RRP_PUBLIC_WATCHPOINT_NODE_NAMES: Set[str] = {
+    "XRPL", "RLUSD", "Ethereum", "Public Gateway", "Trustlines",
+    "DEX/AMM", "Large Transfers", "Clusters",
+}
+_RRP_PUBLIC_WATCHPOINT_KEYS: Set[str] = {_canonical_entity_key(x) for x in _RRP_PUBLIC_WATCHPOINT_NODE_NAMES}
+
+
+def _rrp_is_public_watchpoint_node(name: Any) -> bool:
+    return _rrp_cascade_item_key(name) in _RRP_PUBLIC_WATCHPOINT_KEYS
+
+
+def _rrp_public_watchpoint_hint(name: Any, parent: Any = "") -> str:
+    n = _canonical_entity_name(name)
+    p = _canonical_entity_name(parent)
+    if n == "XRPL":
+        return f"{p + ' → ' if p else ''}XRPL es un punto de vigilancia on-chain: buscar wallets, trustlines, DEX/AMM o TX reales; no investigarlo como institución en cascada."
+    if n == "RLUSD":
+        return f"{p + ' → ' if p else ''}RLUSD solo debe activarse con issuer, trustline, pago o fuente explícita; no por mención genérica a stablecoins."
+    return f"{p + ' → ' if p else ''}{n} es una subzona de vigilancia pública; revisar señales on-chain/DEX/cluster, no lanzar cascada documental."
+
+
 def _rrp_cascade_done_keys() -> Set[str]:
     """Entidades ya investigadas en este árbol Discovery, incluyendo histórico viejo."""
     done: Set[str] = set(st.session_state.get("rrp_cascade_done_keys", set()) or set())
@@ -18367,6 +18896,9 @@ def _rrp_normalize_cascade_queue() -> List[Dict[str, Any]]:
             reason = "hilo derivado heredado"
         if not name or name in {"Descubierto", "?"}:
             continue
+        # v141: limpiar colas antiguas que tenían XRPL/RLUSD/Public Gateway como cascada.
+        if _rrp_is_public_watchpoint_node(name):
+            continue
         key = _rrp_cascade_item_key(name)
         if not key or key in seen or key in done:
             continue
@@ -18382,6 +18914,11 @@ def _rrp_cascade_push(name: Any, *, parent: Any = "", depth: int = 1, reason: st
         name = _canonical_entity_name(name)
         parent = _canonical_entity_name(parent or st.session_state.get("rrp_discovery_tree_root") or st.session_state.get("disc_root_query") or "")
         if not name or name in {"Descubierto", "?"}:
+            return False
+        # v141: XRPL/RLUSD/Public Gateway/DEX/etc. son puntos de vigilancia,
+        # no hilos documentales de cascada. Evita tarjetas absurdas tipo
+        # "Cascada — XRPL desde European Central Bank".
+        if _rrp_is_public_watchpoint_node(name):
             return False
         if depth > RRP_CASCADE_MAX_DEPTH:
             return False
@@ -18455,6 +18992,14 @@ def _rrp_record_discovery_step(result: Dict[str, Any], *, source: str = "auto") 
             return
         parent = str(st.session_state.get("disc_cascade_parent", "") or "").strip()
         is_cascade = bool(st.session_state.get("disc_cascade_active")) or bool(parent)
+        # v141: si por estado antiguo alguien llegó a lanzar XRPL/RLUSD/etc.
+        # como cascada, no lo registramos como resultado documental.
+        if is_cascade and _rrp_is_public_watchpoint_node(name):
+            st.session_state.pop("rrp_cascade_inflight_key", None)
+            st.session_state["disc_cascade_active"] = False
+            st.session_state["disc_cascade_parent"] = ""
+            st.session_state.pop("disc_cascade_depth", None)
+            return
         explicit_depth = st.session_state.get("disc_cascade_depth", None)
         root = str(st.session_state.get("disc_root_query", "") or st.session_state.get("disc_query", "") or name)
         if not st.session_state.get("rrp_discovery_tree") or (not is_cascade and _canonical_entity_key(name) != _canonical_entity_key(st.session_state.get("rrp_discovery_tree_root", name)) and source == "manual"):
@@ -18468,6 +19013,22 @@ def _rrp_record_discovery_step(result: Dict[str, Any], *, source: str = "auto") 
             # consumir correctamente el estado de cascada. Antes se hacía return
             # aquí, dejando disc_cascade_active/depth vivos; después el seed
             # podía reencolar hijos con un nivel incorrecto o repetir la raíz.
+            # v139: si el usuario pulsa "Buscar novedades", permitimos refrescar
+            # la tarjeta existente con el nuevo resultado aunque la clave sea la misma.
+            _refresh_key = str(st.session_state.pop("rrp_force_refresh_entity_key", "") or "").strip()
+            if _refresh_key and _refresh_key == _rrp_cascade_item_key(name):
+                for _idx, _old in enumerate(tree):
+                    if _old.get("key") == rkey or _rrp_cascade_item_key(_old.get("institution", "")) == _refresh_key:
+                        _old["key"] = rkey
+                        _old["institution"] = name
+                        _old["result"] = result
+                        _old["ts"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+                        _old["source"] = "refresh"
+                        if parent:
+                            _old["parent"] = parent
+                        tree[_idx] = _old
+                        st.session_state["rrp_discovery_tree"] = tree[-40:]
+                        break
             _rrp_mark_cascade_done(name)
             _inflight_key = str(st.session_state.pop("rrp_cascade_inflight_key", "") or "").strip()
             if _inflight_key:
@@ -18612,6 +19173,293 @@ def _rrp_route_rows_for_result(result: Dict[str, Any]) -> List[Dict[str, Any]]:
     return rows
 
 
+
+
+def _rrp_route_identity_key(row: Dict[str, Any]) -> str:
+    """Clave visual estable para de-duplicar rutas equivalentes en Discovery."""
+    try:
+        return "|".join([
+            _canonical_entity_key(row.get("src", "")),
+            _canonical_entity_key(row.get("dst", "")),
+            str(row.get("kind", "")).strip().lower(),
+            str(row.get("verdict", "")).strip().lower(),
+        ])
+    except Exception:
+        return str(row)
+
+
+def _rrp_dedupe_route_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        key = _rrp_route_identity_key(r)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
+
+
+def _rrp_result_has_mappable_routes(result: Dict[str, Any]) -> bool:
+    """True si hay algo útil que guardar en el mapa sin esperar botón manual."""
+    if not isinstance(result, dict):
+        return False
+    if result.get("_do_not_cascade") or result.get("_api_temporal_error") or result.get("_api_transient_error"):
+        return False
+    rows = _rrp_dedupe_route_rows(_rrp_route_rows_for_result(result))
+    for rr in rows:
+        verdict = str(rr.get("verdict", ""))
+        if verdict.startswith("✅") or "débil" in verdict:
+            return True
+    return bool(result.get("partners") or result.get("map_points") or result.get("wallets") or result.get("corridors"))
+
+
+def _rrp_autopilot_apply_routes_once(conn: sqlite3.Connection, result: Dict[str, Any]) -> Dict[str, Any]:
+    """Aplica rutas/nodos válidos una sola vez por resultado.
+
+    El objetivo UX es que Discovery no obligue al usuario a pulsar un botón oculto
+    para que las líneas aparezcan en Radar. Proof-First sigue decidiendo qué se
+    guarda y qué queda solo en revisión.
+    """
+    info: Dict[str, Any] = {}
+    try:
+        if not st.session_state.get("disc_autopilot_map_routes", True):
+            return {}
+        if not _rrp_result_has_mappable_routes(result):
+            return {}
+        key = "rrp_autopilot_map_applied_" + _rrp_result_key(result)
+        if st.session_state.get(key):
+            return st.session_state.get(key) or {}
+        info = apply_discovery_to_map(conn, result, auto=True)
+        st.session_state[key] = info
+        return info
+    except Exception as exc:
+        return {"error": str(exc), "added_routes": 0, "added_nodes": 0}
+
+
+
+def _rrp_cache_meta_for_entity(conn: sqlite3.Connection, name: Any, search_type: str = "discovery") -> Dict[str, Any]:
+    """Devuelve metadatos ligeros de caché sin incrementar contadores.
+
+    v139: usado solo para UX. Permite que la pestaña "Nodos derivados" diga
+    si una línea ya existe en caché antes de que el usuario pulse nada.
+    """
+    meta: Dict[str, Any] = {"exists": False, "searched_at": "", "expires_at": "", "hit_count": 0, "query": ""}
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        keys = _cache_alias_keys(str(name or ""), search_type)
+        # Compatibilidad con bases antiguas: puede faltar expires_at/hit_count/search_type.
+        def fetch_direct(k: str):
+            try:
+                return conn.execute(
+                    "SELECT query, searched_at, expires_at, hit_count FROM institution_search_cache WHERE query=? AND (expires_at IS NULL OR expires_at > ?)",
+                    (k, now),
+                ).fetchone()
+            except Exception:
+                try:
+                    row = conn.execute(
+                        "SELECT query, searched_at FROM institution_search_cache WHERE query=?",
+                        (k,),
+                    ).fetchone()
+                    if row:
+                        return (row[0], row[1], "", 0)
+                except Exception:
+                    return None
+            return None
+
+        for k in keys:
+            row = fetch_direct(k)
+            if row:
+                return {"exists": True, "query": row[0], "searched_at": row[1] or "", "expires_at": row[2] or "", "hit_count": int(row[3] or 0)}
+        for k in keys:
+            try:
+                alias = conn.execute(
+                    "SELECT canonical_query FROM search_cache_aliases WHERE alias_key=? AND search_type=?",
+                    (k, search_type),
+                ).fetchone()
+            except Exception:
+                alias = None
+            if alias:
+                row = fetch_direct(alias[0])
+                if row:
+                    return {"exists": True, "query": row[0], "searched_at": row[1] or "", "expires_at": row[2] or "", "hit_count": int(row[3] or 0), "alias": k}
+    except Exception:
+        pass
+    return meta
+
+
+def _rrp_derived_line_status(conn: sqlite3.Connection, node: Any) -> Dict[str, Any]:
+    """Estado humano de una línea/nodo derivado para no mostrar un botón ambiguo.
+
+    Estados:
+    - investigated: ya forma parte del árbol actual.
+    - queued: ya está en cola de cascada.
+    - cached: hay resultado cacheado y puede abrirse sin gastar API.
+    - fresh: todavía no se ha investigado en este flujo ni existe caché usable.
+    """
+    node_name = _canonical_entity_name(node)
+    key = _rrp_cascade_item_key(node_name)
+    meta = _rrp_cache_meta_for_entity(conn, node_name, "discovery")
+    try:
+        done = _rrp_cascade_done_keys()
+    except Exception:
+        done = set()
+    try:
+        q = _rrp_normalize_cascade_queue()
+        qkeys = {_rrp_cascade_item_key(x.get("name")) for x in q}
+    except Exception:
+        qkeys = set()
+    in_tree = False
+    tree_ts = ""
+    try:
+        for it in st.session_state.get("rrp_discovery_tree", []) or []:
+            if _rrp_cascade_item_key(it.get("institution", "")) == key:
+                in_tree = True
+                tree_ts = str(it.get("ts") or "")
+                break
+    except Exception:
+        pass
+    if key and (key in done or in_tree):
+        return {
+            "state": "investigated",
+            "label": "✅ Ya investigada en este flujo",
+            "hint": "No hace falta repetirla. Puedes buscar novedades si quieres consultar internet otra vez sin borrar lo anterior.",
+            "cache": meta,
+            "tree_ts": tree_ts,
+        }
+    if key and key in qkeys:
+        return {
+            "state": "queued",
+            "label": "⏳ Pendiente en la cascada",
+            "hint": "La línea ya está preparada. Puedes esperar a 'Investigar siguiente' o abrirla ahora.",
+            "cache": meta,
+            "tree_ts": "",
+        }
+    if meta.get("exists"):
+        ts = str(meta.get("searched_at") or "")[:16].replace("T", " ")
+        return {
+            "state": "cached",
+            "label": "💾 Ya existe en caché",
+            "hint": f"Abrir desde caché no gasta API" + (f" · última búsqueda: {ts}" if ts else ""),
+            "cache": meta,
+            "tree_ts": "",
+        }
+    return {
+        "state": "fresh",
+        "label": "🆕 Todavía no investigada",
+        "hint": "Si la abres, primero revisará caché/memoria; solo usará API si no hay nada reutilizable.",
+        "cache": meta,
+        "tree_ts": "",
+    }
+
+
+def _rrp_launch_derived_line_search(node: Any, *, parent: Any = "", depth: int = 1, reason: str = "línea derivada", force_online: bool = False) -> str:
+    """Prepara una búsqueda de Discovery desde una línea derivada.
+
+    v139: centraliza el comportamiento de botones para que "abrir caché",
+    "investigar ahora" y "buscar novedades" usen el mismo estado y no mezclen nombres.
+    """
+    node_to_search = _canonical_entity_name(node)
+    # v141: los watchpoints públicos no se abren como investigación documental.
+    # Dejar una notificación y NO activar disc_pending_query evita que la app
+    # llame a la API con "XRPL" y reconstruya resultados SWIFT/Treasury sin relación.
+    if _rrp_is_public_watchpoint_node(node_to_search):
+        st.session_state["rrp_public_watch_notice"] = _rrp_public_watchpoint_hint(node_to_search, parent)
+        try:
+            st.session_state["cascade_queue"] = [
+                q for q in _rrp_normalize_cascade_queue()
+                if _rrp_cascade_item_key(q.get("name")) != _rrp_cascade_item_key(node_to_search)
+            ]
+        except Exception:
+            pass
+        return node_to_search
+    st.session_state["disc_pending_query"] = node_to_search
+    st.session_state["disc_active_query"] = node_to_search
+    st.session_state["disc_raw_query"] = node_to_search
+    st.session_state["disc_normalized_query"] = node_to_search
+    st.session_state["rrp_cascade_inflight_key"] = _rrp_cascade_item_key(node_to_search)
+    st.session_state["disc_cascade_active"] = True
+    st.session_state["disc_cascade_parent"] = _canonical_entity_name(parent or st.session_state.get("rrp_discovery_tree_root") or st.session_state.get("disc_root_query") or "")
+    st.session_state["disc_cascade_depth"] = max(1, min(int(depth or 1), RRP_CASCADE_MAX_DEPTH))
+    st.session_state["disc_cascade_reason"] = reason or "línea derivada"
+    if force_online:
+        st.session_state["disc_force_online_once"] = True
+        st.session_state["rrp_force_refresh_entity_key"] = _rrp_cascade_item_key(node_to_search)
+    else:
+        st.session_state.pop("disc_force_online_once", None)
+    try:
+        _k = _rrp_cascade_item_key(node_to_search)
+        st.session_state["cascade_queue"] = [
+            q for q in _rrp_normalize_cascade_queue()
+            if _rrp_cascade_item_key(q.get("name")) != _k
+        ]
+    except Exception:
+        pass
+    st.session_state.pop("disc_result", None)
+    return node_to_search
+
+def _rrp_render_route_rows_compact(route_rows: List[Dict[str, Any]], item: Dict[str, Any], result: Dict[str, Any]) -> None:
+    """Resumen visible de rutas justo debajo de las métricas.
+
+    Antes el usuario veía 'Rutas candidatas: 5', pero tenía que abrir la pestaña
+    correcta para saber cuáles eran. Ahora el número y las rutas exactas viven juntos.
+    """
+    rows = _rrp_dedupe_route_rows(route_rows)
+    if not rows:
+        return
+    base_key = str(item.get("key") or _rrp_result_key(result))
+    st.markdown("#### 🧭 Rutas detectadas en esta investigación")
+    st.caption("Estas son las rutas exactas que cuenta el indicador. El veredicto dice si se guardan en el mapa o si quedan solo en revisión.")
+    for idx, rr in enumerate(rows[:8], start=1):
+        src = str(rr.get("src") or result.get("institution") or "?")
+        dst = str(rr.get("dst") or "?")
+        kind = str(rr.get("kind") or "ruta")
+        claim = str(rr.get("claim") or "")[:520]
+        verdict = str(rr.get("verdict") or "👁 revisión")
+        reason = str(rr.get("reason") or "")
+        css = "rrp-proof-card-ok" if verdict.startswith("✅") else "rrp-proof-card-watch" if ("débil" in verdict or "revisión" in verdict) else "rrp-proof-card-bad"
+        st.markdown(f"""
+<div class='rrp-proof-card {css}'>
+  <div class='rrp-proof-kicker'>ruta {idx} · {html.escape(kind)}</div>
+  <div class='rrp-proof-card-title'>{html.escape(src)} → {html.escape(dst)}</div>
+  <div class='rrp-proof-note'><b>{html.escape(verdict)}</b> · {html.escape(reason)}</div>
+  <div class='rrp-proof-note'>{html.escape(claim)}</div>
+</div>
+""", unsafe_allow_html=True)
+        b1, b2, b3 = st.columns([1, 1, 2])
+        with b1:
+            if dst and dst != "?" and st.button("🔎 Investigar destino", key=f"route_investigate_dst_{base_key}_{idx}_{_canonical_entity_key(dst)}", use_container_width=True):
+                next_depth = min(int(item.get("depth", 0) or 0) + 1, RRP_CASCADE_MAX_DEPTH)
+                node_to_search = _canonical_entity_name(dst)
+                st.session_state["disc_pending_query"] = node_to_search
+                st.session_state["disc_active_query"] = node_to_search
+                st.session_state["disc_raw_query"] = node_to_search
+                st.session_state["disc_normalized_query"] = node_to_search
+                st.session_state["rrp_cascade_inflight_key"] = _rrp_cascade_item_key(node_to_search)
+                st.session_state["disc_cascade_active"] = True
+                st.session_state["disc_cascade_parent"] = src or result.get("institution", "")
+                st.session_state["disc_cascade_depth"] = next_depth
+                st.session_state["disc_cascade_reason"] = f"destino de ruta detectada: {src} → {dst}"
+                try:
+                    _k = _rrp_cascade_item_key(node_to_search)
+                    st.session_state["cascade_queue"] = [
+                        q for q in _rrp_normalize_cascade_queue()
+                        if _rrp_cascade_item_key(q.get("name")) != _k
+                    ]
+                except Exception:
+                    pass
+                st.session_state.pop("disc_result", None)
+                st.rerun()
+        with b2:
+            focus_node = _canonical_entity_name(dst if dst and dst != "?" else src)
+            if focus_node and st.button("🎯 Ver en Radar", key=f"route_focus_radar_{base_key}_{idx}_{_canonical_entity_key(focus_node)}", use_container_width=True):
+                st.session_state["map_focus_node"] = focus_node
+                st.success("Nodo preparado. Abre Radar y aparecerá enfocado con sus líneas.")
+    if len(rows) > 8:
+        st.caption(f"Hay {len(rows) - 8} ruta(s) más en la pestaña 'Rutas/mapa'.")
+
 def _rrp_render_sources_list(items: List[Dict[str, str]], *, empty: str = "Sin fuentes en esta categoría.") -> None:
     if not items:
         st.caption(empty)
@@ -18670,8 +19518,10 @@ def _rrp_render_discovery_result_card(item: Dict[str, Any], conn: sqlite3.Connec
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Pruebas válidas", len(evidence_items))
         c2.metric("PDF/primarias", len(src_groups.get("pdf", [])) + len(src_groups.get("official", [])))
-        c3.metric("Rutas candidatas", len(route_rows))
+        c3.metric("Rutas detectadas", len(_rrp_dedupe_route_rows(route_rows)))
         c4.metric("On-chain", status_onchain)
+
+        _rrp_render_route_rows_compact(route_rows, item, result)
 
         tabs = st.tabs(["🧾 Pruebas", "📄 PDFs/oficiales", "🧭 Rutas/mapa", "💧 On-chain", "🧩 Nodos derivados"])
         with tabs[0]:
@@ -18694,9 +19544,9 @@ def _rrp_render_discovery_result_card(item: Dict[str, Any], conn: sqlite3.Connec
             st.markdown("**PDFs y fuentes primarias/oficiales**")
             _rrp_render_sources_list(src_groups.get("pdf", []) + src_groups.get("official", []), empty="No se encontraron PDFs ni fuentes oficiales claras para esta entidad.")
         with tabs[2]:
-            st.markdown("**Qué rutas se añaden al mapa y cuáles quedan solo en revisión**")
+            st.markdown("**Rutas exactas: añadidas al mapa, vigilancia débil o solo revisión**")
             if route_rows:
-                for rr in route_rows[:18]:
+                for rr in _rrp_dedupe_route_rows(route_rows)[:18]:
                     css = "rrp-proof-card-ok" if str(rr["verdict"]).startswith("✅") else "rrp-proof-card-watch" if "débil" in str(rr["verdict"]) or "revisión" in str(rr["verdict"]) else "rrp-proof-card-bad"
                     st.markdown(f"""
 <div class='rrp-proof-card {css}'>
@@ -18746,9 +19596,12 @@ def _rrp_render_discovery_result_card(item: Dict[str, Any], conn: sqlite3.Connec
         with tabs[4]:
             derived = _rrp_extract_derived_nodes_from_result_v126(result)
             if not derived:
-                st.caption("No hay nodos derivados claros para seguir la cascada.")
+                st.caption("No hay líneas derivadas claras para seguir la cascada.")
             else:
-                st.caption("Nodos derivados de pruebas/fuentes/rutas. No son pruebas por sí mismos: sirven para tirar del hilo de forma ordenada.")
+                st.caption(
+                    "Líneas sugeridas por las pruebas/rutas. No son pruebas por sí mismas. "
+                    "Cada una muestra si ya fue investigada, si está en cola, si existe en caché o si todavía falta abrirla."
+                )
             for d in derived[:28]:
                 typ = d.get("type", "derived")
                 node = d.get("name", "")
@@ -18756,44 +19609,58 @@ def _rrp_render_discovery_result_card(item: Dict[str, Any], conn: sqlite3.Connec
                 conn_to = d.get("connects_to", "")
                 reason = d.get("reason", "")
                 decision = d.get("decision", "investigate")
-                col1, col2 = st.columns([4,1])
+                is_public_watchpoint = _rrp_is_public_watchpoint_node(node) or str(decision or "").lower() in {"watch_only", "public_watchpoint"}
+                status = _rrp_derived_line_status(conn, node)
+                if is_public_watchpoint:
+                    status = {
+                        "state": "watchpoint",
+                        "label": "🛰 Punto de vigilancia pública",
+                        "hint": _rrp_public_watchpoint_hint(node, conn_to or name),
+                        "cache": status.get("cache", {}),
+                        "tree_ts": status.get("tree_ts", ""),
+                    }
+                next_depth = min(int(item.get("depth", 0) or 0) + 1, RRP_CASCADE_MAX_DEPTH)
+                col1, col2, col3 = st.columns([4, 1.15, 1.15])
                 with col1:
                     extra = []
                     if layer: extra.append(f"capa: **{layer}**")
-                    if conn_to: extra.append(f"conecta/relaciona: **{conn_to}**")
-                    if decision: extra.append(f"acción: **{decision}**")
+                    if conn_to: extra.append(f"relaciona: **{conn_to}**")
+                    if decision and decision != "investigate": extra.append(f"acción sugerida: **{decision}**")
                     st.markdown(f"- `{node}` · {typ}" + (" · " + " · ".join(extra) if extra else ""))
+                    st.caption(f"{status['label']} · {status['hint']}")
                     if reason:
                         st.caption(reason)
                 with col2:
-                    if st.button("Investigar", key=f"cascade_from_card_{item.get('key')}_{_canonical_entity_key(node)}", use_container_width=True):
-                        next_depth = min(int(item.get("depth", 0) or 0) + 1, RRP_CASCADE_MAX_DEPTH)
-                        # v133: este botón ya no solo mete el nodo en la cola; lanza
-                        # directamente la investigación del nodo pulsado y cambia el
-                        # foco visible de Discovery. Así no sigue apareciendo arriba
-                        # el nombre del resultado anterior.
-                        node_to_search = _canonical_entity_name(node)
-                        st.session_state["disc_pending_query"] = node_to_search
-                        st.session_state["disc_active_query"] = node_to_search
-                        st.session_state["disc_raw_query"] = node_to_search
-                        st.session_state["disc_normalized_query"] = node_to_search
-                        st.session_state["rrp_cascade_inflight_key"] = _rrp_cascade_item_key(node_to_search)
-                        st.session_state["disc_cascade_active"] = True
-                        st.session_state["disc_cascade_parent"] = name
-                        st.session_state["disc_cascade_depth"] = next_depth
-                        st.session_state["disc_cascade_reason"] = reason or "nodo derivado de esta tarjeta"
-                        # Quitar el duplicado de la cola si estaba pendiente.
-                        try:
-                            _k = _rrp_cascade_item_key(node_to_search)
-                            st.session_state["cascade_queue"] = [
-                                q for q in _rrp_normalize_cascade_queue()
-                                if _rrp_cascade_item_key(q.get("name")) != _k
-                            ]
-                        except Exception:
-                            pass
-                        st.session_state.pop("disc_result", None)
-                        st.success(f"Investigando ahora: {node_to_search} · nivel {next_depth}")
-                        st.rerun()
+                    state = status.get("state")
+                    if state == "watchpoint":
+                        st.button("🛰 Vigilar en mapa", key=f"derived_watch_{item.get('key')}_{_canonical_entity_key(node)}", use_container_width=True, disabled=True, help=status.get("hint", ""))
+                    elif state == "investigated":
+                        st.button("✅ Ya investigada", key=f"derived_done_{item.get('key')}_{_canonical_entity_key(node)}", use_container_width=True, disabled=True)
+                    elif state == "cached":
+                        if st.button("💾 Abrir caché", key=f"derived_cache_{item.get('key')}_{_canonical_entity_key(node)}", use_container_width=True):
+                            node_to_search = _rrp_launch_derived_line_search(node, parent=name, depth=next_depth, reason=reason or "línea derivada con caché", force_online=False)
+                            st.success(f"Abriendo desde caché/memoria: {node_to_search}")
+                            st.rerun()
+                    elif state == "queued":
+                        if st.button("⚡ Abrir ahora", key=f"derived_open_now_{item.get('key')}_{_canonical_entity_key(node)}", use_container_width=True):
+                            node_to_search = _rrp_launch_derived_line_search(node, parent=name, depth=next_depth, reason=reason or "línea pendiente en cascada", force_online=False)
+                            st.success(f"Abriendo ahora: {node_to_search}")
+                            st.rerun()
+                    else:
+                        if st.button("🔎 Investigar línea", key=f"derived_investigate_{item.get('key')}_{_canonical_entity_key(node)}", use_container_width=True):
+                            node_to_search = _rrp_launch_derived_line_search(node, parent=name, depth=next_depth, reason=reason or "línea derivada de esta tarjeta", force_online=False)
+                            st.success(f"Investigando línea: {node_to_search} · nivel {next_depth}")
+                            st.rerun()
+                with col3:
+                    # No borra nada: consulta internet de nuevo y refresca la tarjeta si cambia.
+                    # Visible solo cuando tiene sentido: ya investigada, cacheada o en cola.
+                    if status.get("state") in {"investigated", "cached", "queued"} and not is_public_watchpoint:
+                        if st.button("🌐 Novedades", key=f"derived_news_{item.get('key')}_{_canonical_entity_key(node)}", use_container_width=True, help="Fuerza una búsqueda online sin borrar caché ni rutas. Útil si crees que hay cambios nuevos."):
+                            node_to_search = _rrp_launch_derived_line_search(node, parent=name, depth=next_depth, reason=(reason or "buscar novedades de línea derivada"), force_online=True)
+                            st.success(f"Buscando novedades: {node_to_search}")
+                            st.rerun()
+                    else:
+                        st.caption("cache‑first")
 
 
 def _render_discovery_investigation_flow(conn: sqlite3.Connection, current_result: Optional[Dict[str, Any]] = None) -> None:
@@ -18801,12 +19668,30 @@ def _render_discovery_investigation_flow(conn: sqlite3.Connection, current_resul
     if current_result:
         _rrp_record_discovery_step(current_result)
     tree = st.session_state.get("rrp_discovery_tree", []) or []
+    # v141: limpiar tarjetas antiguas creadas por error donde XRPL/RLUSD/Public Gateway
+    # aparecían como cascada documental desde un banco/institución. Si el usuario busca
+    # XRPL manualmente como raíz, sí se permite.
+    try:
+        cleaned_tree = []
+        changed_tree = False
+        for _it in tree:
+            _depth = int(_it.get("depth", 0) or 0)
+            _name = _it.get("institution", "")
+            if _depth > 0 and _rrp_is_public_watchpoint_node(_name):
+                changed_tree = True
+                continue
+            cleaned_tree.append(_it)
+        if changed_tree:
+            st.session_state["rrp_discovery_tree"] = cleaned_tree
+            tree = cleaned_tree
+    except Exception:
+        pass
     if not tree and current_result:
         tree = [{"key": _rrp_result_key(current_result), "institution": current_result.get("institution",""), "parent":"", "depth":0, "source":"initial", "ts":"", "result":current_result}]
     if not tree:
         return
     st.markdown("### 🧪 Investigación ordenada")
-    st.caption("Flujo legible: primero la búsqueda inicial; después cada cascada con su propio resultado, pruebas, PDFs, rutas y validación on-chain cuando procede.")
+    st.caption("Flujo automático: primero la búsqueda inicial; después cada cascada con sus rutas exactas, pruebas, PDFs y estado on-chain. Las rutas válidas se guardan solas en el mapa si Autopiloto está activo.")
     # índice visual
     for i, item in enumerate(tree, 1):
         _rrp_render_discovery_result_card(item, conn, expanded=(i == len(tree)))
@@ -18814,7 +19699,7 @@ def _render_discovery_investigation_flow(conn: sqlite3.Connection, current_resul
     q = _rrp_normalize_cascade_queue()
     if q:
         st.markdown("### 🔗 Siguiente hilo de cascada")
-        st.caption("La cascada ahora es una cola controlada: cada hilo guarda padre, nivel y motivo. No repite entidades ya investigadas y se detiene al nivel máximo.")
+        st.caption("Siguiente nodo sugerido por las pruebas. Puedes investigar uno a uno o dejar que el flujo vaya tirando del hilo sin mezclar nombres.")
         cols = st.columns([3,1,1])
         with cols[0]:
             rows_txt = []
@@ -18847,16 +19732,14 @@ def _render_discovery_investigation_flow(conn: sqlite3.Connection, current_resul
 
 def render_discovery_engine(conn: sqlite3.Connection) -> None:
     """Panel UI del motor de descubrimiento."""
-    st.subheader("Discovery Engine — busqueda y reescritura automatica")
+    st.subheader("Discovery Engine — investigación y mapa en autopiloto")
     st.markdown("""
 <div class='rrp-path-panel'>
 <div class='rrp-path-title'>Como funciona</div>
 <div class='rrp-path-text'>
-Introduce el nombre de cualquier institucion (banco, exchange, fondo, fintech...).
-El motor busca pruebas verificables en internet, PDFs, comunicados oficiales, filings y fuentes primarias.
-Solo reescribe el mapa si encuentra una conexion demostrable con Ripple / XRPL / RLUSD o con un nodo del mapa.
-Cada ruta debe traer producto usado, tipo de evidencia, fuente y explicacion. Si no hay prueba suficiente,
-el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como conexion confirmada</b>.
+Introduce una institución o nodo. El motor busca pruebas, separa rutas fuertes, vigilancia débil y simples pistas.
+Si una ruta pasa Proof‑First, se guarda automáticamente en el mapa; si no, queda visible como revisión sin dibujarse como certeza.
+Después propone el siguiente hilo de cascada para seguir investigando sin mezclar nombres ni niveles.
 </div>
 </div>
 """, unsafe_allow_html=True)
@@ -18868,6 +19751,9 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
     # ── Aviso API key + presupuesto ──────────────────────────────────────────
     render_budget_bar(conn)
     st.info("🧠 Modo cache-first activo: antes de gastar API, el radar revisa caché compartida, aliases normalizados, pruebas fijas y rutas ya guardadas.")
+    _watch_notice = st.session_state.pop("rrp_public_watch_notice", "")
+    if _watch_notice:
+        st.info("🛰 " + str(_watch_notice))
 
     _has_api_key = bool(_get_api_key())
     if not _has_api_key:
@@ -18901,6 +19787,14 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
         key="disc_clean_research",
         help="Borra caché, rutas dinámicas, pruebas y fichas A→B anteriores de esa entidad. No borra nodos fijos como SWIFT; solo sus asociaciones dinámicas."
     )
+    autopilot_discovery = st.checkbox(
+        "🧭 Autopiloto Discovery: guardar automáticamente rutas válidas en el mapa",
+        value=True,
+        key="disc_autopilot_map_routes",
+        help="Recomendado. Si una ruta pasa Proof‑First se guarda sola en dynamic_routes; las débiles quedan como vigilancia y las no verificadas solo como revisión."
+    )
+    if autopilot_discovery:
+        st.caption("🧭 Autopiloto activo: no necesitas pulsar 'Actualizar rutas' para que las líneas válidas aparezcan en Radar.")
     _preflight_status = _render_cache_first_status(conn, query.strip(), "discovery") if query and query.strip() else {"cache": False, "local_total": 0, "can_skip_api": False}
 
     # Guardar la query que queremos buscar en session_state para que sobreviva el rerun
@@ -19259,11 +20153,25 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
         # Contador PDF/documentos primarios siempre visible en Discovery, incluso con 0 resultados.
         st.markdown(_discovery_pdf_line_html(result), unsafe_allow_html=True)
 
+        # v135: piloto automático de mapa. Si hay rutas válidas, se guardan antes
+        # de renderizar para que Radar tenga líneas sin depender de un botón oculto.
+        _auto_map_info = _rrp_autopilot_apply_routes_once(conn, result)
+        if _auto_map_info:
+            if _auto_map_info.get("error"):
+                st.warning(f"🧭 Autopiloto mapa: no pude aplicar rutas automáticamente: {_auto_map_info.get('error')}")
+            else:
+                st.success(
+                    "🧭 Autopiloto mapa aplicado: "
+                    f"{_auto_map_info.get('added_routes',0)} rutas · "
+                    f"{_auto_map_info.get('added_nodes',0)} nodos/puntos · "
+                    f"{_auto_map_info.get('wallets_added',0)} wallets."
+                )
+
         # ── Rutas fijas + candidatas nuevas de la investigación ────────────────
         _fixed_routes_view = _static_routes_for_entity(result.get("institution", ""), limit=16)
         _future_routes_view = _result_future_routes_for_display(result, limit=16)
         if _fixed_routes_view or _future_routes_view:
-            with st.expander("🧭 Rutas fijas del mapa + posibles rutas nuevas de esta investigación", expanded=True):
+            with st.expander("🧭 Resumen de mapa: rutas existentes y rutas nuevas detectadas", expanded=True):
                 if _fixed_routes_view:
                     st.markdown("**Fijas/base ya visibles al hacer click en Radar** — son vigilancia/estructura, no prueba nueva:")
                     for rr in _fixed_routes_view[:10]:
@@ -19279,7 +20187,7 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
                     st.caption("Esta entidad no tiene rutas fijas/base en el grafo actual.")
 
                 if _future_routes_view:
-                    st.markdown("**Candidatas de la investigación actual** — se añadirán/verificarán si aceptas actualizar el mapa:")
+                    st.markdown("**Rutas nuevas de la investigación actual** — con Autopiloto activo se guardan automáticamente si pasan Proof‑First:")
                     for rr in _future_routes_view[:10]:
                         src = rr.get("src", result.get("institution", ""))
                         dst = rr.get("dst", rr.get("peer", ""))
@@ -19480,6 +20388,12 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
                     _canonical_entity_key(root_name),
                     _canonical_entity_key("XRPL"),
                     _canonical_entity_key("RLUSD"),
+                    _canonical_entity_key("Public Gateway"),
+                    _canonical_entity_key("Trustlines"),
+                    _canonical_entity_key("DEX/AMM"),
+                    _canonical_entity_key("Large Transfers"),
+                    _canonical_entity_key("Clusters"),
+                    _canonical_entity_key("Ethereum"),
                     _canonical_entity_key("RippleNet"),
                     _canonical_entity_key("Ripple Escrow"),
                 }
@@ -19491,7 +20405,7 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
                     if not name or name in {"Descubierto", "?"}:
                         return
                     key = _canonical_entity_key(name)
-                    if key in skip:
+                    if key in skip or _rrp_is_public_watchpoint_node(name):
                         return
                     if name not in candidates:
                         candidates.append(name)
@@ -19526,7 +20440,7 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
                 # también se ofrecen como cascada ordenada. No son rutas confirmadas: son hilos.
                 try:
                     for _dn in _rrp_extract_derived_nodes_from_result_v126(_result):
-                        if _dn.get("decision") != "no_cascade":
+                        if str(_dn.get("decision") or "investigate") not in {"no_cascade", "watch_only", "public_watchpoint", "review_only"}:
                             _push(_dn.get("name"))
                 except Exception:
                     pass
@@ -21880,20 +22794,60 @@ def _rrp_result_text_blob_v126(result: Dict[str, Any]) -> str:
 def _rrp_extract_derived_nodes_from_result_v126(result: Dict[str, Any]) -> List[Dict[str, str]]:
     """Extrae nodos derivados de estructura + fuentes/texto.
 
-    Corrección v126: cuando el JSON viene reconstruido o pobre, Discovery no debe
-    decir "no hay nodos derivados" si las fuentes mencionan entidades claras como
-    Peersyst, MinTIC, Ripple CBDC Platform, XRPL o CBDC/MDBC. Estos nodos son hilos
-    de investigación, no pruebas automáticas ni rutas confirmadas.
+    v138: extracción estricta por contexto.
+    - Si la IA falla y el resultado queda a 0% sin pruebas válidas, NO se sacan
+      nodos genéricos desde palabras sueltas de PDFs/fuentes.
+    - XRPL solo aparece como derivado si hay mención directa de XRPL/XRP Ledger
+      dentro de un contexto Ripple/Ripple CBDC Platform/Colombia documentado.
+    - Los conceptos genéricos (CBDC/MDBC, sistema de pagos de alto valor) se
+      conectan con la raíz investigada, no con Banco de la República por defecto.
     """
     out: List[Dict[str, str]] = []
     seen: Set[str] = set()
     root = _canonical_entity_name((result or {}).get("institution", ""))
+    root_key = _canonical_entity_key(root)
+
+    def _safe_conf(x: Any) -> float:
+        try:
+            return float(x or 0.0)
+        except Exception:
+            return 0.0
+
+    def _evidence_is_valid(e: Any) -> bool:
+        if not isinstance(e, dict):
+            return False
+        et = str(e.get("evidence_type") or e.get("type") or "").lower().strip()
+        if et in {"", "no_evidence", "not_added", "watch_only", "secondary_context", "weak_source", "source_recovered"}:
+            return False
+        if _safe_conf(e.get("confidence")) <= 0.0 and not (e.get("url") or e.get("source")):
+            return False
+        return True
+
+    def _route_is_valid(rd: Any) -> bool:
+        if not isinstance(rd, dict):
+            return False
+        et = str(rd.get("evidence_type") or rd.get("type") or "").lower().strip()
+        if et in {"", "no_evidence", "not_added"}:
+            return False
+        # watch_only sirve para pintar vigilancia si el nodo ya está validado, pero no para
+        # crear nodos derivados desde una búsqueda fallida/genérica.
+        if et == "watch_only":
+            return False
+        return bool(rd.get("to") or rd.get("target") or rd.get("connects_to"))
+
+    evidence_items = list((result or {}).get("evidence_items") or [])
+    route_decisions = list((result or {}).get("route_decisions") or [])
+    valid_evidence_count = sum(1 for e in evidence_items if _evidence_is_valid(e))
+    valid_route_count = sum(1 for r in route_decisions if _route_is_valid(r))
+    conf = _safe_conf((result or {}).get("confidence"))
+    connected = bool((result or {}).get("connected"))
+    zero_unverified = (not connected and conf <= 0.0 and valid_evidence_count == 0 and valid_route_count == 0)
 
     def add(name: Any, typ: str = "derived", layer: str = "", connects_to: Any = "", reason: str = "", decision: str = "investigate") -> None:
         n = _canonical_entity_name(name)
         if not n or n in {"?", "Descubierto"}:
             return
-        if _canonical_entity_key(n) == _canonical_entity_key(root):
+        if _canonical_entity_key(n) == root_key:
             return
         k = _canonical_entity_key(n)
         if k in seen:
@@ -21905,16 +22859,28 @@ def _rrp_extract_derived_nodes_from_result_v126(result: Dict[str, Any]) -> List[
                 lyr, _ic = _infer_layer_icon_from_name(n, "Descubierto", "🔎")
             except Exception:
                 lyr = "Descubierto"
+        rel = str(connects_to or "").strip()
+        # Nunca dejar que un concepto genérico herede Colombia como relación por defecto.
+        if n in {"CBDC / MDBC", "Sistema de pagos de alto valor", "Valores públicos digitalizados"}:
+            rel = root or rel
+        # v141: XRPL/RLUSD/Public Gateway/DEX/etc. pueden aparecer como watchpoints,
+        # pero no como líneas a investigar en cascada documental.
+        if _rrp_is_public_watchpoint_node(n):
+            decision = "watch_only"
+            typ = "public_watchpoint" if str(typ or "") in {"derived", "route_target", "technology_basis"} else typ
+            if not reason:
+                reason = _rrp_public_watchpoint_hint(n, rel or root)
         out.append({
             "name": n,
             "type": str(typ or "derived"),
             "layer": lyr,
-            "connects_to": str(connects_to or ""),
+            "connects_to": rel,
             "reason": str(reason or "")[:260],
             "decision": str(decision or "investigate"),
         })
 
-    # Estructura explícita del resultado.
+    # 1) Estructura explícita del resultado. Esto sí se respeta aunque el texto sea pobre,
+    # siempre que venga como estructura, no como palabra suelta inferida.
     for p in (result or {}).get("partners") or []:
         if isinstance(p, dict) and p.get("name"):
             add(p.get("name"), "partner", p.get("layer", ""), p.get("connects_to", ""), "Partner/nodo explícito devuelto por Discovery.")
@@ -21926,22 +22892,52 @@ def _rrp_extract_derived_nodes_from_result_v126(result: Dict[str, Any]) -> List[
         elif mp:
             add(mp, "map_point", "", "", "Punto de mapa explícito devuelto por Discovery.")
     for c in (result or {}).get("connects_to") or []:
-        add(c, "connects_to", "", "", "Destino textual detectado; requiere revisar prueba antes de mapear.")
-    for rd in (result or {}).get("route_decisions") or []:
+        add(c, "connects_to", "", root, "Destino textual detectado; requiere revisar prueba antes de mapear.")
+    for rd in route_decisions:
         if isinstance(rd, dict):
             et = str(rd.get("evidence_type") or rd.get("type") or "").lower().strip()
             if rd.get("draw_on_map") is False and et in {"no_evidence", "not_added"}:
                 continue
+            if zero_unverified and not _route_is_valid(rd):
+                continue
             decision = "investigate" if rd.get("draw_on_map", True) else "review_only"
             add(rd.get("to") or rd.get("target") or rd.get("connects_to"), "route_target", "", rd.get("from") or root, rd.get("claim") or "Target de ruta candidata.", decision)
 
-    # Inferencia conservadora desde fuentes/texto. No crea rutas; solo propone hilos.
+    # 2) Si el resultado es 0% reconstruido/sin pruebas, parar aquí. Esto evita justo
+    # el falso caso: Banco Central Europeo => XRPL/CBDC de Colombia por palabras genéricas.
+    if zero_unverified:
+        return out[:32]
+
+    # 3) Inferencia conservadora desde fuentes/texto. No crea rutas; solo propone hilos.
     blob = _rrp_result_text_blob_v126(result)
     nb = _norm_key(blob)
     lb = blob.lower()
+
+    has_colombia_context = any(x in nb for x in ["banco de la republica", "banco central de colombia", "colombia", "banrep", "mintic"])
+    has_ripple_context = any(x in nb for x in ["ripple", "ripple cbdc platform", "ripplenet", "xrp ledger", "xrpl"])
+    has_direct_xrpl_context = ("xrp ledger" in nb or "xrpl" in nb) and has_ripple_context
+
     for terms, node, layer, typ, rel, reason in _RRP_DERIVED_NODE_RULES_V126:
-        if any((t in lb) or (_norm_key(t) in nb) for t in terms):
-            add(node, typ, layer, rel, reason, "investigate")
+        node_key = _canonical_entity_key(node)
+        matched = any((t in lb) or (_norm_key(t) in nb) for t in terms)
+        if not matched:
+            continue
+        # Colombia-only actors should not appear in ECB/Fed/BIS/etc. searches unless
+        # the result actually contains Colombia/BanRep context.
+        if node in {"Peersyst", "MinTIC Colombia"} and not has_colombia_context:
+            continue
+        # XRPL is not a generic CBDC child. It only appears if the result directly says XRPL/XRP Ledger
+        # in a Ripple context, or if the primary node is Ripple CBDC Platform.
+        if node == "XRPL" and not (has_direct_xrpl_context or root_key == _canonical_entity_key("Ripple CBDC Platform")):
+            continue
+        # Ripple CBDC Platform must be explicit; do not infer it from the generic phrase "CBDC platform"
+        # unless Ripple is also in the same result.
+        if node == "Ripple CBDC Platform" and not has_ripple_context:
+            continue
+        relation = rel
+        if node in {"CBDC / MDBC", "Sistema de pagos de alto valor", "Valores públicos digitalizados"}:
+            relation = root
+        add(node, typ, layer, relation, reason, "investigate")
 
     # Caso Colombia: si hay fuentes Ripple/BanRep/Peersyst, ofrecer hilos mínimos aunque
     # el JSON no haya traído partners/map_points por venir mal formado.
@@ -21952,7 +22948,8 @@ def _rrp_extract_derived_nodes_from_result_v126(result: Dict[str, Any]) -> List[
         add("Peersyst", "partner", "Proveedor", "Banco de la República", "Aparece como socio/proveedor tecnológico del piloto.")
         add("MinTIC Colombia", "government_partner", "Gobierno", "Banco de la República", "Aparece como actor público del piloto/experimentación blockchain.")
         add("Ripple CBDC Platform", "product_platform", "Ripple", "XRPL", "Plataforma citada en la prueba oficial/Ripple.")
-        add("XRPL", "technology_basis", "Público", "Ripple CBDC Platform", "Tecnología base; hilo on-chain solo si aparece wallet/TX/trustline.")
+        if has_direct_xrpl_context:
+            add("XRPL", "technology_basis", "Público", "Ripple CBDC Platform", "Tecnología base; hilo on-chain solo si aparece wallet/TX/trustline.")
         add("CBDC / MDBC", "concept_node", "CBDC", "Banco de la República", "Tema del piloto/estudio; no equivale a emisión real.")
     return out[:32]
 
@@ -22243,7 +23240,11 @@ def _rrp_enrich_colombia_child_nodes_v130(result: Dict[str, Any], query_context:
             "Ripple describe la plataforma CBDC como basada en tecnología central del XRP Ledger/XRPL; no implica transacciones públicas del piloto.",
             "https://ripple.com/ripple-press/ripple-and-peersyst-partner-with-colombias-banco-de-la-republica-in-advancing-the-implementation-and-utilization-of-blockchain-technology/",
             "technology_basis", 0.68, "technology_basis", True)
-        _targets = ["XRPL", "CBDC / MDBC"]
+        _rrp_route_decision_unique_v126(result, "Public Gateway",
+            "Punto de vigilancia público derivado: si una implementación privada terminara tocando XRPL, el rastro observable debería aparecer en gateways, trustlines, DEX/AMM, cuentas o transferencias públicas. No es prueba operativa.",
+            "https://ripple.com/ripple-press/ripple-and-peersyst-partner-with-colombias-banco-de-la-republica-in-advancing-the-implementation-and-utilization-of-blockchain-technology/",
+            "watch_only", 0.36, "watch_only", True)
+        _targets = ["XRPL", "Public Gateway", "CBDC / MDBC"]
         if _has_colombia_context:
             _targets = ["Banco de la República", "Peersyst", "MinTIC Colombia"] + _targets
         result["connects_to"] = list(dict.fromkeys(list(result.get("connects_to") or []) + _targets))
@@ -22358,6 +23359,1067 @@ def _finalize_discovery_result(result: Dict[str, Any], institution_name: str, en
     ])
     return _rrp_enrich_colombia_child_nodes_v130(out, query_context)
 
+
+
+# v143: main() se ejecuta al final del archivo, después de cargar todos los parches.
+
+# =============================================================================
+# v142 · DEEP AUDIT CLASSIFICATION FIX
+# =============================================================================
+# Hallazgo de test profundo:
+# - La canonicalización ya corregía alias como "European Centrakl Bank" ->
+#   "European Central Bank", pero el clasificador de capa seguía mirando el texto
+#   sucio original. Resultado: una entidad canónica podía caer en Banca_AM o
+#   Descubierto si venía con typo.
+# - Los puntos públicos XRPL/RLUSD/Public Gateway/etc. deben clasificarse como
+#   puntos de vigilancia pública cuando aparecen en fichas/derivados, no como
+#   instituciones ni como Stablecoins/Descubierto por palabras sueltas.
+#
+# Esta capa no cambia la filosofía de v141: esos nodos NO se investigan en cascada;
+# solo se muestran como watchpoints/on-chain cuando proceda.
+
+BUILD_ID = "v142_2026_05_12_DEEP_AUDIT_CLASSIFICATION_FIX"
+BUILD_NOTE = "Test profundo: canon primero en clasificador + watchpoints publicos bien clasificados"
+
+_RRP_OLD_FORCED_LAYER_ICON_V142 = _forced_layer_icon_for_node_name
+
+def _forced_layer_icon_for_node_name(name: Any) -> Tuple[str, str]:
+    raw = str(name or "").strip()
+    cname = _canonical_entity_name(raw)
+    key = _canonical_entity_key(cname)
+
+    public_forced = {
+        _canonical_entity_key("XRPL"): ("Público", "💧"),
+        _canonical_entity_key("XRP Ledger"): ("Público", "💧"),
+        _canonical_entity_key("RLUSD"): ("Público", "🪙"),
+        _canonical_entity_key("Ripple USD"): ("Público", "🪙"),
+        _canonical_entity_key("Ethereum"): ("Futuro", "Ξ"),
+        _canonical_entity_key("Public Gateway"): ("Vigilancia", "🛰️"),
+        _canonical_entity_key("Trustlines"): ("Vigilancia", "🔗"),
+        _canonical_entity_key("DEX/AMM"): ("Vigilancia", "🌊"),
+        _canonical_entity_key("Large Transfers"): ("Vigilancia", "🐋"),
+        _canonical_entity_key("Clusters"): ("Vigilancia", "🧩"),
+    }
+    if key in public_forced:
+        return public_forced[key]
+
+    # Banco Central Europeo y alias con typo deben caer siempre en CBDC/banco central.
+    if cname == "European Central Bank":
+        return "CBDC", "🏦"
+
+    return _RRP_OLD_FORCED_LAYER_ICON_V142(raw)
+
+
+_RRP_OLD_INFER_LAYER_ICON_V142 = _infer_layer_icon_from_name
+
+def _infer_layer_icon_from_name(name: Any, fallback_layer: str = "Descubierto", fallback_icon: str = "🔎") -> Tuple[str, str]:
+    """Clasificador v142: primero canoniza, luego clasifica.
+
+    Evita que un typo o un alias contamine la capa visual. Ejemplo:
+    'European Centrakl Bank' se normaliza antes a 'European Central Bank'.
+    También blinda los watchpoints públicos: XRPL/RLUSD/Public Gateway no son
+    instituciones de cascada ni stablecoins genéricas; son puntos de vigilancia.
+    """
+    try:
+        cname = _canonical_entity_name(name)
+        forced_layer, forced_icon = _forced_layer_icon_for_node_name(cname)
+        if forced_layer:
+            return forced_layer, forced_icon
+        # Si la entidad canónica es un nodo estático, usar su capa real del mapa.
+        if cname in NODES:
+            meta = NODES.get(cname, {}) or {}
+            return str(meta.get("layer") or fallback_layer or "Descubierto"), str(meta.get("icon") or fallback_icon or "🔎")
+        return _RRP_OLD_INFER_LAYER_ICON_V142(cname or name, fallback_layer, fallback_icon)
+    except Exception:
+        return _RRP_OLD_INFER_LAYER_ICON_V142(name, fallback_layer, fallback_icon)
+
+
+_RRP_OLD_FINALIZE_DISCOVERY_RESULT_V142 = _finalize_discovery_result
+
+def _finalize_discovery_result(result: Dict[str, Any], institution_name: str, entity_type: str,
+                               data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    out = _RRP_OLD_FINALIZE_DISCOVERY_RESULT_V142(result, institution_name, entity_type, data)
+    try:
+        name = _canonical_entity_name(out.get("institution") or institution_name)
+        if _rrp_is_public_watchpoint_node(name):
+            layer, icon = _infer_layer_icon_from_name(name)
+            out["institution"] = name
+            out["layer"] = layer
+            out["entity_type"] = layer
+            out["icon"] = icon
+            out["route_kind"] = "public_watchpoint"
+            # No convertirlo en conexión documental por sí mismo.
+            out.setdefault("connected", False)
+            out.setdefault("confidence", 0.0)
+            out["_do_not_cascade"] = True
+            out["_public_watchpoint_only"] = True
+            out["summary"] = _rrp_public_watchpoint_hint(name, institution_name)
+            # En fichas derivadas no debe sugerir hijos de cascada.
+            out["derived_nodes"] = [
+                dn for dn in (out.get("derived_nodes") or [])
+                if not _rrp_is_public_watchpoint_node((dn or {}).get("name") or (dn or {}).get("node"))
+            ]
+    except Exception:
+        pass
+    return out
+
+# =============================================================================
+# v144 · ROUTE PERSISTENCE IN 3 MAPS + PROOF-FIRST ES FIX
+# =============================================================================
+# Hallazgo de auditoría:
+# - Algunas capas de parche se habían añadido después del guard main(); al ejecutar
+#   con `streamlit run archivo.py`, Streamlit entraba en main() antes de cargar esos
+#   parches. En importación/test sí se veían, pero en ejecución real podían no estar activos.
+# - Las rutas documentales nuevas podían guardarse en dynamic_routes y aparecer en
+#   Mapa completo, pero ciertos kind no estaban en el filtro de "Verificadas" ni en
+#   el filtro de "Vigilancia". Ahora cada ruta cae en su vista correcta.
+# - Además, Proof-First entiende verbos de relación en español: colaboración, piloto,
+#   prototipo, evalúa, basado en, etc. Así no bloquea rutas válidas por idioma.
+
+BUILD_ID = "v144_2026_05_12_ROUTE_PERSISTENCE_3MAPS_FIX"
+BUILD_NOTE = "Rutas Discovery persistentes + Proof-First bilingüe + clasificación correcta en los 3 mapas"
+
+
+def _rrp_route_visibility_bucket_v143(kind: Any) -> str:
+    """Clasificación única de rutas para depuración UX.
+
+    confirmed: debe verse en "Verificadas + core + evidencia" y en "Mapa completo".
+    surveillance: debe verse en "Vigilancia / inferidas" y en "Mapa completo".
+    all_only: solo en "Mapa completo" si no sabemos clasificarlo.
+    """
+    k = str(kind or "").strip().lower()
+    if k in {x.lower() for x in RRP_DOCUMENTED_ROUTE_KINDS_V143}:
+        return "confirmed"
+    if k in {x.lower() for x in RRP_WATCH_ROUTE_KINDS_V143}:
+        return "surveillance"
+    if k in {"real", "onchain", "public", "private", "verified", "obligatory", "odl", "partner", "public_wallet", "institutional", "government_payment_rail", "core_infra", "weak_evidence"}:
+        return "confirmed"
+    return "all_only"
+
+
+def _rrp_audit_map_route_visibility_v143(conn: sqlite3.Connection) -> Dict[str, Any]:
+    """Resumen rápido para Diagnóstico o pruebas manuales."""
+    ensure_discovery_tables(conn)
+    rows = []
+    try:
+        rows = conn.execute(
+            "SELECT src,dst,kind,confidence,label FROM dynamic_routes WHERE COALESCE(sanitizer_status,'active')!='quarantined'"
+        ).fetchall()
+    except Exception:
+        rows = []
+    out = {"total": len(rows), "confirmed": 0, "surveillance": 0, "all_only": 0, "examples": []}
+    for src, dst, kind, conf, label in rows:
+        b = _rrp_route_visibility_bucket_v143(kind)
+        out[b] = int(out.get(b, 0)) + 1
+        if len(out["examples"]) < 12:
+            out["examples"].append({"src": src, "dst": dst, "kind": kind, "bucket": b, "confidence": float(conf or 0.0), "label": label})
+    return out
+
+
+# =============================================================================
+# v145 · MULTILINGUAL ENTITY RESOLUTION FIX
+# =============================================================================
+# Problema detectado por el usuario:
+# - Si se escribía "banco popular chino" el sistema podía no encontrar nada,
+#   mientras que "中国人民银行" sí activaba la ruta correcta.
+# Causa:
+# - Había nombres nativos en _KNOWN_NATIVE_NAMES, pero no todos estaban en
+#   ENTITY_CANONICAL_ALIASES.
+# - Una función heredada llamaba NATIVE_ENTITY_HINTS aunque el diccionario real
+#   se llamaba _KNOWN_NATIVE_NAMES.
+# - La clasificación se hacía a veces sobre el alias escrito por el usuario,
+#   no sobre el nombre canónico.
+
+BUILD_ID = "v145_2026_05_12_MULTILINGUAL_ENTITY_RESOLUTION_FIX"
+BUILD_NOTE = "Alias multilenguaje + búsqueda nativa + clasificación por nombre canónico"
+
+RRP_MULTILINGUAL_ENTITY_ALIASES_V145: Dict[str, str] = {
+    # PBoC / Banco Popular de China / 中国人民银行
+    "banco popular chino": "People's Bank of China (PBoC)",
+    "banco popular de china": "People's Bank of China (PBoC)",
+    "banco central chino": "People's Bank of China (PBoC)",
+    "banco central de china": "People's Bank of China (PBoC)",
+    "banco del pueblo de china": "People's Bank of China (PBoC)",
+    "pbc": "People's Bank of China (PBoC)",
+    "pboc": "People's Bank of China (PBoC)",
+    "p b o c": "People's Bank of China (PBoC)",
+    "people bank of china": "People's Bank of China (PBoC)",
+    "peoples bank china": "People's Bank of China (PBoC)",
+    "people s bank china": "People's Bank of China (PBoC)",
+    "people's bank china": "People's Bank of China (PBoC)",
+    "people's bank of china": "People's Bank of China (PBoC)",
+    "人民银行": "People's Bank of China (PBoC)",
+    "中国人民银行": "People's Bank of China (PBoC)",
+    "中國人民銀行": "People's Bank of China (PBoC)",
+    "中国人民银行数字货币研究所": "People's Bank of China (PBoC)",
+    "数字人民币研究所": "People's Bank of China (PBoC)",
+    # e-CNY / yuan digital: no es el banco, pero debe caer como nodo CBDC propio.
+    "yuan digital": "e-CNY (Digital Yuan)",
+    "renminbi digital": "e-CNY (Digital Yuan)",
+    "digital yuan": "e-CNY (Digital Yuan)",
+    "数字人民币": "e-CNY (Digital Yuan)",
+    "数币": "e-CNY (Digital Yuan)",
+}
+
+# Inyectar aliases normalizados y literales.
+for _alias_v145, _canonical_v145 in list(RRP_MULTILINGUAL_ENTITY_ALIASES_V145.items()):
+    try:
+        ENTITY_CANONICAL_ALIASES[_alias_v145] = _canonical_v145
+        ENTITY_CANONICAL_ALIASES[_norm_key(_alias_v145)] = _canonical_v145
+    except Exception:
+        pass
+
+# Compatibilidad definitiva para funciones heredadas.
+try:
+    NATIVE_ENTITY_HINTS = _KNOWN_NATIVE_NAMES
+except Exception:
+    NATIVE_ENTITY_HINTS = {}
+
+# Añadir también los aliases españoles al diccionario de nombres nativos usado por el prompt.
+try:
+    for _pboc_alias_v145 in [
+        "banco popular chino", "banco popular de china", "banco central chino",
+        "banco central de china", "banco del pueblo de china", "people bank of china",
+        "peoples bank china", "people's bank china", "pbc", "pboc",
+    ]:
+        _KNOWN_NATIVE_NAMES.setdefault(_norm_key(_pboc_alias_v145), ("zh", "中国人民银行"))
+except Exception:
+    pass
+
+_ORIG_CLASSIFY_ENTITY_V145 = _classify_entity
+
+def _classify_entity(name: str) -> str:
+    """v145: clasifica por entidad canónica, no por alias escrito por el usuario."""
+    try:
+        canonical = _canonical_entity_name(name)
+        ck = _canonical_entity_key(canonical)
+        if ck in {
+            _canonical_entity_key("People's Bank of China (PBoC)"),
+            _canonical_entity_key("e-CNY (Digital Yuan)"),
+            _canonical_entity_key("European Central Bank"),
+            _canonical_entity_key("Bank of Japan"),
+            _canonical_entity_key("Bank of Korea"),
+            _canonical_entity_key("Bank of Russia"),
+            _canonical_entity_key("Reserve Bank of India"),
+        }:
+            return "CBDC"
+        if canonical in NODES:
+            layer = str((NODES.get(canonical) or {}).get("layer") or "")
+            if layer == "CBDC":
+                return "CBDC"
+            if layer == "Gobierno":
+                return "Gobierno"
+            if layer == "Ripple":
+                return "Proveedor" if "Platform" in canonical else "Otro"
+        return _ORIG_CLASSIFY_ENTITY_V145(canonical or name)
+    except Exception:
+        return _ORIG_CLASSIFY_ENTITY_V145(name)
+
+_ORIG_NATIVE_QUERY_VARIANTS_V145 = _native_query_variants
+
+def _native_query_variants(entity: Any) -> List[str]:
+    """v145: genera variantes multilenguaje incluso si el usuario usó alias español."""
+    raw = str(entity or "").strip()
+    canonical = _canonical_entity_name(raw)
+    variants: List[str] = []
+
+    def add(q: str) -> None:
+        q = re.sub(r"\s+", " ", str(q or "").strip())
+        if q and q not in variants:
+            variants.append(q)
+
+    try:
+        for q in _ORIG_NATIVE_QUERY_VARIANTS_V145(canonical):
+            add(q)
+        if raw and raw != canonical:
+            for q in _ORIG_NATIVE_QUERY_VARIANTS_V145(raw):
+                add(q)
+    except Exception:
+        pass
+
+    if _canonical_entity_key(canonical) == _canonical_entity_key("People's Bank of China (PBoC)"):
+        native = "中国人民银行"
+        for q in [
+            f'"{raw}" "People\'s Bank of China" Ripple' if raw else "",
+            f'"{raw}" "PBoC" Ripple' if raw else "",
+            f'"{raw}" 中国人民银行 Ripple' if raw else "",
+            '"People\'s Bank of China" Ripple',
+            '"People\'s Bank of China" XRPL',
+            '"PBoC" Ripple',
+            '"PBoC" mBridge',
+            '"中国人民银行" Ripple',
+            '"中国人民银行" RippleNet',
+            '"中国人民银行" XRPL',
+            '"中国人民银行" mBridge',
+            '"中国人民银行" 多边央行数字货币桥',
+            '"中国人民银行" 国际清算银行',
+            '"中国人民银行" 跨境支付 区块链',
+            '"连连支付" Ripple',
+            '"连连国际" RippleNet',
+            'site:pbc.gov.cn 中国人民银行 区块链 跨境支付',
+            'site:pbc.gov.cn 中国人民银行 数字人民币 跨境支付',
+            'site:bis.org "People\'s Bank of China" mBridge',
+            'site:bis.org 中国人民银行 mBridge',
+        ]:
+            add(q)
+    return variants[:18]
+
+_ORIG_SEARCH_INSTITUTION_CONNECTIONS_V145 = search_institution_connections
+
+def search_institution_connections(institution_name: str,
+                                   conn: Optional[sqlite3.Connection] = None,
+                                   force_online: bool = False) -> Dict[str, Any]:
+    """v145: resuelve alias multilenguaje antes de consultar caché/API."""
+    raw_name = str(institution_name or "").strip()
+    canonical_name = _canonical_entity_name(raw_name)
+    result = _ORIG_SEARCH_INSTITUTION_CONNECTIONS_V145(canonical_name, conn=conn, force_online=force_online)
+    try:
+        result = dict(result or {})
+        result["institution"] = _canonical_entity_name(result.get("institution") or canonical_name)
+        if raw_name and _canonical_entity_key(raw_name) != _canonical_entity_key(canonical_name):
+            result["_user_query_alias"] = raw_name
+            result["_canonical_resolved_from_alias"] = canonical_name
+            note = f"Alias multilenguaje resuelto: {raw_name} → {canonical_name}. "
+            summary = str(result.get("summary") or "")
+            if note not in summary:
+                result["summary"] = (note + summary)[:700]
+    except Exception:
+        pass
+    return result
+
+
+def _rrp_v145_selftest_multilingual_aliases() -> Dict[str, Any]:
+    """Diagnóstico rápido: no llama a internet."""
+    tests = [
+        "banco popular chino", "Banco Popular de China", "banco central chino",
+        "PBoC", "People's Bank of China", "中国人民银行", "中國人民銀行",
+        "yuan digital", "数字人民币",
+    ]
+    rows = []
+    for t in tests:
+        try:
+            canon = _canonical_entity_name(t)
+            rows.append({"input": t, "canonical": canon, "entity_type": _classify_entity(t), "native_queries": _native_query_variants(t)[:3]})
+        except Exception as e:
+            rows.append({"input": t, "error": str(e)})
+    return {"ok": all("error" not in r for r in rows), "rows": rows}
+
+
+# v146 build metadata override
+BUILD_ID = "v146_2026_05_12_LOCAL_SOURCE_SWEEP_FALLBACK_FIX"
+BUILD_NOTE = "Caché/global primero; si queda débil, barrido local en idioma nativo y medios/fuentes regionales"
+
+
+# =============================================================================
+# v146 — LOCAL SOURCE SWEEP FALLBACK
+# =============================================================================
+# Objetivo: no limitarse a traducir/canonizar el nombre. Si la búsqueda global o
+# en español no encuentra evidencia, el radar lanza un barrido de fuentes locales
+# en idioma nativo: medios, bancos centrales, reguladores, bolsas, PDFs y prensa
+# regional. Ejemplo: "banco popular chino" debe poder acabar buscando en chino
+# aunque el usuario no escriba 中国人民银行.
+
+_LOCAL_NEWS_SITES: Dict[str, str] = {
+    "zh": "site:caixin.com OR site:yicai.com OR site:21jingji.com OR site:stcn.com OR site:cls.cn OR site:jrj.com.cn OR site:thepaper.cn OR site:finance.sina.com.cn OR site:finance.ifeng.com OR site:scmp.com",
+    "ja": "site:nikkei.com OR site:reuters.com/world/japan OR site:news.yahoo.co.jp OR site:itmedia.co.jp OR site:coinpost.jp",
+    "ko": "site:yna.co.kr OR site:mk.co.kr OR site:hankyung.com OR site:etnews.com OR site:news.naver.com",
+    "ru": "site:vedomosti.ru OR site:kommersant.ru OR site:interfax.ru OR site:ria.ru OR site:rbc.ru",
+    "ar": "site:alarabiya.net OR site:asharqbusiness.com OR site:argaam.com OR site:wam.ae OR site:spa.gov.sa",
+    "hi": "site:economictimes.indiatimes.com OR site:livemint.com OR site:business-standard.com OR site:moneycontrol.com",
+    "en": "",
+}
+
+_LOCAL_OFFICIAL_SITES: Dict[str, str] = {
+    "zh": "site:pbc.gov.cn OR site:gov.cn OR site:safe.gov.cn OR site:csrc.gov.cn OR site:ndrc.gov.cn OR site:mof.gov.cn OR site:bis.org OR site:hkma.gov.hk",
+    "ja": "site:boj.or.jp OR site:fsa.go.jp OR site:mof.go.jp OR site:jpx.co.jp OR site:bis.org",
+    "ko": "site:bok.or.kr OR site:fsc.go.kr OR site:fss.or.kr OR site:krx.co.kr OR site:bis.org",
+    "ru": "site:cbr.ru OR site:minfin.gov.ru OR site:moex.com OR site:government.ru OR site:bis.org",
+    "ar": "site:cbuae.gov.ae OR site:sama.gov.sa OR site:qcb.gov.qa OR site:centralbank.ae OR site:bis.org",
+    "hi": "site:rbi.org.in OR site:sebi.gov.in OR site:finmin.nic.in OR site:nseindia.com OR site:bseindia.com OR site:bis.org",
+    "en": "site:bis.org OR site:imf.org OR site:worldbank.org",
+}
+
+_LOCAL_RIPPLE_TERMS: Dict[str, str] = {
+    "zh": "瑞波 OR Ripple OR XRP Ledger OR XRPL OR RippleNet OR RLUSD OR 连连支付 OR 跨境支付 OR 区块链 OR 数字人民币 OR 多边央行数字货币桥 OR mBridge",
+    "ja": "リップル OR Ripple OR XRPレジャー OR XRPL OR RippleNet OR RLUSD OR ブロックチェーン OR 送金 OR 実証実験",
+    "ko": "리플 OR Ripple OR XRP 레저 OR XRPL OR RippleNet OR RLUSD OR 블록체인 OR 송금 OR 파일럿",
+    "ru": "Ripple OR XRP Ledger OR XRPL OR RippleNet OR RLUSD OR блокчейн OR трансграничные платежи OR пилот",
+    "ar": "Ripple OR ريبل OR XRP Ledger OR XRPL OR RippleNet OR RLUSD OR بلوكتشين OR مدفوعات عابرة للحدود",
+    "hi": "Ripple OR XRP Ledger OR XRPL OR RippleNet OR RLUSD OR ब्लॉकचेन OR सीमा पार भुगतान OR पायलट",
+    "en": "Ripple OR XRP Ledger OR XRPL OR RippleNet OR RLUSD OR blockchain OR cross-border payments",
+}
+
+
+def _native_identity_for_local_sweep(entity: Any) -> Tuple[str, str, str]:
+    """Devuelve (canonical, script, native_name) para barridos locales."""
+    raw = str(entity or "").strip()
+    canonical = _canonical_entity_name(raw)
+    key_candidates = _entity_alias_keys(raw) + _entity_alias_keys(canonical)
+    script = _detect_script(raw) if any(ord(c) > 127 for c in raw) else "en"
+    native = ""
+    for k in key_candidates:
+        item = NATIVE_ENTITY_HINTS.get(k)
+        if item:
+            script, native = item
+            break
+    if not native and _contains_cjk(raw):
+        script, native = "zh", raw
+    if canonical == "People's Bank of China (PBoC)" and not native:
+        script, native = "zh", "中国人民银行"
+    return canonical, script, native
+
+
+def _local_source_query_examples(entity: Any, limit: int = 10) -> List[str]:
+    canonical, script, native = _native_identity_for_local_sweep(entity)
+    official = _LOCAL_OFFICIAL_SITES.get(script, "")
+    media = _LOCAL_NEWS_SITES.get(script, "")
+    terms = _LOCAL_RIPPLE_TERMS.get(script, _LOCAL_RIPPLE_TERMS.get("en", ""))
+    doc_kw = _LOCAL_DOC_KEYWORDS.get(script, _LOCAL_DOC_KEYWORDS.get("en", "PDF"))
+    names = []
+    for n in [native, canonical, str(entity or "").strip()]:
+        if n and n not in names:
+            names.append(n)
+    queries: List[str] = []
+    def add(q: str) -> None:
+        q = re.sub(r"\s+", " ", str(q or "").strip())
+        if q and q not in queries:
+            queries.append(q)
+    for name in names:
+        add(f'"{name}" ({terms})')
+        if official:
+            add(f'({official}) "{name}" ({terms})')
+        if media:
+            add(f'({media}) "{name}" ({terms})')
+        add(f'"{name}" ({doc_kw})')
+    if canonical == "People's Bank of China (PBoC)":
+        for q in [
+            '(site:pbc.gov.cn OR site:bis.org OR site:hkma.gov.hk) "中国人民银行" (mBridge OR 多边央行数字货币桥 OR 跨境支付 OR 区块链)',
+            '(site:caixin.com OR site:yicai.com OR site:21jingji.com OR site:thepaper.cn) "中国人民银行" (Ripple OR 瑞波 OR 区块链 OR 跨境支付 OR 数字人民币)',
+            '(site:finance.sina.com.cn OR site:stcn.com OR site:cls.cn) "中国人民银行" (mBridge OR 数字人民币 OR 跨境支付)',
+            '"连连支付" (Ripple OR RippleNet OR 瑞波 OR 跨境支付)',
+            '"连连国际" (RippleNet OR Ripple OR 瑞波)',
+        ]:
+            add(q)
+    return queries[:limit]
+
+
+def _native_query_instruction(entity: Any) -> str:
+    """v146: la búsqueda multilenguaje se explica como fallback de fuentes locales, no como simple traducción."""
+    canonical, script, native = _native_identity_for_local_sweep(entity)
+    queries = _local_source_query_examples(entity, limit=8)
+    if not queries or script == "en" and not native:
+        return ""
+    local_hint = _LOCAL_SEARCH_ENGINE_HINTS.get(script, "fuentes locales")
+    return (
+        "\nMODO FUENTES LOCALES / MULTILENGUAJE: primero intenta encontrar pruebas en fuentes globales/primarias. "
+        "Si no aparece evidencia suficiente, NO concluyas 0% todavía: activa un barrido local en el idioma de la entidad. "
+        f"Entidad canónica: {canonical}. Nombre nativo útil: {native or 'no detectado'}. Idioma/script: {script}. "
+        f"Usa {local_hint}. Consultas orientativas: " + " ; ".join(queries) + ". "
+        "Separa claramente: fuente oficial, medio local, fuente secundaria y rumor. "
+        "No conviertas una mención genérica de CBDC/blockchain en conexión Ripple/XRPL; solo cuenta si la fuente menciona ambas partes o una cadena verificable. "
+    )
+
+
+def _is_weak_discovery_for_local_sweep(result: Dict[str, Any]) -> bool:
+    try:
+        conf = float(result.get("confidence", 0) or 0)
+    except Exception:
+        conf = 0.0
+    evidence = result.get("evidence_items") or []
+    routes = result.get("route_decisions") or []
+    connected = bool(result.get("connected"))
+    # Fuerte suficiente: no gastamos otra llamada.
+    if connected and conf >= 0.55 and (evidence or routes):
+        return False
+    # Si ya se intentó barrido local y no se fuerza online, no repetir.
+    if result.get("_local_source_sweep_attempted"):
+        return False
+    # Candidatos claros: 0%, JSON reconstruido, sin rutas o sin pruebas válidas.
+    return conf < 0.35 or (not connected and not evidence and not routes) or bool(result.get("_json_salvaged") or result.get("_json_recovered"))
+
+
+def _merge_local_sweep_result(base: Dict[str, Any], local: Dict[str, Any], raw_name: str) -> Dict[str, Any]:
+    """Fusiona barrido local sin borrar caché/pruebas anteriores."""
+    base = dict(base or {})
+    local = dict(local or {})
+    base["_local_source_sweep_attempted"] = True
+    if local.get("_api_temporal_error") or local.get("_budget_locked"):
+        base["_local_source_sweep_error"] = local.get("summary", "Barrido local no disponible temporalmente")
+        return base
+    for field in ["sources", "evidence_items", "route_decisions", "partners", "map_points", "wallets", "corridors", "future_watch_targets"]:
+        merged = []
+        for item in list(base.get(field) or []) + list(local.get(field) or []):
+            key = json.dumps(item, ensure_ascii=False, sort_keys=True) if isinstance(item, (dict, list)) else str(item)
+            if key not in {json.dumps(x, ensure_ascii=False, sort_keys=True) if isinstance(x, (dict, list)) else str(x) for x in merged}:
+                merged.append(item)
+        base[field] = merged[:12 if field in {"sources", "evidence_items", "route_decisions"} else 20]
+    # targets/connects_to dedupe
+    targets = []
+    for x in list(base.get("connects_to") or []) + list(local.get("connects_to") or []):
+        t = _canonical_target_node(x, set(NODES.keys())) or _canonical_entity_name(x)
+        if t and t not in targets:
+            targets.append(t)
+    base["connects_to"] = targets
+    try:
+        bconf = float(base.get("confidence", 0) or 0)
+        lconf = float(local.get("confidence", 0) or 0)
+    except Exception:
+        bconf, lconf = 0.0, 0.0
+    if lconf > bconf or (local.get("connected") and not base.get("connected")):
+        base["confidence"] = max(bconf, lconf)
+        base["connected"] = bool(local.get("connected", base.get("connected")))
+        if local.get("summary"):
+            base["summary"] = str(local.get("summary"))[:700]
+        for k in ["layer", "icon", "route_kind", "ripple_products"]:
+            if local.get(k):
+                base[k] = local.get(k)
+    else:
+        # Si no mejora, deja claro que se revisaron fuentes locales.
+        s = str(base.get("summary") or "")
+        note = "Barrido local ejecutado; no añadió prueba fuerte nueva."
+        if note not in s:
+            base["summary"] = (s.rstrip(" .") + ". " + note).strip()[:700]
+    base["_local_source_sweep_used"] = True
+    base["_local_source_sweep_query"] = raw_name
+    return base
+
+
+def _run_local_source_sweep(institution_name: str,
+                            conn: Optional[sqlite3.Connection] = None) -> Dict[str, Any]:
+    """Segunda pasada: fuentes locales/nativas solo si la primera búsqueda queda débil."""
+    canonical, script, native = _native_identity_for_local_sweep(institution_name)
+    if script == "en" and not native:
+        return {"_local_source_sweep_skipped": True, "summary": "No requiere barrido local."}
+    api_key = _get_api_key()
+    entity_type = _classify_entity(canonical)
+    if not api_key:
+        return {"_local_source_sweep_skipped": True, "summary": "Sin API key para barrido local."}
+    call_type = "discovery_fast"
+    if conn is not None and not _charge_budget(conn, call_type):
+        return {"_budget_locked": True, "summary": "Presupuesto API bloqueado; no se ejecutó barrido local."}
+    queries = _local_source_query_examples(institution_name, limit=12)
+    schema = {
+        "institution": canonical,
+        "entity_type": entity_type,
+        "connected": False,
+        "confidence": 0.0,
+        "summary": "",
+        "ripple_products": [],
+        "layer": "Descubierto",
+        "icon": "🔎",
+        "connects_to": [],
+        "route_kind": "private",
+        "sources": [],
+        "wallets": [], "corridors": [], "partners": [], "map_points": [],
+        "evidence_items": [], "route_decisions": [], "future_watch_targets": []
+    }
+    prompt = (
+        "Eres un analista OSINT multilenguaje. La primera búsqueda global fue débil o no concluyente. "
+        "Ahora haz SOLO un barrido de fuentes locales/nativas, no una traducción superficial. "
+        f"Entidad investigada por el usuario: {institution_name}. Entidad canónica: {canonical}. "
+        f"Nombre nativo: {native or 'no detectado'}. Script/país probable: {script}. "
+        "Busca en medios locales, reguladores, bancos centrales, bolsas, PDFs, comunicados y fuentes BIS. "
+        "Usa estas consultas como guía, adaptándolas si hace falta:\n- " + "\n- ".join(queries) + "\n"
+        "Regla Proof-First: solo marques connected=true si una fuente conecta explícitamente la entidad con Ripple, XRPL, XRP Ledger, RippleNet, Ripple Payments, RLUSD, Ripple Treasury, mBridge con participación verificable, o una cadena documental clara. "
+        "Si solo encuentras CBDC/blockchain genérico sin Ripple/XRPL, devuelve connected=false pero incluye las fuentes para revisión. "
+        "Responde SOLO JSON válido, sin markdown, con esta estructura exacta: " + json.dumps(schema, ensure_ascii=False)
+    )
+    payload = {
+        "model": ANTHROPIC_MODEL_FAST,
+        "max_tokens": 1500,
+        "system": [{"type": "text", "text": _AUDIT_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+        "tools": [{"type": "web_search_20250305", "name": "web_search"}],
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01",
+               "anthropic-beta": "prompt-caching-2024-07-31,web-search-2025-03-05",
+               "content-type": "application/json"}
+    try:
+        resp = requests.post(ANTHROPIC_API_URL, json=payload, headers=headers, timeout=55)
+        if resp.status_code in (408, 409, 425, 429, 500, 502, 503, 504, 529):
+            raise RuntimeError(f"{resp.status_code} Error temporal Anthropic/local sweep: {getattr(resp, 'text', '')[:180]}")
+        resp.raise_for_status()
+        data = resp.json()
+        _settle_budget(conn, call_type, data, ANTHROPIC_MODEL_FAST)
+        text_parts = [b.get("text", "") for b in data.get("content", []) if isinstance(b, dict) and b.get("type") == "text"]
+        raw = " ".join(text_parts).strip().replace("```json", "").replace("```", "").strip()
+        try:
+            result = _loads_discovery_json_lenient(raw) if raw else {}
+        except Exception as parse_exc:
+            result = _salvage_discovery_from_text_and_sources(canonical, entity_type, raw, data, parse_exc)
+        result = _finalize_discovery_result(result, canonical, entity_type, data)
+        result["_local_source_sweep"] = True
+        return result
+    except Exception as exc:
+        _refund_budget(conn, call_type)
+        if _is_anthropic_temporal_error(exc):
+            r = _safe_api_temporal_result(canonical, entity_type, exc)
+            r["_local_source_sweep"] = True
+            return r
+        return _finalize_discovery_result({
+            "institution": canonical,
+            "entity_type": entity_type,
+            "connected": False,
+            "confidence": 0.0,
+            "summary": f"Barrido local falló: {str(exc)[:220]}",
+            "ripple_products": [], "layer": _classify_entity(canonical), "icon": "🔎",
+            "connects_to": [], "route_kind": "private", "sources": [],
+            "wallets": [], "corridors": [], "partners": [], "map_points": [], "evidence_items": [], "route_decisions": [],
+            "_local_source_sweep_error": str(exc)[:220],
+        }, canonical, entity_type, None)
+
+
+# Guardamos el buscador v145 por si hace falta diagnosticar.
+_ORIG_SEARCH_INSTITUTION_CONNECTIONS_V146_PRE = search_institution_connections
+
+
+def search_institution_connections(institution_name: str,
+                                   conn: Optional[sqlite3.Connection] = None,
+                                   force_online: bool = False) -> Dict[str, Any]:
+    """v146: caché/global primero; si queda débil, barrido de fuentes locales/nativas."""
+    raw_name = str(institution_name or "").strip()
+    canonical_name = _canonical_entity_name(raw_name)
+    # Usamos el buscador base anterior a v145 cuando exista para no contaminar el resumen
+    # con una explicación de alias. La canonicalización sirve para mapa/caché; el barrido
+    # local sirve para encontrar fuentes que no aparecen en español/inglés.
+    base_search = globals().get("_ORIG_SEARCH_INSTITUTION_CONNECTIONS_V145") or _ORIG_SEARCH_INSTITUTION_CONNECTIONS_V146_PRE
+    try:
+        result = base_search(canonical_name, conn=conn, force_online=force_online)
+    except TypeError:
+        result = _ORIG_SEARCH_INSTITUTION_CONNECTIONS_V146_PRE(canonical_name, conn=conn, force_online=force_online)
+    result = dict(result or {})
+    result["institution"] = _canonical_entity_name(result.get("institution") or canonical_name)
+    if raw_name and _canonical_entity_key(raw_name) != _canonical_entity_key(canonical_name):
+        result["_user_query_alias"] = raw_name
+        result["_canonical_resolved_from_alias"] = canonical_name
+    # Si el resultado vino de caché fuerte, no gastamos. Si vino de caché débil y no
+    # consta barrido local previo, sí hacemos la pasada local para no quedar ciegos.
+    _, script, native = _native_identity_for_local_sweep(raw_name or canonical_name)
+    needs_local = (script != "en" or bool(native)) and _is_weak_discovery_for_local_sweep(result)
+    if needs_local and not result.get("_api_temporal_error") and not result.get("_budget_locked"):
+        local = _run_local_source_sweep(raw_name or canonical_name, conn=conn)
+        result = _merge_local_sweep_result(result, local, raw_name or canonical_name)
+        # Guardar el resultado fusionado para que la próxima vez use caché primero.
+        try:
+            if conn is not None and not result.get("_api_temporal_error") and not result.get("_api_transient_error"):
+                _set_search_cache(conn, canonical_name, result, "discovery")
+                if raw_name and raw_name != canonical_name:
+                    _set_search_cache(conn, raw_name, result, "discovery")
+        except Exception:
+            pass
+    return result
+
+
+def _rrp_v146_selftest_local_source_sweep() -> Dict[str, Any]:
+    """Diagnóstico sin internet: verifica que una consulta española genera queries chinas locales."""
+    samples = ["banco popular chino", "People's Bank of China", "中国人民银行"]
+    return {
+        "ok": True,
+        "samples": [
+            {
+                "input": s,
+                "identity": _native_identity_for_local_sweep(s),
+                "queries": _local_source_query_examples(s, limit=5),
+                "instruction": _native_query_instruction(s)[:500],
+            }
+            for s in samples
+        ]
+    }
+
+
+# v147 build metadata override
+BUILD_ID = "v147_2026_05_12_INTERNATIONAL_LOCAL_SWEEP_FIX"
+BUILD_NOTE = "Barrido local/internacional para cualquier entidad: cache/global primero, fuentes regionales si queda débil"
+
+# =============================================================================
+# v147 — INTERNATIONAL LOCAL SOURCE SWEEP FOR ANY SEARCH
+# =============================================================================
+# La v146 hacía bien el caso China/PBoC, pero el radar es internacional: si una
+# búsqueda queda débil, no debe concluir 0% solo porque el primer barrido global
+# no encontró suficiente. Ahora cualquier entidad puede activar una segunda
+# pasada regional: idioma local, reguladores, bancos centrales, bolsas, prensa
+# financiera local y repositorios oficiales. No inventa conexiones: solo amplía
+# dónde buscar pruebas.
+
+# Extender fuentes por región/idioma. Las claves son perfiles de búsqueda, no
+# necesariamente scripts Unicode. "eu" = Unión Europea/instituciones europeas.
+_LOCAL_NEWS_SITES.update({
+    "eu": "site:politico.eu OR site:euractiv.com OR site:centralbanking.com OR site:ledgerinsights.com OR site:finextra.com OR site:reuters.com",
+    "es": "site:expansion.com OR site:cincodias.elpais.com OR site:eleconomista.es OR site:elconfidencial.com OR site:europapress.es OR site:portafolio.co OR site:eltiempo.com OR site:americaeconomia.com",
+    "pt": "site:valor.globo.com OR site:exame.com OR site:infomoney.com.br OR site:estadao.com.br OR site:moneytimes.com.br",
+    "fr": "site:lesechos.fr OR site:latribune.fr OR site:bfmtv.com/economie OR site:usinenouvelle.com OR site:lemonde.fr/economie",
+    "de": "site:handelsblatt.com OR site:boersen-zeitung.de OR site:finanz-szene.de OR site:wiwo.de OR site:faz.net/finanzen",
+    "it": "site:ilsole24ore.com OR site:borsaitaliana.it OR site:milano.repubblica.it OR site:corriere.it/economia",
+    "nl": "site:fd.nl OR site:telegraaf.nl/financieel OR site:nu.nl/economie",
+    "tr": "site:aa.com.tr OR site:dunya.com OR site:ekonomim.com OR site:borsagundem.com",
+    "id": "site:bisnis.com OR site:kontan.co.id OR site:cnbcindonesia.com OR site:tempo.co",
+})
+
+_LOCAL_OFFICIAL_SITES.update({
+    "eu": "site:ecb.europa.eu OR site:europa.eu OR site:eba.europa.eu OR site:esma.europa.eu OR site:europarl.europa.eu OR site:eur-lex.europa.eu OR site:bis.org OR site:swift.com",
+    "es": "site:bde.es OR site:cnmv.es OR site:boe.es OR site:mineco.gob.es OR site:banrep.gov.co OR site:banxico.org.mx OR site:bcentral.cl OR site:bcrp.gob.pe OR site:bcra.gob.ar OR site:bis.org",
+    "pt": "site:bcb.gov.br OR site:gov.br OR site:cvm.gov.br OR site:b3.com.br OR site:bcb.gov.br OR site:bis.org",
+    "fr": "site:banque-france.fr OR site:amf-france.org OR site:economie.gouv.fr OR site:acpr.banque-france.fr OR site:bis.org",
+    "de": "site:bundesbank.de OR site:bafin.de OR site:bmf.bund.de OR site:deutsche-boerse.com OR site:bis.org",
+    "it": "site:bancaditalia.it OR site:consob.it OR site:mef.gov.it OR site:borsaitaliana.it OR site:bis.org",
+    "nl": "site:dnb.nl OR site:afm.nl OR site:government.nl OR site:euronext.com OR site:bis.org",
+    "tr": "site:tcmb.gov.tr OR site:bd k.org.tr OR site:spk.gov.tr OR site:borsaistanbul.com OR site:bis.org".replace('bd k','bdk'),
+    "id": "site:bi.go.id OR site:ojk.go.id OR site:idx.co.id OR site:kemenkeu.go.id OR site:bis.org",
+})
+
+_LOCAL_RIPPLE_TERMS.update({
+    "eu": "Ripple OR XRP Ledger OR XRPL OR RippleNet OR RLUSD OR blockchain OR tokenisation OR tokenization OR digital euro OR wholesale CBDC OR instant payments OR SWIFT",
+    "es": "Ripple OR XRP Ledger OR XRPL OR RippleNet OR RLUSD OR blockchain OR cadena de bloques OR tokenizacion OR tokenización OR pagos transfronterizos OR CBDC OR MDBC",
+    "pt": "Ripple OR XRP Ledger OR XRPL OR RippleNet OR RLUSD OR blockchain OR tokenização OR pagamentos transfronteiriços OR CBDC",
+    "fr": "Ripple OR XRP Ledger OR XRPL OR RippleNet OR RLUSD OR blockchain OR chaîne de blocs OR tokenisation OR euro numérique OR paiement transfrontalier OR CBDC",
+    "de": "Ripple OR XRP Ledger OR XRPL OR RippleNet OR RLUSD OR Blockchain OR Tokenisierung OR digitaler Euro OR grenzüberschreitende Zahlungen OR CBDC",
+    "it": "Ripple OR XRP Ledger OR XRPL OR RippleNet OR RLUSD OR blockchain OR tokenizzazione OR euro digitale OR pagamenti transfrontalieri OR CBDC",
+    "nl": "Ripple OR XRP Ledger OR XRPL OR RippleNet OR RLUSD OR blockchain OR tokenisatie OR digitale euro OR grensoverschrijdende betalingen OR CBDC",
+    "tr": "Ripple OR XRP Ledger OR XRPL OR RippleNet OR RLUSD OR blokzincir OR dijital para OR CBDC OR sınır ötesi ödeme",
+    "id": "Ripple OR XRP Ledger OR XRPL OR RippleNet OR RLUSD OR blockchain OR rupiah digital OR pembayaran lintas batas OR CBDC",
+})
+
+_LOCAL_DOC_KEYWORDS.update({
+    "eu": "PDF OR consultation OR working paper OR report OR speech OR regulation OR tender OR digital euro OR wholesale CBDC",
+    "es": "PDF OR informe OR comunicado OR consulta OR licitación OR piloto OR convenio OR tokenización OR MDBC",
+    "pt": "PDF OR relatório OR comunicado OR consulta pública OR piloto OR tokenização OR CBDC",
+    "fr": "PDF OR rapport OR communiqué OR consultation OR pilote OR tokenisation OR monnaie numérique",
+    "de": "PDF OR Bericht OR Pressemitteilung OR Konsultation OR Pilot OR Tokenisierung OR digitales Geld",
+    "it": "PDF OR rapporto OR comunicato OR consultazione OR pilota OR tokenizzazione OR moneta digitale",
+    "nl": "PDF OR rapport OR consultatie OR pilot OR tokenisatie OR digitale munt",
+    "tr": "PDF OR rapor OR duyuru OR pilot OR blokzincir OR dijital para",
+    "id": "PDF OR laporan OR pengumuman OR uji coba OR blockchain OR rupiah digital",
+})
+
+_LOCAL_SEARCH_ENGINE_HINTS.update({
+    "eu": "fuentes oficiales UE/BCE, EUR-Lex, ESMA/EBA, BIS, SWIFT y prensa europea especializada",
+    "es": "fuentes oficiales hispanas y prensa financiera local: bancos centrales, BOE/reguladores, medios económicos",
+    "pt": "fuentes brasileñas/portuguesas: banco central, CVM, bolsa local y prensa financiera",
+    "fr": "fuentes francesas: Banque de France, AMF/ACPR, ministerio y prensa financiera",
+    "de": "fuentes alemanas: Bundesbank, BaFin, Deutsche Börse y prensa financiera",
+    "it": "fuentes italianas: Banca d'Italia, Consob, Borsa Italiana y prensa financiera",
+    "nl": "fuentes neerlandesas: DNB, AFM, gobierno y prensa financiera",
+    "tr": "fuentes turcas: banco central, BDDK/SPK, bolsa y prensa financiera",
+    "id": "fuentes indonesias: Bank Indonesia, OJK, IDX y prensa local",
+})
+
+# Alias regionales amplios. Esto no fuerza conexión; solo decide dónde buscar si
+# la primera pasada queda débil.
+_REGION_HINTS_V147: Dict[str, Tuple[str, str]] = {
+    # Unión Europea / BCE
+    "european central bank": ("eu", "European Central Bank"),
+    "ecb": ("eu", "European Central Bank"),
+    "banco central europeo": ("eu", "Banco Central Europeo"),
+    "bce": ("eu", "Banco Central Europeo"),
+    "european commission": ("eu", "European Commission"),
+    "european banking authority": ("eu", "European Banking Authority"),
+    "eba": ("eu", "European Banking Authority"),
+    "esma": ("eu", "ESMA"),
+    "eur lex": ("eu", "EUR-Lex"),
+    "swift": ("eu", "SWIFT"),
+    # España / LatAm español
+    "banco de espana": ("es", "Banco de España"),
+    "banco de españa": ("es", "Banco de España"),
+    "cnmv": ("es", "CNMV"),
+    "santander": ("es", "Santander"),
+    "bbva": ("es", "BBVA"),
+    "banco de la republica": ("es", "Banco de la República"),
+    "banco de la república": ("es", "Banco de la República"),
+    "banrep": ("es", "Banco de la República"),
+    "banxico": ("es", "Banco de México"),
+    "banco de mexico": ("es", "Banco de México"),
+    "banco de méxico": ("es", "Banco de México"),
+    "banco central de chile": ("es", "Banco Central de Chile"),
+    "banco central de reserva del peru": ("es", "Banco Central de Reserva del Perú"),
+    # Brasil / Portugal
+    "banco central do brasil": ("pt", "Banco Central do Brasil"),
+    "bcb": ("pt", "Banco Central do Brasil"),
+    "itau": ("pt", "Itaú"),
+    "itaú": ("pt", "Itaú"),
+    "banco do brasil": ("pt", "Banco do Brasil"),
+    # Francia/Alemania/Italia/NL
+    "banque de france": ("fr", "Banque de France"),
+    "amf france": ("fr", "AMF France"),
+    "bundesbank": ("de", "Deutsche Bundesbank"),
+    "bafin": ("de", "BaFin"),
+    "deutsche bank": ("de", "Deutsche Bank"),
+    "banca d italia": ("it", "Banca d'Italia"),
+    "banca d'italia": ("it", "Banca d'Italia"),
+    "consob": ("it", "CONSOB"),
+    "dnb": ("nl", "De Nederlandsche Bank"),
+    "de nederlandsche bank": ("nl", "De Nederlandsche Bank"),
+    # Turquía / Indonesia
+    "akbank": ("tr", "Akbank"),
+    "central bank of the republic of turkey": ("tr", "Türkiye Cumhuriyet Merkez Bankası"),
+    "bank indonesia": ("id", "Bank Indonesia"),
+    "ojk": ("id", "OJK"),
+}
+
+# Integrar aliases nuevos en NATIVE_ENTITY_HINTS para compatibilidad con las
+# funciones antiguas que consultan ese diccionario.
+for _k_v147, _v_v147 in _REGION_HINTS_V147.items():
+    try:
+        NATIVE_ENTITY_HINTS.setdefault(_norm_key(_k_v147), _v_v147)
+    except Exception:
+        pass
+
+
+def _region_hint_for_entity_v147(entity: Any) -> Tuple[str, str]:
+    """Devuelve (perfil_local, nombre_local) para cualquier entidad si es inferible."""
+    raw = str(entity or "").strip()
+    canonical = _canonical_entity_name(raw)
+    keys = _entity_alias_keys(raw) + _entity_alias_keys(canonical)
+    blob = " " + " ".join(keys).lower() + " "
+    # 1) Alias explícitos.
+    for k in keys:
+        item = _REGION_HINTS_V147.get(_norm_key(k)) or NATIVE_ENTITY_HINTS.get(_norm_key(k))
+        if item:
+            return str(item[0] or "en"), str(item[1] or canonical or raw)
+    # 2) Señales por país/región en el nombre.
+    country_rules = [
+        (("china", "chinese", "pboc", "中国", "人民银行"), ("zh", "")),
+        (("japan", "japanese", "tokyo", "日本"), ("ja", "")),
+        (("korea", "korean", "seoul", "한국"), ("ko", "")),
+        (("russia", "russian", "moscow", "рос"), ("ru", "")),
+        (("saudi", "qatar", "uae", "emirates", "dubai", "abu dhabi", "arab", "الإمارات", "السعود"), ("ar", "")),
+        (("india", "indian", "mumbai", "delhi", "भारत"), ("hi", "")),
+        (("europe", "european", "euro", "eu ", " ecb", " bce"), ("eu", "")),
+        (("spain", "spanish", "españa", "espana", "madrid", "colombia", "mexico", "méxico", "chile", "peru", "perú", "argentina"), ("es", "")),
+        (("brazil", "brasil", "portugal", "portuguese", "sao paulo", "são paulo"), ("pt", "")),
+        (("france", "french", "paris", "français", "francais"), ("fr", "")),
+        (("germany", "german", "deutsche", "deutschland", "frankfurt"), ("de", "")),
+        (("italy", "italian", "italia", "milano", "rome", "roma"), ("it", "")),
+        (("netherlands", "dutch", "amsterdam", "nederland"), ("nl", "")),
+        (("turkey", "turkish", "türkiye", "istanbul"), ("tr", "")),
+        (("indonesia", "jakarta", "rupiah"), ("id", "")),
+    ]
+    for needles, profile in country_rules:
+        if any((" " + n + " ") in blob or n in raw.lower() for n in needles):
+            return profile[0], profile[1] or canonical or raw
+    return "en", canonical or raw
+
+
+# Guardamos funciones v146 por diagnóstico.
+_ORIG_NATIVE_IDENTITY_FOR_LOCAL_SWEEP_V147_PRE = _native_identity_for_local_sweep
+_ORIG_LOCAL_SOURCE_QUERY_EXAMPLES_V147_PRE = _local_source_query_examples
+_ORIG_NATIVE_QUERY_INSTRUCTION_V147_PRE = _native_query_instruction
+_ORIG_RUN_LOCAL_SOURCE_SWEEP_V147_PRE = _run_local_source_sweep
+_ORIG_SEARCH_INSTITUTION_CONNECTIONS_V147_PRE = search_institution_connections
+
+
+def _native_identity_for_local_sweep(entity: Any) -> Tuple[str, str, str]:
+    """v147: identidad local para cualquier búsqueda internacional, no solo CJK/no-latina."""
+    raw = str(entity or "").strip()
+    canonical = _canonical_entity_name(raw)
+    script, native = _ORIG_NATIVE_IDENTITY_FOR_LOCAL_SWEEP_V147_PRE(entity)
+    # Si v146 ya encontró un idioma nativo real, respetarlo.
+    if script != "en" or native:
+        return canonical, script, native
+    # Si no, inferir perfil regional por entidad/país/nombre canónico.
+    profile, local_name = _region_hint_for_entity_v147(raw or canonical)
+    if profile != "en":
+        return canonical, profile, local_name or canonical
+    return canonical, "en", canonical
+
+
+def _local_source_query_examples(entity: Any, limit: int = 12) -> List[str]:
+    """v147: genera consultas locales/regionales para cualquier entidad débil."""
+    canonical, script, native = _native_identity_for_local_sweep(entity)
+    official = _LOCAL_OFFICIAL_SITES.get(script, _LOCAL_OFFICIAL_SITES.get("en", ""))
+    media = _LOCAL_NEWS_SITES.get(script, "")
+    terms = _LOCAL_RIPPLE_TERMS.get(script, _LOCAL_RIPPLE_TERMS.get("en", ""))
+    doc_kw = _LOCAL_DOC_KEYWORDS.get(script, _LOCAL_DOC_KEYWORDS.get("en", "PDF"))
+    names: List[str] = []
+    for n in [native, canonical, str(entity or "").strip()]:
+        n = str(n or "").strip()
+        if n and n not in names:
+            names.append(n)
+    queries: List[str] = []
+    def add(q: str) -> None:
+        q = re.sub(r"\s+", " ", str(q or "").strip())
+        if q and q not in queries:
+            queries.append(q)
+    for name in names[:3]:
+        add(f'"{name}" ({terms})')
+        if official:
+            add(f'({official}) "{name}" ({terms})')
+            add(f'({official}) "{name}" ({doc_kw})')
+        if media:
+            add(f'({media}) "{name}" ({terms})')
+        add(f'"{name}" ({doc_kw})')
+        add(f'site:ripple.com "{name}"')
+        add(f'site:bis.org "{name}" (Ripple OR XRPL OR blockchain OR CBDC OR tokenisation OR tokenization)')
+    # Barridos específicos sin destruir la lógica China de v146.
+    if canonical == "People's Bank of China (PBoC)" or script == "zh":
+        for q in [
+            '(site:pbc.gov.cn OR site:bis.org OR site:hkma.gov.hk) "中国人民银行" (mBridge OR 多边央行数字货币桥 OR 跨境支付 OR 区块链)',
+            '(site:caixin.com OR site:yicai.com OR site:21jingji.com OR site:thepaper.cn) "中国人民银行" (Ripple OR 瑞波 OR 区块链 OR 跨境支付 OR 数字人民币)',
+            '"连连支付" (Ripple OR RippleNet OR 瑞波 OR 跨境支付)',
+        ]:
+            add(q)
+    if script == "eu":
+        for q in [
+            '(site:ecb.europa.eu OR site:europa.eu OR site:bis.org) "digital euro" (DLT OR blockchain OR wholesale OR interoperability)',
+            '(site:ecb.europa.eu OR site:bis.org OR site:swift.com) "European Central Bank" (Ripple OR XRPL OR tokenisation OR tokenization OR shared ledger)',
+            '(site:eur-lex.europa.eu OR site:eba.europa.eu OR site:esma.europa.eu) (DLT OR tokenisation OR crypto-assets OR settlement) (Ripple OR XRP OR XRPL)',
+        ]:
+            add(q)
+    return queries[:limit]
+
+
+def _native_query_instruction(entity: Any) -> str:
+    """v147: la primera llamada ya sabe que el fallback local es internacional."""
+    canonical, script, native = _native_identity_for_local_sweep(entity)
+    queries = _local_source_query_examples(entity, limit=7)
+    local_hint = _LOCAL_SEARCH_ENGINE_HINTS.get(script, _LOCAL_SEARCH_ENGINE_HINTS.get("en", "fuentes globales y oficiales"))
+    if not queries:
+        return ""
+    return (
+        "\nMODO FUENTES LOCALES / INTERNACIONAL: no dependas solo de resultados globales en inglés/español. "
+        "Si la primera búsqueda no encuentra evidencia suficiente, busca en fuentes locales de la jurisdicción probable. "
+        f"Entidad canónica: {canonical}. Perfil regional/idioma: {script}. Nombre local útil: {native or canonical}. "
+        f"Usa {local_hint}. Consultas orientativas: " + " ; ".join(queries) + ". "
+        "Regla crítica: las fuentes locales amplían cobertura, pero NO convierten menciones genéricas de CBDC/blockchain en conexión Ripple/XRPL. "
+        "Solo cuenta si la fuente menciona explícitamente ambas partes o una cadena documental verificable. "
+    )
+
+
+def _run_local_source_sweep(institution_name: str,
+                            conn: Optional[sqlite3.Connection] = None) -> Dict[str, Any]:
+    """v147: segunda pasada regional para cualquier entidad si la primera quedó débil."""
+    canonical, script, native = _native_identity_for_local_sweep(institution_name)
+    api_key = _get_api_key()
+    entity_type = _classify_entity(canonical)
+    if not api_key:
+        return {"_local_source_sweep_skipped": True, "summary": "Sin API key para barrido local/internacional."}
+    call_type = "discovery_fast"
+    if conn is not None and not _charge_budget(conn, call_type):
+        return {"_budget_locked": True, "summary": "Presupuesto API bloqueado; no se ejecutó barrido local/internacional."}
+    queries = _local_source_query_examples(institution_name, limit=12)
+    schema = {
+        "institution": canonical,
+        "entity_type": entity_type,
+        "connected": False,
+        "confidence": 0.0,
+        "summary": "",
+        "ripple_products": [],
+        "layer": "Descubierto",
+        "icon": "🔎",
+        "connects_to": [],
+        "route_kind": "private",
+        "sources": [],
+        "wallets": [], "corridors": [], "partners": [], "map_points": [],
+        "evidence_items": [], "route_decisions": [], "future_watch_targets": []
+    }
+    prompt = (
+        "Eres un analista OSINT financiero internacional. La primera búsqueda global fue débil o no concluyente. "
+        "Ahora haz una segunda pasada de fuentes locales/regionales: reguladores, bancos centrales, bolsas, repositorios oficiales, PDFs, comunicados, prensa financiera local y BIS/SWIFT/IMF cuando proceda. "
+        f"Entidad investigada por el usuario: {institution_name}. Entidad canónica: {canonical}. "
+        f"Perfil regional/idioma probable: {script}. Nombre local útil: {native or canonical}. "
+        "No traduzcas superficialmente: usa la jurisdicción real y sus fuentes primarias. "
+        "Usa estas consultas como guía, adaptándolas si hace falta:\n- " + "\n- ".join(queries) + "\n"
+        "Regla Proof-First: solo marques connected=true si una fuente conecta explícitamente la entidad con Ripple, XRPL, XRP Ledger, RippleNet, Ripple Payments, RLUSD, Ripple Treasury/GTreasury, Metaco/Custody, Hidden Road, Rail, o una cadena documental verificable. "
+        "Si solo encuentras CBDC/blockchain/tokenización genérica sin Ripple/XRPL, devuelve connected=false pero incluye las fuentes como revisión. "
+        "Responde SOLO JSON válido, sin markdown, con esta estructura exacta: " + json.dumps(schema, ensure_ascii=False)
+    )
+    payload = {
+        "model": ANTHROPIC_MODEL_FAST,
+        "max_tokens": 1500,
+        "system": [{"type": "text", "text": _AUDIT_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+        "tools": [{"type": "web_search_20250305", "name": "web_search"}],
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01",
+               "anthropic-beta": "prompt-caching-2024-07-31,web-search-2025-03-05",
+               "content-type": "application/json"}
+    try:
+        resp = requests.post(ANTHROPIC_API_URL, json=payload, headers=headers, timeout=55)
+        if resp.status_code in (408, 409, 425, 429, 500, 502, 503, 504, 529):
+            raise RuntimeError(f"{resp.status_code} Error temporal Anthropic/local sweep: {getattr(resp, 'text', '')[:180]}")
+        resp.raise_for_status()
+        data = resp.json()
+        _settle_budget(conn, call_type, data, ANTHROPIC_MODEL_FAST)
+        text_parts = [b.get("text", "") for b in data.get("content", []) if isinstance(b, dict) and b.get("type") == "text"]
+        raw = " ".join(text_parts).strip().replace("```json", "").replace("```", "").strip()
+        try:
+            result = _loads_discovery_json_lenient(raw) if raw else {}
+        except Exception as parse_exc:
+            result = _salvage_discovery_from_text_and_sources(canonical, entity_type, raw, data, parse_exc)
+        result = _finalize_discovery_result(result, canonical, entity_type, data)
+        result["_local_source_sweep"] = True
+        result["_local_source_sweep_profile"] = script
+        return result
+    except Exception as exc:
+        _refund_budget(conn, call_type)
+        if _is_anthropic_temporal_error(exc):
+            r = _safe_api_temporal_result(canonical, entity_type, exc)
+            r["_local_source_sweep"] = True
+            r["_local_source_sweep_profile"] = script
+            return r
+        return _finalize_discovery_result({
+            "institution": canonical,
+            "entity_type": entity_type,
+            "connected": False,
+            "confidence": 0.0,
+            "summary": f"Barrido local/internacional falló: {str(exc)[:220]}",
+            "ripple_products": [], "layer": _classify_entity(canonical), "icon": "🔎",
+            "connects_to": [], "route_kind": "private", "sources": [],
+            "wallets": [], "corridors": [], "partners": [], "map_points": [], "evidence_items": [], "route_decisions": [],
+            "_local_source_sweep_error": str(exc)[:220],
+            "_local_source_sweep_profile": script,
+        }, canonical, entity_type, None)
+
+
+def search_institution_connections(institution_name: str,
+                                   conn: Optional[sqlite3.Connection] = None,
+                                   force_online: bool = False) -> Dict[str, Any]:
+    """v147: caché/global primero; si queda débil, barrido local/internacional para cualquier entidad."""
+    raw_name = str(institution_name or "").strip()
+    canonical_name = _canonical_entity_name(raw_name)
+    base_search = _ORIG_SEARCH_INSTITUTION_CONNECTIONS_V147_PRE
+    try:
+        result = base_search(canonical_name, conn=conn, force_online=force_online)
+    except TypeError:
+        result = base_search(canonical_name, conn=conn, force_online=force_online)
+    result = dict(result or {})
+    result["institution"] = _canonical_entity_name(result.get("institution") or canonical_name)
+    if raw_name and _canonical_entity_key(raw_name) != _canonical_entity_key(canonical_name):
+        result["_user_query_alias"] = raw_name
+        result["_canonical_resolved_from_alias"] = canonical_name
+    needs_local = _is_weak_discovery_for_local_sweep(result)
+    # Si ya hay un error temporal de API, no fuerces más llamadas.
+    if needs_local and not result.get("_api_temporal_error") and not result.get("_budget_locked"):
+        local = _run_local_source_sweep(raw_name or canonical_name, conn=conn)
+        result = _merge_local_sweep_result(result, local, raw_name or canonical_name)
+        try:
+            if conn is not None and not result.get("_api_temporal_error") and not result.get("_api_transient_error"):
+                _set_search_cache(conn, canonical_name, result, "discovery")
+                if raw_name and raw_name != canonical_name:
+                    _set_search_cache(conn, raw_name, result, "discovery")
+        except Exception:
+            pass
+    return result
+
+
+def _rrp_v147_selftest_international_sweep() -> Dict[str, Any]:
+    """Diagnóstico sin internet: verifica perfiles y queries locales internacionales."""
+    samples = [
+        "banco popular chino", "Banco Central Europeo", "European Central Bank",
+        "Banco de España", "Banco Central do Brasil", "Bundesbank", "Banque de France",
+        "Banca d'Italia", "Bank Indonesia", "Akbank", "SBI Remit",
+        "Entidad inventada global",
+    ]
+    rows = []
+    for s in samples:
+        ident = _native_identity_for_local_sweep(s)
+        rows.append({
+            "input": s,
+            "canonical": _canonical_entity_name(s),
+            "identity": ident,
+            "queries": _local_source_query_examples(s, limit=4),
+            "instruction_head": _native_query_instruction(s)[:280],
+        })
+    return {"ok": True, "rows": rows}
 
 
 if __name__ == "__main__":
