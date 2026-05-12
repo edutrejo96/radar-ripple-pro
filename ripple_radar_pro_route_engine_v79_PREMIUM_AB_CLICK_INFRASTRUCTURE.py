@@ -171,7 +171,7 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v88_2026_05_12_CINEMATIC_CLIP_FIX_RADAR_FM_OK"
+BUILD_ID = "v89_2026_05_12_REAL_XRP_PRICE_CINEMATIC_RADAR_FM_OK"
 BUILD_NOTE = "Fix cinematica _safe_float + Radar FM funcionando con GitHub Raw/static + A-B premium deduplicado"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
@@ -4357,6 +4357,88 @@ def fetch_xrp_price_history(days: int = 365) -> pd.DataFrame:
         return df_p
     except Exception:
         return pd.DataFrame(columns=["day", "price_usd"])
+
+
+def fetch_xrp_spot_price_usd() -> tuple[Optional[float], str]:
+    """Precio spot XRP/USD en vivo con varios proveedores públicos.
+    Devuelve (precio, fuente). No requiere API key.
+    """
+    headers = {"User-Agent": "RippleRadarPro/price/1.0"}
+    providers = [
+        ("CoinGecko spot", "https://api.coingecko.com/api/v3/simple/price?ids=ripple&vs_currencies=usd"),
+        ("Binance XRPUSDT", "https://api.binance.com/api/v3/ticker/price?symbol=XRPUSDT"),
+        ("Coinbase XRP-USD", "https://api.coinbase.com/v2/prices/XRP-USD/spot"),
+    ]
+    for name, url in providers:
+        try:
+            r = requests.get(url, headers=headers, timeout=8)
+            if r.status_code != 200:
+                continue
+            data = r.json()
+            price = None
+            if name.startswith("CoinGecko"):
+                price = data.get("ripple", {}).get("usd")
+            elif name.startswith("Binance"):
+                price = data.get("price")
+            elif name.startswith("Coinbase"):
+                price = data.get("data", {}).get("amount")
+            price = float(price)
+            if price > 0:
+                return price, name
+        except Exception:
+            continue
+    return None, "no disponible"
+
+
+def latest_xrp_price_from_history(xrp_history: Optional[pd.DataFrame]) -> tuple[Optional[float], str]:
+    """Extrae el último precio XRP/USD histórico si está disponible."""
+    try:
+        if isinstance(xrp_history, pd.DataFrame) and not xrp_history.empty and "price_usd" in xrp_history.columns:
+            series = pd.to_numeric(xrp_history["price_usd"], errors="coerce").dropna()
+            if not series.empty and float(series.iloc[-1]) > 0:
+                return float(series.iloc[-1]), "CoinGecko histórico último punto"
+    except Exception:
+        pass
+    return None, "no disponible"
+
+
+def resolve_xrp_price_now(xrp_history: Optional[pd.DataFrame] = None, row: Optional[object] = None, df_source: Optional[pd.DataFrame] = None) -> tuple[float, str, bool]:
+    """Resuelve precio XRP real para la cinemática.
+    Prioridad: spot vivo -> histórico real -> columnas internas -> referencia.
+    Devuelve (precio, fuente, es_referencia).
+    """
+    price, source = fetch_xrp_spot_price_usd()
+    if price is not None:
+        return price, source, False
+
+    price, source = latest_xrp_price_from_history(xrp_history)
+    if price is not None:
+        return price, source, False
+
+    try:
+        if row is not None:
+            for col in ["xrp_price", "price_usd", "price", "close", "xrp_close"]:
+                try:
+                    val = row.get(col, None) if hasattr(row, "get") else None
+                    val = float(val)
+                    if val > 0:
+                        return val, f"columna interna {col}", False
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    try:
+        if isinstance(df_source, pd.DataFrame) and not df_source.empty:
+            for col in ["xrp_price", "price_usd", "price", "close", "xrp_close"]:
+                if col in df_source.columns:
+                    series = pd.to_numeric(df_source[col], errors="coerce").dropna()
+                    if not series.empty and float(series.iloc[-1]) > 0:
+                        return float(series.iloc[-1]), f"columna interna {col}", False
+    except Exception:
+        pass
+
+    return 2.50, "referencia visual fija: conecta precio real", True
 
 
 def make_scores_chart(df: pd.DataFrame, conn: Optional[sqlite3.Connection] = None) -> go.Figure:
@@ -16803,24 +16885,9 @@ pruebas A→B, rutas, wallets aprobadas, volumen, spread, slippage y señales XR
             large = _safe_float(r.get("large_transfer_score", 0.0), 0.0)
             persistence = _safe_float(r.get("persistence_score", 0.0), 0.0)
 
-            # Precio actual/ref. Si la app no tiene precio real disponible, se avisa y se usa referencia para dibujar.
-            price_now = None
-            try:
-                if xrp_price is not None and float(xrp_price) > 0:
-                    price_now = float(xrp_price)
-            except Exception:
-                price_now = None
-            if price_now is None:
-                for col in ["xrp_price", "price", "close"]:
-                    try:
-                        if col in df.columns and float(r.get(col, 0) or 0) > 0:
-                            price_now = float(r.get(col))
-                            break
-                    except Exception:
-                        pass
-            price_is_ref = price_now is None
-            if price_now is None:
-                price_now = 2.50
+            # Precio XRP real para la cinemática.
+            # Prioridad: spot vivo -> histórico CoinGecko -> columnas internas -> referencia visual.
+            price_now, price_source, price_is_ref = resolve_xrp_price_now(xrp_price, r, df)
 
             # Spread/slippage estimados con datos de actividad internos. Si conectas orderbook real, esto se sustituye.
             liquidity = _clip((math.log10(max(1.0, volume)) / 8.0) * 100.0 + dex * 0.12 + trust * 0.08 + coverage * 0.10)
@@ -16866,13 +16933,13 @@ pruebas A→B, rutas, wallets aprobadas, volumen, spread, slippage y señales XR
                 with tab:
                     candle_df = _make_ohlc(price_now, sc["pct"], steps=36, vol=base_volatility * (0.8 if sc["name"] == "Conservador" else 1.0 if "Base" in sc["name"] else 1.35))
                     target = candle_df["close"].iloc[-1]
-                    price_txt = f"${price_now:.4f}" + (" ref." if price_is_ref else "")
+                    price_txt = f"${price_now:.4f}" + (" ref." if price_is_ref else " real")
                     fig = go.Figure()
                     fig.add_trace(go.Candlestick(
                         x=candle_df["x"], open=candle_df["open"], high=candle_df["high"], low=candle_df["low"], close=candle_df["close"],
                         name=f"XRP · {sc['name']}"
                     ))
-                    fig.add_trace(go.Scatter(x=candle_df["x"], y=[price_now]*len(candle_df), mode="lines", name="Precio actual/ref.", line=dict(dash="dot")))
+                    fig.add_trace(go.Scatter(x=candle_df["x"], y=[price_now]*len(candle_df), mode="lines", name="Precio XRP real/ref.", line=dict(dash="dot")))
                     # Frames tipo vídeo: va revelando velas.
                     frames = []
                     for k in range(4, len(candle_df)+1):
@@ -16880,7 +16947,7 @@ pruebas A→B, rutas, wallets aprobadas, volumen, spread, slippage y señales XR
                         frames.append(go.Frame(
                             data=[
                                 go.Candlestick(x=part["x"], open=part["open"], high=part["high"], low=part["low"], close=part["close"], name=f"XRP · {sc['name']}"),
-                                go.Scatter(x=part["x"], y=[price_now]*len(part), mode="lines", name="Precio actual/ref.", line=dict(dash="dot")),
+                                go.Scatter(x=part["x"], y=[price_now]*len(part), mode="lines", name="Precio XRP real/ref.", line=dict(dash="dot")),
                             ],
                             name=str(k)
                         ))
@@ -16888,7 +16955,7 @@ pruebas A→B, rutas, wallets aprobadas, volumen, spread, slippage y señales XR
                     fig.update_layout(
                         title=f"Cinemática XRP · {sc['name']} · {sc['pct']*100:+.1f}% → ${target:.4f}",
                         paper_bgcolor="#020617", plot_bgcolor="#020617", font=dict(color="#E5E7EB"), height=560,
-                        xaxis_title="Velas proyectadas", yaxis_title="Precio XRP", xaxis_rangeslider_visible=False,
+                        xaxis_title="Velas proyectadas", yaxis_title="Precio XRP/USD", xaxis_rangeslider_visible=False,
                         margin=dict(l=40, r=30, t=80, b=40),
                         updatemenus=[dict(type="buttons", showactive=False, x=0.02, y=1.12, buttons=[
                             dict(label="▶️ Reproducir cinemática", method="animate", args=[None, {"frame": {"duration": 210, "redraw": True}, "fromcurrent": True, "transition": {"duration": 60}}]),
@@ -16896,7 +16963,7 @@ pruebas A→B, rutas, wallets aprobadas, volumen, spread, slippage y señales XR
                         ])]
                     )
                     c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("Precio actual/ref.", price_txt)
+                    c1.metric("Precio XRP real/ref.", price_txt)
                     c2.metric("Objetivo escenario", f"${target:.4f}", f"{sc['pct']*100:+.1f}%")
                     c3.metric("Probabilidad interna", f"{sc['prob']:.0f}%")
                     c4.metric("Volatilidad visual", f"{base_volatility*100:.1f}%")
@@ -16909,11 +16976,12 @@ pruebas A→B, rutas, wallets aprobadas, volumen, spread, slippage y señales XR
             c3.metric("Slippage estimado", f"{slippage_bps:.1f} bps")
             c4.metric("Presión precio", f"{pressure:.1f}%")
             c5.metric("Calidad adopción", f"{quality:.1f}%")
+            st.caption(f"Precio usado por la cinemática: {price_txt} · fuente: {price_source}")
 
             st.markdown(f"""
 <div class='rrp-note'>
 <b>Lectura viva:</b> el escenario dominante actual es <b>{html.escape(dominant['name'])}</b> con probabilidad interna {dominant['prob']:.0f}%.
-La simulación usa precio {price_txt}, volumen XRPL {volume:,.0f}, spread {spread_bps:.1f} bps, slippage {slippage_bps:.1f} bps,
+La simulación usa precio {price_txt} (fuente: {html.escape(str(price_source))}), volumen XRPL {volume:,.0f}, spread {spread_bps:.1f} bps, slippage {slippage_bps:.1f} bps,
 {route_total} rutas, {proof_total} pruebas y {dyn_total} rutas dinámicas. Si añades pruebas reales o nuevas fuentes, esta cinemática debe cambiar.
 </div>
 """, unsafe_allow_html=True)
