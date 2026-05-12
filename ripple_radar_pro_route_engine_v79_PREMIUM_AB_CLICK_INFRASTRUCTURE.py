@@ -173,8 +173,8 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v129_2026_05_12_CASCADE_ADVANCE_FIX"
-BUILD_NOTE = "Fix cascada: avanza pendientes, limpia duplicados investigados y evita que hijos se conviertan en la raíz Colombia por contexto stale"
+BUILD_ID = "v132_2026_05_12_API_BEHAVIOR_ROLLBACK_SAFE_CASCADE"
+BUILD_NOTE = "Rollback del comportamiento API anterior + cascada protegida ante 529/5xx sin contaminar resultados"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
 import os as _os
@@ -10961,6 +10961,63 @@ Toda la lectura visual A→B se concentra en el gráfico premium superior y sus 
 # DISCOVERY ENGINE — búsqueda online de instituciones + reescritura dinámica
 # =============================================================================
 ANTHROPIC_API_URL    = "https://api.anthropic.com/v1/messages"
+
+# v132: Protección conservadora ante saturación de Anthropic.
+# No hacemos reintentos agresivos: mantenemos el comportamiento de API de versiones anteriores.
+# La diferencia es que un 529/overloaded NO se guarda como investigación negativa,
+# NO alimenta cascada y NO dibuja rutas al 0%.
+def _anthropic_status_code_from_exception(exc: Any) -> Optional[int]:
+    try:
+        resp = getattr(exc, "response", None)
+        if resp is not None and getattr(resp, "status_code", None) is not None:
+            return int(resp.status_code)
+    except Exception:
+        pass
+    m = re.search(r"\b(408|409|425|429|500|502|503|504|529)\b", str(exc or ""))
+    try:
+        return int(m.group(1)) if m else None
+    except Exception:
+        return None
+
+
+def _is_anthropic_temporal_error(exc: Any) -> bool:
+    code = _anthropic_status_code_from_exception(exc)
+    if code in {408, 409, 425, 500, 502, 503, 504, 529}:
+        return True
+    txt = str(exc or "").lower()
+    return any(x in txt for x in ("overload", "overloaded", "temporarily unavailable", "server error", "timeout"))
+
+
+def _safe_api_temporal_result(entity: str, entity_type: str, exc: Any) -> Dict[str, Any]:
+    code = _anthropic_status_code_from_exception(exc)
+    code_txt = f"{code} " if code else ""
+    return {
+        "institution": entity,
+        "entity_type": entity_type,
+        "connected": False,
+        "confidence": 0.0,
+        "summary": (
+            f"⚠️ API temporalmente saturada ({code_txt}Anthropic). "
+            "No se considera resultado de investigación: no significa sin conexión, "
+            "no se guarda como prueba negativa y no alimenta la cascada. Reintenta más tarde o usa un resultado cacheado."
+        ),
+        "ripple_products": [],
+        "layer": "Descubierto",
+        "icon": "⏳",
+        "connects_to": [],
+        "route_kind": "retry_later",
+        "sources": [],
+        "wallets": [],
+        "corridors": [],
+        "partners": [],
+        "map_points": [],
+        "evidence_items": [],
+        "route_decisions": [],
+        "_api_temporal_error": True,
+        "_api_transient_error": True,
+        "_do_not_cache": True,
+        "_do_not_cascade": True,
+    }
 # CostGuard v2: Haiku por defecto. Sonnet queda reservado para investigaciones profundas futuras.
 ANTHROPIC_MODEL_FAST = "claude-haiku-4-5-20251001"   # modo barato/rápido: discovery + validación
 ANTHROPIC_MODEL_DEEP = "claude-sonnet-4-20250514"    # modo caro: solo deep research explícito
@@ -16122,10 +16179,14 @@ def search_institution_connections(institution_name: str,
     for _attempt in range(3):
         try:
             resp = requests.post(ANTHROPIC_API_URL, json=payload, headers=headers, timeout=55)
+            # v132: igual que antes para 429; para 529/5xx no hacemos más llamadas.
+            # Lo convertimos en aviso temporal para no contaminar cascada ni confianza.
             if resp.status_code == 429:
                 wait = int(resp.headers.get("Retry-After", (2 ** _attempt) * 8))
                 _time.sleep(min(wait, 120))
                 continue
+            if resp.status_code in (408, 409, 425, 500, 502, 503, 504, 529):
+                raise RuntimeError(f"{resp.status_code} Error temporal Anthropic: {getattr(resp, 'text', '')[:180]}")
             if resp.status_code in (401, 403):
                 _eb = {}
                 try: _eb = resp.json()
@@ -16184,17 +16245,22 @@ def search_institution_connections(institution_name: str,
                 })
                 _seen_p.add(_cpname)
             # ── Guardar en caché compartida ──────────────────────────────────
-            if conn is not None:
+            # Nunca guardar resultados temporales de API como si fueran investigación real.
+            if conn is not None and not result.get("_do_not_cache") and not result.get("_api_temporal_error") and not result.get("_api_transient_error"):
                 _set_search_cache(conn, institution_name, result, "discovery")
             result["_from_cache"] = False
             return result
         except Exception as exc:
             last_exc = exc
+            # v132: 429 conserva el comportamiento antiguo; 529/5xx se devuelven como
+            # estado temporal seguro, no como investigación fallida.
             if "429" not in str(exc):
                 break
             wait = (2 ** _attempt) * 8
             _time.sleep(min(wait, 120))
     _refund_budget(conn, _discovery_call_type)
+    if _is_anthropic_temporal_error(last_exc):
+        return _safe_api_temporal_result(institution_name, entity_type, last_exc)
     return _finalize_discovery_result({
         "institution": institution_name,
         "entity_type": entity_type,
@@ -17994,6 +18060,8 @@ def _remember_cascade_result(result: Dict[str, Any]) -> None:
     try:
         if not result or not st.session_state.get("disc_cascade_active"):
             return
+        if result.get("_do_not_cascade") or result.get("_api_temporal_error") or result.get("_api_transient_error"):
+            return
         name = _canonical_display_node(result.get("institution", ""))
         if not name:
             return
@@ -18269,6 +18337,14 @@ def _rrp_record_discovery_step(result: Dict[str, Any], *, source: str = "auto") 
     """Guarda un árbol ordenado de Discovery para que la cascada no parezca que se actualiza 'arriba'."""
     try:
         if not result:
+            return
+        if result.get("_do_not_cascade") or result.get("_api_temporal_error") or result.get("_api_transient_error"):
+            # API temporal: no se registra como investigación ni como sin conexión.
+            # Limpiamos estado de cascada para que la UI no quede atascada.
+            st.session_state.pop("rrp_cascade_inflight_key", None)
+            st.session_state["disc_cascade_active"] = False
+            st.session_state["disc_cascade_parent"] = ""
+            st.session_state.pop("disc_cascade_depth", None)
             return
         name = _canonical_display_node(result.get("institution", ""))
         if not name:
@@ -18971,7 +19047,7 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
                         st.stop()
 
                     # Registrar en log de mapa si se encontró algo nuevo
-                    is_error = any(x in summ for x in ("Error:", "Sin API key", "401", "429", "400", "invalid_request"))
+                    is_error = any(x in summ for x in ("Error:", "Sin API key", "401", "429", "529", "API temporal", "Anthropic", "400", "invalid_request")) or bool(res.get("_api_temporal_error") or res.get("_api_transient_error"))
                     if not is_error and float(res.get("confidence", 0)) > 0.4:
                         _log_map_update(conn, "discovery", _pending,
                                         f"conf={res.get('confidence', 0):.0%} layer={res.get('layer','?')}")
@@ -19021,7 +19097,9 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
             for rd in (result.get("route_decisions") or []) if isinstance(rd, dict)
         }
         _connect_targets = {_canonical_entity_name(x) for x in (result.get("connects_to") or [])}
-        if result.get("connected"):
+        if result.get("_api_temporal_error") or result.get("_api_transient_error"):
+            connected_txt = "API temporal — reintentar"
+        elif result.get("connected"):
             if "Treasury" in _connect_targets and any(x in _rd_types for x in {"official_partner", "institutional", "deductive_watch"}):
                 connected_txt = "Ruta infra documentada"
             elif any(x in _rd_types for x in DEDUCTIVE_EVIDENCE_TYPES):
@@ -19264,6 +19342,8 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
             - Ahora también usa map_points[] y connects_to[] para casos como PBoC → mBridge/LianLian.
             """
             try:
+                if (_result or {}).get("_do_not_cascade") or (_result or {}).get("_api_temporal_error") or (_result or {}).get("_api_transient_error"):
+                    return []
                 root_name = _canonical_entity_name(_result.get("institution", ""))
                 # No bloqueamos Treasury/Rail/DEX/Metaco/Prime: son precisamente las
                 # piezas que deben activar investigación en cascada. Solo evitamos el
@@ -19396,7 +19476,7 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
             or result.get("_force_cascade_reseed")
             or (st.session_state.get("disc_from_cache") and _derived_now_for_seed and not st.session_state.get("cascade_queue"))
         )
-        if (not st.session_state.get(_cascade_seed_key)) or _force_reseed_cascade:
+        if (not result.get("_do_not_cascade") and not result.get("_api_temporal_error") and not result.get("_api_transient_error")) and ((not st.session_state.get(_cascade_seed_key)) or _force_reseed_cascade):
             _queued_seed = _queue_cascade_entities_from_result(result)
             st.session_state[_cascade_seed_key] = True
             if _queued_seed:
