@@ -25068,5 +25068,473 @@ except Exception:
     pass
 
 
+
+# =============================================================================
+# v151 · FIX DEFINITIVO: NO MÁS 0% FALSOS EN NODOS FIJOS + TYPEERROR PANEL
+# =============================================================================
+# Corrección real de v149/v150:
+# 1) El wrapper anterior de render_node_info_panel tenía firma incorrecta y podía
+#    provocar TypeError en Streamlit al abrir fichas de nodos.
+# 2) La limpieza de falsos 0% dependía de columnas sanitizer_* y de detectar una
+#    ruta concreta; si la DB venía de versiones antiguas, esas filas podían seguir
+#    apareciendo como "❌ Sin evidencia verificable".
+# 3) Para nodos fijados/estructurales, un 0% sin pruebas no significa ausencia de
+#    evidencia: significa pendiente de investigación documental/on-chain.
+
+_RRP_V151_FALSE_NEGATIVE_LABELS = (
+    "sin evidencia verificable",
+    "sin evidencia registrada",
+    "sin rastro verificable",
+)
+
+
+def _rrp_v151_table_columns(conn: sqlite3.Connection, table: str) -> Set[str]:
+    try:
+        return {str(r[1]) for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    except Exception:
+        return set()
+
+
+def _rrp_v151_safe_connection_rows(conn: Optional[sqlite3.Connection]) -> List[Dict[str, Any]]:
+    """Lee connection_proofs aunque falten columnas de migraciones antiguas."""
+    if conn is None:
+        return []
+    try:
+        ensure_discovery_tables(conn)
+    except Exception:
+        pass
+    try:
+        # Añadir sanitizer si existe la función; si falla, seguimos sin depender de ella.
+        try:
+            ensure_sanitizer_tables(conn)
+        except Exception:
+            pass
+        cols = _rrp_v151_table_columns(conn, "connection_proofs")
+        if not cols:
+            return []
+        wanted = [
+            "proof_id", "node_a", "node_b", "proof_type", "proof_data",
+            "confidence", "onchain", "cert_label", "validated_at", "sanitizer_status",
+        ]
+        select_cols = [c for c in wanted if c in cols]
+        if not select_cols:
+            return []
+        q = "SELECT " + ",".join(select_cols) + " FROM connection_proofs"
+        if "sanitizer_status" in cols:
+            q += " WHERE COALESCE(sanitizer_status,'active')!='quarantined'"
+        rows = conn.execute(q).fetchall()
+        out = []
+        for row in rows:
+            d = dict(zip(select_cols, row))
+            out.append(d)
+        return out
+    except Exception:
+        return []
+
+
+def _rrp_v151_pair_has_existing_map_line(node_a: Any, node_b: Any, conn: Optional[sqlite3.Connection] = None) -> bool:
+    """True si A↔B ya pertenece al mapa base o a dynamic_routes."""
+    try:
+        ka = _canonical_entity_key(node_a)
+        kb = _canonical_entity_key(node_b)
+        for r in ROUTES:
+            try:
+                if {ka, kb} == {_canonical_entity_key(r[0]), _canonical_entity_key(r[1])}:
+                    return True
+            except Exception:
+                continue
+        if conn is not None:
+            cols = _rrp_v151_table_columns(conn, "dynamic_routes")
+            if {"src", "dst"}.issubset(cols):
+                q = "SELECT src,dst FROM dynamic_routes"
+                if "sanitizer_status" in cols:
+                    q += " WHERE COALESCE(sanitizer_status,'active')!='quarantined'"
+                for a, b in conn.execute(q).fetchall():
+                    if {ka, kb} == {_canonical_entity_key(a), _canonical_entity_key(b)}:
+                        return True
+    except Exception:
+        pass
+    return False
+
+
+def _rrp_v151_is_fixed_or_watch_related_pair(node_a: Any, node_b: Any, conn: Optional[sqlite3.Connection] = None) -> bool:
+    """Pares que no deben convertirse en 0% sin investigación documental real."""
+    try:
+        # Watchpoints públicos internos: siempre son observabilidad, no negativos.
+        if _rrp_is_public_watchpoint_node(node_a) or _rrp_is_public_watchpoint_node(node_b):
+            return True
+        # Si al menos un extremo es nodo fijado del mapa, y hay línea o la fila nació
+        # de una validación del mapa, lo tratamos como pendiente.
+        if _rrp_v150_is_fixed_node(node_a) or _rrp_v150_is_fixed_node(node_b):
+            return True
+        # Pares explícitos del mapa dinámico/estático.
+        if _rrp_v151_pair_has_existing_map_line(node_a, node_b, conn):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _rrp_v151_proof_data_has_real_evidence(pdata: Any) -> bool:
+    """Detecta si una fila contiene fuentes reales; si no, es candidata a pendiente."""
+    try:
+        if isinstance(pdata, str):
+            data = json.loads(pdata or "{}")
+        elif isinstance(pdata, dict):
+            data = pdata
+        else:
+            data = {}
+    except Exception:
+        data = {}
+    try:
+        if data.get("has_onchain") or data.get("has_internet"):
+            proofs = data.get("proofs") or []
+            # Si dice tener internet/onchain pero no trae ninguna URL/TX, no lo consideramos prueba real.
+            for p in proofs:
+                if not isinstance(p, dict):
+                    continue
+                if p.get("tx_hash") or p.get("ledger") or p.get("url") or p.get("source_url"):
+                    return True
+        proofs = data.get("proofs") or []
+        for p in proofs:
+            if not isinstance(p, dict):
+                continue
+            typ = str(p.get("type") or "").strip().lower()
+            if typ in _RRP_FALSE_NEGATIVE_PROOF_TYPES_V148:
+                continue
+            if p.get("tx_hash") or p.get("ledger") or p.get("url") or p.get("source_url"):
+                return True
+        # También admitir fuentes sueltas antiguas.
+        for key in ("url", "source_url", "source_urls", "sources"):
+            val = data.get(key)
+            if isinstance(val, str) and "http" in val:
+                return True
+            if isinstance(val, list) and any("http" in str(x) for x in val):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _rrp_v151_is_false_negative_row(row: Dict[str, Any], conn: Optional[sqlite3.Connection] = None) -> bool:
+    try:
+        a = row.get("node_a")
+        b = row.get("node_b")
+        if not a or not b:
+            return False
+        conf = float(row.get("confidence") or 0.0)
+        ptype = str(row.get("proof_type") or "").strip().lower()
+        pdata = row.get("proof_data") or "{}"
+        cert = ""
+        try:
+            data = json.loads(pdata or "{}") if isinstance(pdata, str) else dict(pdata or {})
+            cert = str(data.get("cert_label") or row.get("cert_label") or "").strip().lower()
+        except Exception:
+            cert = str(row.get("cert_label") or "").strip().lower()
+        if not _rrp_v151_is_fixed_or_watch_related_pair(a, b, conn):
+            return False
+        has_real = _rrp_v151_proof_data_has_real_evidence(pdata)
+        negative_label = any(x in cert for x in _RRP_V151_FALSE_NEGATIVE_LABELS)
+        false_type = ptype in _RRP_FALSE_NEGATIVE_PROOF_TYPES_V148 or ptype in {"sin_evidencia", "no_evidence", "none"}
+        return (not has_real) and (conf <= 0.05 or false_type or negative_label)
+    except Exception:
+        return False
+
+
+def _rrp_v151_cleanup_all_fixed_false_negatives(conn: Optional[sqlite3.Connection]) -> int:
+    """Elimina de forma robusta filas 0% antiguas de nodos fijados/watchpoints."""
+    if conn is None:
+        return 0
+    removed = 0
+    try:
+        rows = _rrp_v151_safe_connection_rows(conn)
+        for row in rows:
+            try:
+                if not _rrp_v151_is_false_negative_row(row, conn):
+                    continue
+                proof_id = row.get("proof_id")
+                a = row.get("node_a")
+                b = row.get("node_b")
+                if proof_id:
+                    cur = conn.execute("DELETE FROM connection_proofs WHERE proof_id=?", (proof_id,))
+                else:
+                    cur = conn.execute(
+                        "DELETE FROM connection_proofs WHERE node_a=? AND node_b=? AND COALESCE(confidence,0)<=0.05",
+                        (a, b),
+                    )
+                removed += int(cur.rowcount or 0)
+            except Exception:
+                continue
+        if removed:
+            conn.commit()
+    except Exception:
+        pass
+    return removed
+
+
+# Sobrescribir limpiadores anteriores con el limpiador robusto.
+def _rrp_v149_cleanup_doc_pending_false_negatives(conn: Optional[sqlite3.Connection]) -> int:
+    return _rrp_v151_cleanup_all_fixed_false_negatives(conn)
+
+
+def _rrp_v150_cleanup_fixed_node_false_negatives(conn: Optional[sqlite3.Connection]) -> int:
+    return _rrp_v151_cleanup_all_fixed_false_negatives(conn)
+
+
+# Reforzar validación individual: estas líneas no se guardan como 0%.
+_ORIG_VALIDATE_CONNECTION_ONCHAIN_V151_PRE = validate_connection_onchain
+
+def validate_connection_onchain(node_a: str, node_b: str, conn: sqlite3.Connection, force: bool = False) -> Dict[str, Any]:
+    try:
+        if _rrp_v151_is_fixed_or_watch_related_pair(node_a, node_b, conn) and not force:
+            return _rrp_v149_doc_pending_result(node_a, node_b, conn)
+    except Exception:
+        pass
+    res = _ORIG_VALIDATE_CONNECTION_ONCHAIN_V151_PRE(node_a, node_b, conn, force=force)
+    try:
+        _rrp_v151_cleanup_all_fixed_false_negatives(conn)
+    except Exception:
+        pass
+    return res
+
+
+# Wrapper final correcto: MISMA FIRMA que la función original llamada en main().
+def render_node_info_panel(
+    focus_node: str,
+    row: pd.Series,
+    conn: Optional[sqlite3.Connection],
+    all_routes: List,
+    all_nodes: Dict,
+) -> None:
+    try:
+        if conn is not None:
+            removed = _rrp_v151_cleanup_all_fixed_false_negatives(conn)
+            if removed:
+                st.session_state["rrp_v151_removed_false_negatives"] = int(removed)
+    except Exception:
+        pass
+
+    # Llamar a la función original real, no a wrappers v149/v150 de firma incorrecta.
+    try:
+        _ORIG_RENDER_NODE_INFO_PANEL_V149(focus_node, row, conn, all_routes, all_nodes)
+    except TypeError:
+        # Fallback por si el archivo ha sido mezclado con otra rama.
+        try:
+            _ORIG_RENDER_NODE_INFO_PANEL_V149(focus_node, row, conn, all_routes, all_nodes)
+        except Exception as e:
+            st.error(f"No pude renderizar la ficha del nodo: {e}")
+            return
+
+    try:
+        if _rrp_v150_is_fixed_node(focus_node):
+            st.caption("📌 Nodo fijado: una línea sin prueba específica aparece como pendiente de investigación documental/on-chain, no como 0% ni como ausencia de evidencia.")
+    except Exception:
+        pass
+
+    try:
+        pending = _rrp_v149_document_pending_pairs_for_node(conn, focus_node, limit=16)
+    except Exception:
+        pending = []
+    if not pending:
+        return
+
+    st.markdown(
+        "<div style='margin-top:10px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.30);"
+        "border-radius:12px;padding:10px 12px;'>"
+        "<div style='color:#F59E0B;font-weight:900'>🧾 Líneas pendientes de investigación documental / on-chain</div>"
+        "<div style='color:#CBD5E1;font-size:.80rem;margin-top:4px;line-height:1.45'>"
+        "Estas líneas pertenecen al mapa o a nodos fijados. Si todavía no tienen una prueba específica guardada, "
+        "no se muestran como 0%; quedan pendientes para revisar documentos, fuentes oficiales o señales on-chain cuando proceda."
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+    for item in pending:
+        try:
+            peer = item.get("peer") or ""
+            kind = item.get("kind") or "pending"
+            note = item.get("note") or "Pendiente de revisión documental/on-chain."
+            with st.expander(f"🧾 Pendiente · {focus_node} ↔ {peer} · {kind}", expanded=False):
+                st.markdown(f"**Estado:** pendiente de investigación específica.  \n**Lectura correcta:** {note}")
+                key = f"v151_doc_line_{hashlib.sha256(_canonical_pair_key(focus_node, peer).encode()).hexdigest()[:12]}"
+                if st.button("🧾 Investigar documentos de esta línea", key=key, use_container_width=True):
+                    q = f"{_canonical_entity_name(focus_node)} {_canonical_entity_name(peer)}"
+                    with st.spinner(f"Investigando documentos para: {q}"):
+                        try:
+                            res = search_institution_connections(q, conn=conn, force_online=True)
+                            res = _finalize_discovery_result(res, q, _classify_entity(q), None)
+                            apply_info = apply_discovery_to_map(conn, res, auto=True)
+                            st.session_state["disc_result"] = res
+                            st.session_state["disc_query"] = q
+                            st.session_state["disc_from_cache"] = False
+                            st.success(
+                                f"Investigación lanzada: {apply_info.get('added_routes',0)} rutas · "
+                                f"{apply_info.get('added_nodes',0)} nodos/puntos actualizados."
+                            )
+                        except Exception as e:
+                            st.error(f"No pude completar la investigación documental de la línea: {e}")
+        except Exception:
+            continue
+
+
+try:
+    _rrp_v151_cleanup_all_fixed_false_negatives(get_conn())
+except Exception:
+    pass
+
+
+
+# =============================================================================
+# v152 · HARD FIX DEFINITIVO: ADAPTADOR UNIVERSAL DEL PANEL DE NODOS
+# =============================================================================
+# Motivo: en ramas anteriores quedaron wrappers con dos firmas distintas:
+#   A) render_node_info_panel(focus_node, row, conn, all_routes, all_nodes)
+#   B) render_node_info_panel(focus_node, all_nodes, all_routes, conn=None, accent=...)
+# Si Streamlit entraba por la firma A pero el wrapper esperaba B, salía TypeError.
+# Este adaptador final acepta ambas firmas, llama siempre a la función base real
+# v61/v79 y añade después el panel de pendientes sin romper main().
+
+_RRP_TRUE_BASE_RENDER_NODE_INFO_PANEL_V152 = globals().get("_ORIG_RENDER_NODE_INFO_PANEL_V149")
+if _RRP_TRUE_BASE_RENDER_NODE_INFO_PANEL_V152 is None:
+    # Fallback extremadamente defensivo: si no existe el ancla v149, usa la función
+    # inmediatamente anterior. Normalmente no debe ocurrir.
+    _RRP_TRUE_BASE_RENDER_NODE_INFO_PANEL_V152 = globals().get("render_node_info_panel")
+
+
+def _rrp_v152_parse_node_panel_args(*args, **kwargs):
+    """Devuelve focus_node, row, conn, all_routes, all_nodes desde cualquier firma conocida."""
+    focus_node = args[0] if args else kwargs.get("focus_node", "")
+    row = None
+    conn = kwargs.get("conn")
+    all_routes = kwargs.get("all_routes")
+    all_nodes = kwargs.get("all_nodes")
+
+    # Firma original usada por main(): (focus_node, row, conn, all_routes, all_nodes)
+    if len(args) >= 5:
+        row = args[1]
+        conn = args[2]
+        all_routes = args[3]
+        all_nodes = args[4]
+    # Firma wrapper antigua: (focus_node, all_nodes, all_routes, conn=..., accent=...)
+    elif len(args) >= 3:
+        second = args[1]
+        third = args[2]
+        # Si el segundo argumento parece dict de nodos, es firma B.
+        if isinstance(second, dict):
+            all_nodes = second
+            all_routes = third
+            conn = kwargs.get("conn")
+            try:
+                row = pd.Series((all_nodes or {}).get(focus_node, {}))
+            except Exception:
+                row = pd.Series({})
+        else:
+            # Probable firma A parcial: (focus_node, row, conn, ...)
+            row = second
+            conn = third
+            if len(args) >= 4:
+                all_routes = args[3]
+            if len(args) >= 5:
+                all_nodes = args[4]
+
+    if all_nodes is None:
+        try:
+            all_nodes = build_all_nodes_for_map(conn) if conn is not None and "build_all_nodes_for_map" in globals() else dict(NODES or {})
+        except Exception:
+            all_nodes = dict(NODES or {})
+    if all_routes is None:
+        all_routes = []
+    if row is None:
+        try:
+            row = pd.Series((all_nodes or {}).get(focus_node, {}))
+        except Exception:
+            row = pd.Series({})
+    return str(focus_node or ""), row, conn, all_routes, all_nodes
+
+
+def render_node_info_panel(*args, **kwargs) -> None:
+    focus_node, row, conn, all_routes, all_nodes = _rrp_v152_parse_node_panel_args(*args, **kwargs)
+
+    try:
+        if conn is not None and "_rrp_v151_cleanup_all_fixed_false_negatives" in globals():
+            removed = int(_rrp_v151_cleanup_all_fixed_false_negatives(conn) or 0)
+            if removed:
+                st.session_state["rrp_v152_removed_false_negatives"] = removed
+    except Exception:
+        pass
+
+    # Llama SIEMPRE a la función base real con la firma original.
+    try:
+        _RRP_TRUE_BASE_RENDER_NODE_INFO_PANEL_V152(focus_node, row, conn, all_routes, all_nodes)
+    except TypeError as e:
+        # Último fallback: algunos wrappers viejos aceptaban firma B. No debe ser la ruta normal.
+        try:
+            _RRP_TRUE_BASE_RENDER_NODE_INFO_PANEL_V152(focus_node, all_nodes, all_routes, conn=conn, accent="#5AD7FF")
+        except Exception as e2:
+            st.error(f"No pude renderizar la ficha del nodo por incompatibilidad de firma: {e2}")
+            return
+    except Exception as e:
+        st.error(f"No pude renderizar la ficha del nodo: {e}")
+        return
+
+    # Nota educativa para nodos fijados.
+    try:
+        if "_rrp_v150_is_fixed_node" in globals() and _rrp_v150_is_fixed_node(focus_node):
+            st.caption("📌 Nodo fijado: una línea sin prueba específica queda como pendiente de investigación documental/on-chain, no como 0% ni como ausencia de evidencia.")
+    except Exception:
+        pass
+
+    # Panel de líneas pendientes, sin falsos negativos.
+    try:
+        pending = _rrp_v149_document_pending_pairs_for_node(conn, focus_node, limit=16) if "_rrp_v149_document_pending_pairs_for_node" in globals() else []
+    except Exception:
+        pending = []
+    if not pending:
+        return
+
+    st.markdown(
+        "<div style='margin-top:10px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.30);"
+        "border-radius:12px;padding:10px 12px;'>"
+        "<div style='color:#F59E0B;font-weight:900'>🧾 Líneas pendientes de investigación documental / on-chain</div>"
+        "<div style='color:#CBD5E1;font-size:.80rem;margin-top:4px;line-height:1.45'>"
+        "Estas líneas pertenecen al mapa o a nodos fijados. Si todavía no tienen una prueba específica guardada, "
+        "no se muestran como 0%; quedan pendientes para revisar documentos, fuentes oficiales o señales on-chain cuando proceda."
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+    for item in pending:
+        try:
+            peer = item.get("peer") or ""
+            kind = item.get("kind") or "pending"
+            note = item.get("note") or "Pendiente de revisión documental/on-chain."
+            with st.expander(f"🧾 Pendiente · {focus_node} ↔ {peer} · {kind}", expanded=False):
+                st.markdown(f"**Estado:** pendiente de investigación específica.  \n**Lectura correcta:** {note}")
+                key = f"v152_doc_line_{hashlib.sha256(_canonical_pair_key(focus_node, peer).encode()).hexdigest()[:12]}"
+                if st.button("🧾 Investigar documentos de esta línea", key=key, use_container_width=True):
+                    q = f"{_canonical_entity_name(focus_node)} {_canonical_entity_name(peer)}"
+                    with st.spinner(f"Investigando documentos para: {q}"):
+                        try:
+                            res = search_institution_connections(q, conn=conn, force_online=True)
+                            res = _finalize_discovery_result(res, q, _classify_entity(q), None)
+                            apply_info = apply_discovery_to_map(conn, res, auto=True)
+                            st.session_state["disc_result"] = res
+                            st.session_state["disc_query"] = q
+                            st.session_state["disc_from_cache"] = False
+                            st.success(
+                                f"Investigación lanzada: {apply_info.get('added_routes',0)} rutas · "
+                                f"{apply_info.get('added_nodes',0)} nodos/puntos actualizados."
+                            )
+                        except Exception as e:
+                            st.error(f"No pude completar la investigación documental de la línea: {e}")
+        except Exception:
+            continue
+
+
+try:
+    if "_rrp_v151_cleanup_all_fixed_false_negatives" in globals():
+        _rrp_v151_cleanup_all_fixed_false_negatives(get_conn())
+except Exception:
+    pass
+
+
 if __name__ == "__main__":
     main()
