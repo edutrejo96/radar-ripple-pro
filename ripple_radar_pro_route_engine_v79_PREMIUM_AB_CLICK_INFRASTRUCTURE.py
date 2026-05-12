@@ -173,8 +173,8 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v108_2026_05_12_MAP_REFRESH_FULL_TESTED"
-BUILD_NOTE = "Test completo de mapas: rango dinámico, cascada, pruebas, rutas XRPL fijas y refresh visual"
+BUILD_ID = "v110_2026_05_12_CORE_XRPL_MAP_LOGIC_FIX"
+BUILD_NOTE = "Sincronización total de mapas + Radar FM persistente + cruce estricto de pruebas"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
 import os as _os
@@ -1685,7 +1685,13 @@ def _dedupe_and_filter_proofs(node_a: str, node_b: str, proofs: Any, max_items: 
 def _register_dynamic_node(conn: sqlite3.Connection, name: str, layer: str, icon: str,
                            confidence: float, summary: str, source_url: str,
                            now: str) -> bool:
-    """Inserta/actualiza un nodo descubierto sin duplicar alias."""
+    """Inserta/actualiza un nodo descubierto sin duplicar alias.
+
+    Devuelve True si el nodo se creó o si cambió algún campo que pueda afectar
+    al mapa. En versiones anteriores solo devolvía True al crear; por eso una
+    re-búsqueda podía actualizar evidencia/capa en SQLite sin provocar refresco
+    visual de los mapas.
+    """
     cname = _canonical_display_node(name)
     # Si el nombre canónico resuelve a un nodo estático existente, no crear duplicado dinámico.
     # Ejemplo: GTreasury/Gtresaury/G Treasury se absorbe dentro de Treasury.
@@ -1698,38 +1704,71 @@ def _register_dynamic_node(conn: sqlite3.Connection, name: str, layer: str, icon
         if not icon or icon in {"?", "🔎", "•"}:
             icon = inferred_icon
     node_id = hashlib.sha256(_norm_key(cname).encode()).hexdigest()[:12]
-    before = conn.execute("SELECT 1 FROM dynamic_nodes WHERE node_id=?", (node_id,)).fetchone()
+    new_values = (
+        cname, layer, icon or "?", round(float(confidence or 0.0), 6),
+        str(source_url or "")[:1200], str(summary or "")[:500],
+    )
+    before = conn.execute(
+        "SELECT name, layer, icon, confidence, source_url, summary FROM dynamic_nodes WHERE node_id=?",
+        (node_id,),
+    ).fetchone()
+    changed = before is None
+    if before is not None:
+        old_values = (
+            str(before[0] or ""), str(before[1] or ""), str(before[2] or ""),
+            round(float(before[3] or 0.0), 6), str(before[4] or "")[:1200], str(before[5] or "")[:500],
+        )
+        changed = old_values != new_values
     conn.execute("""
         INSERT OR REPLACE INTO dynamic_nodes
         (node_id, name, layer, icon, confidence, source_url, summary, added_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        node_id, cname, layer, icon or "?", float(confidence or 0.0),
-        str(source_url or "")[:1200], str(summary or "")[:500], now,
+        node_id, *new_values, now,
     ))
-    return before is None
+    return bool(changed)
 
 
 def _register_dynamic_route(conn: sqlite3.Connection, src: str, dst: str, kind: str,
                             signal_col: str, label: str, confidence: float,
                             evidence: str, source_urls: str, now: str) -> bool:
-    """Inserta/actualiza una ruta descubierta con pruebas y sin duplicados."""
+    """Inserta/actualiza una ruta descubierta con pruebas y sin duplicados.
+
+    Devuelve True si la ruta es nueva o si cambió su tipo/confianza/evidencia.
+    Esto alimenta el revisionado de mapas para que las 3 vistas se refresquen
+    cuando una investigación actualiza datos guardados.
+    """
     src = _canonical_display_node(src)
     dst = _canonical_display_node(dst)
     if not src or not dst or src == dst:
         return False
-    route_id = hashlib.sha256(f"{_norm_key(src)}>{_norm_key(dst)}>{_norm_key(kind)}".encode()).hexdigest()[:12]
-    before = conn.execute("SELECT 1 FROM dynamic_routes WHERE route_id=?", (route_id,)).fetchone()
+    route_kind = kind or "discovered"
+    route_id = hashlib.sha256(f"{_norm_key(src)}>{_norm_key(dst)}>{_norm_key(route_kind)}".encode()).hexdigest()[:12]
+    new_values = (
+        src, dst, route_kind, signal_col or _route_signal_for_kind(route_kind),
+        label or f"{src} -> {dst}", round(float(confidence or 0.0), 6),
+        str(evidence or "")[:600], str(source_urls or "")[:1200],
+    )
+    before = conn.execute(
+        "SELECT src, dst, kind, signal_col, label, confidence, evidence, source_urls FROM dynamic_routes WHERE route_id=?",
+        (route_id,),
+    ).fetchone()
+    changed = before is None
+    if before is not None:
+        old_values = (
+            str(before[0] or ""), str(before[1] or ""), str(before[2] or ""), str(before[3] or ""),
+            str(before[4] or ""), round(float(before[5] or 0.0), 6),
+            str(before[6] or "")[:600], str(before[7] or "")[:1200],
+        )
+        changed = old_values != new_values
     conn.execute("""
         INSERT OR REPLACE INTO dynamic_routes
         (route_id, src, dst, kind, signal_col, label, confidence, evidence, source_urls, added_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        route_id, src, dst, kind or "discovered", signal_col or _route_signal_for_kind(kind),
-        label or f"{src} -> {dst}", float(confidence or 0.0),
-        str(evidence or "")[:600], str(source_urls or "")[:1200], now,
+        route_id, *new_values, now,
     ))
-    return before is None
+    return bool(changed)
 
 CONNECTS_TO_NODE: Dict[str, str] = {
     "ripple": "Ripple Payments", "ripplenet": "Ripple Payments",
@@ -1804,23 +1843,51 @@ ROUTES = [
     ("RLUSD", "XRPL", "public", "public_xrpl_score", "RLUSD → XRPL"),
     ("Ethereum", "Fingerprint Engine", "watch", "cross_network_score", "Ethereum → vigilancia cross-network"),
 
-    # Núcleo Ripple como nodos de vigilancia, no como prueba directa contra entidades externas
-    ("Ripple Payments", "Public Gateway", "watch", "payment_flow_score", "Ripple Payments → huella pública observable"),
-    ("Ripple Payments", "Rail", "deductive_watch", "payment_flow_score", "Ripple Payments → Rail · capa interna Ripple a vigilar"),
-    ("Rail", "XRPL", "deductive_watch", "public_xrpl_score", "Rail → XRPL · borde público potencial, requiere huella/confirmación"),
-    ("Treasury", "Ripple Payments", "deductive_watch", "institutional_route_score", "Treasury → Ripple Payments · deducción interna de infraestructura"),
-    ("Treasury", "Rail", "deductive_watch", "institutional_route_score", "Treasury → Rail · deducción interna de infraestructura"),
-    ("Treasury", "XRPL", "deductive_watch", "public_xrpl_score", "Treasury → XRPL · borde público a vigilar, no prueba de operación concreta"),
-    ("Treasury", "RLUSD", "deductive_watch", "public_xrpl_score", "Treasury → RLUSD · stablecoin/tesorería a vigilar"),
-    ("Treasury", "DEX/AMM", "deductive_watch", "dex_score", "Treasury → DEX/AMM · liquidez pública XRPL a vigilar"),
+    # Núcleo Ripple / XRPL: infraestructura interna directa.
+    # IMPORTANTE: esto NO convierte a bancos externos, SWIFT, DTCC, etc. en usuarios probados de XRPL.
+    # Solo declara el esqueleto lógico del stack Ripple: productos Ripple ↔ XRPL/RLUSD/DEX.
+    ("Ripple Payments", "Public Gateway", "core_infra", "payment_flow_score", "Ripple Payments → huella pública XRPL observable"),
+    ("Ripple Payments", "Rail", "core_infra", "payment_flow_score", "Ripple Payments → Rail · capa interna Ripple"),
+    ("Ripple Payments", "XRPL", "core_infra", "public_xrpl_score", "Ripple Payments → XRPL · núcleo Ripple conectado al ledger público"),
+    ("Ripple Payments", "RLUSD", "core_infra", "payment_flow_score", "Ripple Payments → RLUSD · liquidez/stablecoin del stack Ripple"),
+    ("Rail", "XRPL", "core_infra", "public_xrpl_score", "Rail → XRPL · rail Ripple hacia ledger"),
+    ("Rail", "RLUSD", "core_infra", "payment_flow_score", "Rail → RLUSD · liquidación/stablecoin dentro del stack Ripple"),
+    ("Treasury", "Ripple Payments", "core_infra", "institutional_route_score", "Treasury → Ripple Payments · infraestructura interna Ripple"),
+    ("Treasury", "Rail", "core_infra", "institutional_route_score", "Treasury → Rail · infraestructura interna Ripple"),
+    ("Treasury", "XRPL", "core_infra", "public_xrpl_score", "Treasury → XRPL · tesorería Ripple con borde público XRPL"),
+    ("Treasury", "RLUSD", "core_infra", "public_xrpl_score", "Treasury → RLUSD · tesorería/stablecoin Ripple"),
+    ("Treasury", "DEX/AMM", "core_infra", "dex_score", "Treasury → DEX/AMM · liquidez pública XRPL"),
     ("Custody/Metaco", "Fingerprint Engine", "watch", "custody_score", "Custody/Metaco → fingerprints institucionales"),
-    ("Custody/Metaco", "XRPL", "deductive_watch", "custody_score", "Custody/Metaco → XRPL · custodia institucional a vigilar"),
+    ("Custody/Metaco", "XRPL", "core_infra", "custody_score", "Custody/Metaco → XRPL · custodia institucional del stack Ripple"),
+    ("Custody/Metaco", "RLUSD", "core_infra", "custody_score", "Custody/Metaco → RLUSD · custodia stablecoin/activos Ripple"),
+    ("Standard Custody", "XRPL", "core_infra", "custody_score", "Standard Custody → XRPL · custodia regulada vinculada al stack Ripple"),
+    ("Standard Custody", "RLUSD", "core_infra", "custody_score", "Standard Custody → RLUSD · custodia regulada de stablecoin/activos"),
     ("Hidden Road / Prime", "Fingerprint Engine", "watch", "prime_brokerage_score", "Prime brokerage → fingerprints institucionales"),
-    ("Hidden Road / Prime", "XRPL", "deductive_watch", "prime_brokerage_score", "Prime brokerage → XRPL · borde público a vigilar"),
+    ("Hidden Road / Prime", "XRPL", "core_infra", "prime_brokerage_score", "Hidden Road / Prime → XRPL · prime brokerage del stack Ripple"),
+    ("Hidden Road / Prime", "RLUSD", "core_infra", "prime_brokerage_score", "Hidden Road / Prime → RLUSD · liquidez/collateral stablecoin"),
+    ("Permissioned DEX", "XRPL", "core_infra", "dex_score", "Permissioned DEX → XRPL · DEX permissioned anclado al ledger"),
+    ("Permissioned DEX", "RLUSD", "core_infra", "dex_score", "Permissioned DEX → RLUSD · trading/liquidez institucional de stablecoin"),
+    ("Permissioned DEX", "DEX/AMM", "core_infra", "dex_score", "Permissioned DEX → DEX/AMM · puente lógico con liquidez XRPL"),
+    ("DEX/AMM", "RLUSD", "public", "dex_score", "DEX/AMM → RLUSD · liquidez on-chain observable"),
+    ("Ripple Escrow", "XRPL", "core_infra", "large_transfer_score", "Ripple Escrow → XRPL · escrow nativo del ledger"),
     ("Treasury", "Fingerprint Engine", "watch", "institutional_route_score", "Treasury → fingerprints institucionales"),
     ("Rail", "Topology Engine", "watch", "institutional_route_score", "Rail → vigilancia topológica"),
     ("Ripple Escrow", "Large Transfers", "watch", "large_transfer_score", "Ripple Escrow → grandes transferencias"),
 ]
+
+
+# Pares internos del stack Ripple que deben mostrarse como infraestructura core, no como "sin verificar".
+CORE_INFRA_ROUTE_PAIRS: Set[Tuple[str, str]] = {
+    tuple(sorted([_canonical_entity_key(a), _canonical_entity_key(b)]))
+    for a, b, kind, *_ in ROUTES
+    if str(kind) == "core_infra"
+}
+
+def _is_core_infra_pair(node_a: Any, node_b: Any) -> bool:
+    try:
+        return tuple(sorted([_canonical_entity_key(node_a), _canonical_entity_key(node_b)])) in CORE_INFRA_ROUTE_PAIRS
+    except Exception:
+        return False
 
 
 # =============================================================================
@@ -3021,6 +3088,10 @@ def load_metrics(conn: sqlite3.Connection) -> pd.DataFrame:
 def route_signal(row: pd.Series, route: Tuple[str, str, str, str, str]) -> float:
     _, _, kind, signal, _ = route
     s = float(row.get(signal, 0.0))
+    if kind == "core_infra":
+        # Las conexiones internas Ripple↔XRPL no dependen de que hoy haya una señal alta en métricas.
+        # Son aristas de arquitectura del mapa y deben verse claramente siempre.
+        return clamp(max(s, 0.78))
     if kind == "future":
         s *= 0.40
     return clamp(s)
@@ -3029,10 +3100,14 @@ def route_signal(row: pd.Series, route: Tuple[str, str, str, str, str]) -> float
 def route_color(row: pd.Series, route: Tuple[str, str, str, str, str]) -> str:
     s = route_signal(row, route)
     kind = route[2]
+    if kind == "core_infra":
+        return "#14F195"    # verde XRPL core — infraestructura interna Ripple
     if float(row["bear_score"]) >= 75 and s < 0.45:
         return "#FF5A67"
     if kind == "verified":
         return "#22C55E"    # verde confirmado — verificado por investigación
+    if kind == "core_infra":
+        return "#14F195"    # verde XRPL core — infraestructura interna Ripple
     if kind == "real":
         return "#3CFF9B"    # verde neón — on-chain TX directo
     if kind == "obligatory":
@@ -3058,8 +3133,8 @@ def route_color(row: pd.Series, route: Tuple[str, str, str, str, str]) -> str:
 
 def route_dash(route: Tuple[str, str, str, str, str]) -> str:
     kind = route[2]
-    if kind in {"real", "public", "verified"}:
-        return "solid"      # confirmado — on-chain, público o verificado por investigación
+    if kind in {"real", "public", "verified", "core_infra"}:
+        return "solid"      # confirmado/on-chain/público/core Ripple-XRPL
     if kind == "obligatory":
         return "dash"       # deducción técnica irrefutable pero no TX directa verificada
     if kind in {"watch", "model"}:
@@ -3611,6 +3686,12 @@ def render_node_info_panel(
         """Badge calibrado usando cert_label del scoring combinado on-chain+internet."""
         pid  = hashlib.sha256(f"{node_a}|{node_b}".encode()).hexdigest()[:16]
         pid2 = hashlib.sha256(f"{node_b}|{node_a}".encode()).hexdigest()[:16]
+        if _is_core_infra_pair(node_a, node_b):
+            return (
+                "<span style='color:#14F195;font-size:0.68rem;border:1px solid #14F19566;"
+                "border-radius:5px;padding:2px 7px;background:rgba(20,241,149,0.10);white-space:nowrap;'"
+                ">🧬 core XRPL</span>"
+            )
         if conn:
             try:
                 row = _connection_proof_row(conn, node_a, node_b)
@@ -3652,6 +3733,7 @@ def render_node_info_panel(
         "partner":     ("🤝 Partner",             "#A78BFA"),   # violeta claro
         "odl":         ("💸 Corredor ODL",        "#FB923C"),   # naranja — corredor activo
         "public_wallet":("🔑 Wallet pública",     "#34D399"),   # esmeralda
+        "core_infra":("🧬 Core XRPL",             "#14F195"),   # infraestructura interna Ripple-XRPL
         "deductive_watch":("🧭 Deducción vigilada", "#B673FF"),   # morado — cadena indirecta explícita
         "future_watch":("🔮 Watch futuro",          "#8CA0B8"),   # gris — futura verificable
         "infra_deduction":("🧩 Deducción infra",    "#A78BFA"),   # violeta — infraestructura transitiva
@@ -3727,6 +3809,8 @@ def render_node_info_panel(
                 # muestran confianza de ruta dinámica, pero explícitamente como vigilancia.
                 if sig > 0:
                     bar_html = sig_bar(sig)
+                elif kind == "core_infra":
+                    bar_html = "<span style='color:#14F195;font-size:0.70rem'>🧬 Infraestructura interna XRPL · no requiere búsqueda externa</span>"
                 elif kind in ("watch", "deductive_watch", "future_watch", "infra_deduction", "transitive_watch"):
                     _dc = float(_dyn_meta.get("confidence", 0.0) or 0.0)
                     if _dc > 0:
@@ -3779,7 +3863,9 @@ def render_node_info_panel(
                     if _dyn_ev else ""
                 )
                 is_watch = kind in ("watch", "deductive_watch", "future_watch", "infra_deduction", "transitive_watch") or "sin verificar" in proof_html or "Sin evidencia" in proof_html
-                if is_watch and sig <= 0 and "✅" not in proof_html and "🟡" not in proof_html:
+                if kind == "core_infra":
+                    bar_html = "<span style='color:#14F195;font-size:0.70rem'>🧬 Infraestructura interna XRPL · no requiere búsqueda externa</span>"
+                elif is_watch and sig <= 0 and "✅" not in proof_html and "🟡" not in proof_html:
                     _dc = float(_dyn_meta.get("confidence", 0.0) or 0.0)
                     bar_html = (f"<span style='color:#B673FF;font-size:0.70rem'>👁 Vigilancia {_dc*100:.0f}% · no prueba directa</span>" if _dc > 0 else "<span style='color:#334155;font-size:0.70rem;font-style:italic'>⏳ Verificar para obtener confianza real</span>")
                 else:
@@ -4183,7 +4269,7 @@ def make_map(row: pd.Series,
     # Filtrar rutas según el modo del mapa
     _CONFIRMED_KINDS  = {
         "real", "public", "private", "verified", "obligatory", "odl", "partner",
-        "public_wallet", "official", "institutional", "government_payment_rail"
+        "public_wallet", "official", "institutional", "government_payment_rail", "core_infra"
     }
     _SURVEILLANCE_KINDS = {
         "watch", "discovered", "model", "future", "future_watch",
@@ -4613,9 +4699,11 @@ def make_map(row: pd.Series,
         hoverlabel=dict(bgcolor="#1e293b", font=dict(color="#FFFFFF", size=13), bordercolor="#5AD7FF"),
     )
     try:
-        # Fuerza a Plotly/Streamlit a tratar la figura como actualizada cuando cambian
-        # rutas dinámicas o nodos descubiertos. Evita sensación de mapa congelado.
-        fig.update_layout(datarevision=str(_time.time()))
+        # v109: usar firma de SQLite, no time.time(). time.time() fuerza refresco en
+        # cada rerun aunque no haya datos nuevos; la firma cambia solo cuando cambian
+        # rutas/nodos/pruebas/verificaciones, y mantiene sincronizadas las 3 vistas.
+        _rev = _get_map_revision_token(conn) if conn is not None else "static"
+        fig.update_layout(datarevision=_rev, uirevision=f"rrp_map_{route_filter}_{_rev}")
     except Exception:
         pass
     return fig
@@ -11658,6 +11746,32 @@ def _get_last_map_update(conn: sqlite3.Connection) -> str:
         return ""
 
 
+def _get_map_revision_token(conn: sqlite3.Connection) -> str:
+    """Firma ligera de los datos que alimentan los mapas.
+
+    Streamlit/Plotly a veces conserva el componente con la misma key aunque SQLite
+    haya cambiado. Esta firma entra en datarevision y en las keys de los 3 mapas.
+    """
+    try:
+        parts = []
+        for table, date_col in (
+            ("dynamic_nodes", "added_at"),
+            ("dynamic_routes", "added_at"),
+            ("connection_proofs", "validated_at"),
+            ("node_verifications", "verified_at"),
+            ("map_update_log", "updated_at"),
+        ):
+            try:
+                row = conn.execute(f"SELECT COUNT(*), COALESCE(MAX({date_col}), '') FROM {table}").fetchone()
+                parts.append(f"{table}:{int(row[0] or 0)}:{row[1] or ''}")
+            except Exception:
+                parts.append(f"{table}:0:")
+        raw = "|".join(parts)
+        return hashlib.sha256(raw.encode("utf-8", "ignore")).hexdigest()[:12]
+    except Exception:
+        return str(int(_time.time()))
+
+
 def _session_ai_quota() -> Tuple[int, int]:
     """Devuelve (llamadas_usadas, máximo) para la sesión actual."""
     used = st.session_state.get("ai_calls_session", 0)
@@ -15603,6 +15717,48 @@ def _is_generic_route_claim(text: Any) -> bool:
     return any(g in t for g in generic_patterns)
 
 
+def _claim_mentions_pair(claim: Any, node_a: Any, node_b: Any) -> bool:
+    """Comprueba que una afirmación textual habla realmente de A↔B.
+
+    Evita el fallo observado: usar pruebas sobre Treasury/SWIFT para validar una
+    arista de otro nodo, por ejemplo Permissioned DEX→Treasury, cuando la fuente
+    no menciona Permissioned DEX ni una relación explícita con ese nodo.
+    """
+    blob = str(claim or "")
+    if not blob.strip():
+        return False
+    blob_norm = f"{blob}"
+    mentions_a = _blob_mentions_any(blob_norm, _entity_search_terms(node_a))
+    mentions_b = _blob_mentions_any(blob_norm, _entity_search_terms(node_b))
+    return bool(mentions_a and mentions_b)
+
+
+def _route_decision_mentions_pair(rd: Dict[str, Any], node_a: Any, node_b: Any) -> bool:
+    """Gate de relevancia para route_decisions no-deductivas.
+
+    Si el JSON trae campos explícitos from/source y to/target se respetan. Si no,
+    exigimos que el claim/snippet mencione ambas entidades. Esto bloquea pruebas
+    recicladas que hablan de un nodo intermedio pero no de la conexión concreta.
+    """
+    if not isinstance(rd, dict):
+        return False
+    blob = " ".join(str(rd.get(k, "") or "") for k in ("claim", "summary", "snippet", "title", "label", "url", "source"))
+    explicit_from = str(rd.get("from") or rd.get("src") or rd.get("source_node") or "").strip()
+    explicit_to = str(rd.get("to") or rd.get("dst") or rd.get("target") or "").strip()
+    a_key = _canonical_entity_key(node_a)
+    b_key = _canonical_entity_key(node_b)
+    if explicit_from or explicit_to:
+        from_ok = not explicit_from or _canonical_entity_key(explicit_from) == a_key
+        to_ok = not explicit_to or _canonical_entity_key(explicit_to) == b_key
+        # Si el motor declara explícitamente to=dst, aún exigimos que el claim
+        # no sea genérico y mencione el origen cuando el origen no es núcleo Ripple.
+        if from_ok and to_ok and not _is_generic_route_claim(blob):
+            if explicit_from:
+                return True
+            return _claim_mentions_pair(blob, node_a, node_b)
+    return _claim_mentions_pair(blob, node_a, node_b)
+
+
 def _decision_has_real_proof(rd: Dict[str, Any]) -> bool:
     et = str(rd.get("evidence_type") or rd.get("type") or "").strip().lower()
     claim = str(rd.get("claim") or rd.get("summary") or rd.get("snippet") or "").strip()
@@ -15625,7 +15781,12 @@ def _route_allowed_by_proof_first(result: Dict[str, Any], src: str, dst: str,
     src = _canonical_entity_name(src)
     conf = float(result.get("confidence", 0) or 0)
     decisions = _route_decisions_for_target(result, src, dst)
-    usable = [rd for rd in decisions if _decision_has_real_proof(rd) and bool(rd.get("draw_on_map", True))]
+    usable = [
+        rd for rd in decisions
+        if _decision_has_real_proof(rd)
+        and bool(rd.get("draw_on_map", True))
+        and _route_decision_mentions_pair(rd, src, dst)
+    ]
     deductive = [
         rd for rd in decisions
         if bool(rd.get("draw_on_map", True))
@@ -15677,7 +15838,8 @@ def _route_allowed_by_proof_first(result: Dict[str, Any], src: str, dst: str,
     if (kind in {"odl", "public_wallet", "public", "official", "institutional", "government_payment_rail"}
             and evidence_text and len(evidence_text) >= 36
             and not _is_generic_route_claim(evidence_text)
-            and src_urls):
+            and src_urls
+            and _claim_mentions_pair(evidence_text + " " + " ".join(src_urls), src, dst)):
         return True, kind, evidence_text, conf, src_urls
     return False, "watch", f"Ruta no dibujada: sin prueba concreta A↔{dst}", min(conf, 0.35), urls
 
@@ -15915,9 +16077,13 @@ def apply_discovery_to_map(conn: sqlite3.Connection, result: Dict[str, Any],
     # Rutas directas declaradas por el motor.
     direct_kind = result.get("route_kind", "private")
     direct_targets_raw = result.get("connects_to", []) or []
+    added_direct_targets: Set[str] = set()
     for target in direct_targets_raw:
-        _add_route(name, target, direct_kind, f"{name} -> {target}",
-                   _route_signal_for_kind(direct_kind), evidence_text)
+        if _add_route(name, target, direct_kind, f"{name} -> {target}",
+                      _route_signal_for_kind(direct_kind), evidence_text):
+            _matched_direct = _canonical_target_node(target, _known_nodes()) or _canonical_display_node(target)
+            if _matched_direct:
+                added_direct_targets.add(_matched_direct)
 
     # Rutas futuras/deductivas declaradas por el motor. No son conexiones confirmadas:
     # el gate Proof-First solo las deja pasar si existe route_decision deductive_watch.
@@ -15939,16 +16105,15 @@ def apply_discovery_to_map(conn: sqlite3.Connection, result: Dict[str, Any],
     # el mapa debe enseñar los bordes lógicos hacia XRPL/RLUSD/DEX/AMM como
     # DEDUCTIVE WATCH, nunca como prueba directa de liquidación.
     known_for_cascade = _known_nodes()
-    direct_cascade_targets = {
-        _canonical_target_node(t, known_for_cascade) or _canonical_display_node(t)
-        for t in direct_targets_raw
-    }
+    # v109: la cascada infra solo puede nacer de rutas directas que hayan pasado
+    # Proof-First. Antes bastaba con que el JSON dijera connects_to=[Treasury], y
+    # eso propagaba XRPL/RLUSD aunque la fuente no probara la arista inicial.
+    direct_cascade_targets = set(added_direct_targets)
     DEDUCTIVE_INFRA_CASCADE: Dict[str, List[Tuple[str, float, str]]] = {
         "Treasury": [
             ("XRPL", 0.52, "Cadena infra: la entidad conecta con Treasury/GTreasury, y Treasury pertenece al grafo Ripple con borde público XRPL a vigilar. No prueba liquidación directa."),
             ("RLUSD", 0.50, "Cadena infra: Treasury/Ripple Treasury puede tocar stablecoin/liquidez Ripple; se vigila RLUSD. No prueba uso directo."),
             ("DEX/AMM", 0.48, "Cadena infra: Treasury conecta con la zona de liquidez XRPL/DEX/AMM a vigilar. No prueba operación on-chain concreta."),
-            ("Permissioned DEX", 0.46, "Cadena infra: Treasury deja ruta institucional permissioned a vigilar. No prueba integración operativa directa."),
             ("Ripple Payments", 0.54, "Cadena infra interna: Treasury forma parte del stack Ripple y puede alimentar Payments/Rail como vigilancia deductiva."),
             ("Rail", 0.50, "Cadena infra interna: Treasury puede alimentar Rail/Payments como vigilancia deductiva; no prueba flujo específico."),
         ],
@@ -16092,6 +16257,20 @@ def apply_discovery_to_map(conn: sqlite3.Connection, result: Dict[str, Any],
         pass
 
     conn.commit()
+
+    # v109: cualquier cambio real en nodos/rutas dispara revisionado global del mapa.
+    # Así las tres vistas (confirmadas, vigilancia y completo) leen la misma SQLite
+    # y se refrescan sin depender de pulsar manualmente "Actualizar mapa".
+    try:
+        if int(added_nodes or 0) > 0 or int(added_routes or 0) > 0 or int(wallets_added or 0) > 0:
+            _log_map_update(
+                conn,
+                "discovery_apply",
+                name,
+                f"nodes={added_nodes} routes={added_routes} wallets={wallets_added} partners={added_partners} map_points={added_map_points}",
+            )
+    except Exception:
+        pass
 
     return {
         "added_node": True,
@@ -18209,8 +18388,8 @@ def inject_music_player() -> None:
 <body>
 <div class="box">
   <div class="top">
-    <div class="title">🎧 RADAR FM · reproductor persistente v86</div>
-    <div class="pill"><span id="count"></span> tracks · sin modo seguro</div>
+    <div class="title">🎧 RADAR FM · reproductor persistente v109</div>
+    <div class="pill"><span id="count"></span> tracks · retoma tras búsquedas</div>
   </div>
 
   <div class="now">
@@ -18237,13 +18416,16 @@ def inject_music_player() -> None:
     <div class="s"><b>Modo</b><span id="stMode">secuencial</span></div>
   </div>
 
-  <div class="log" id="log">Pulsa “Activar / Play” una vez. v86 prueba rutas Streamlit y GitHub Raw; el final de canción y el arrastre al final deberían pasar al siguiente track.</div>
+  <div class="log" id="log">Pulsa “Activar / Play” una vez. v109 guarda pista, segundo y estado para retomar tras búsquedas/reruns de Streamlit.</div>
 </div>
 <script>
 const playlist = {playlist_json};
-let idx = parseInt(localStorage.getItem('rrp_fm_idx_v86') || '0', 10);
-let shuffle = (localStorage.getItem('rrp_fm_shuffle_v86') || '0') === '1';
+let savedState0 = (() => {{ try {{ return JSON.parse(localStorage.getItem('rrp_fm_state_v109') || '{{}}') || {{}}; }} catch(e) {{ return {{}}; }} }})();
+let idx = parseInt(String(savedState0.idx ?? localStorage.getItem('rrp_fm_idx_v86') ?? '0'), 10);
+let shuffle = (savedState0.shuffle !== undefined) ? !!savedState0.shuffle : ((localStorage.getItem('rrp_fm_shuffle_v86') || '0') === '1');
 let unlocked = (localStorage.getItem('rrp_fm_unlocked_v86') || '0') === '1';
+let restoreTime = Number(savedState0.time || 0);
+let restoreWasPlaying = !!savedState0.playing;
 let currentObjectUrl = null;
 let currentCandidate = null;
 let loading = false;
@@ -18297,6 +18479,20 @@ function updateUi() {{
   select.value = String(idx);
   shuffleBtn.textContent = shuffle ? '🎲 Aleatorio: ON' : '🎲 Aleatorio: OFF';
   status();
+}}
+function readSavedState() {{
+  try {{ return JSON.parse(localStorage.getItem('rrp_fm_state_v109') || '{{}}') || {{}}; }} catch(e) {{ return {{}}; }}
+}}
+function saveState() {{
+  try {{
+    localStorage.setItem('rrp_fm_state_v109', JSON.stringify({{
+      idx: idx,
+      time: (audio && isFinite(audio.currentTime)) ? audio.currentTime : 0,
+      playing: !!(audio && !audio.paused && !audio.ended),
+      shuffle: shuffle,
+      updated: Date.now()
+    }}));
+  }} catch(e) {{}}
 }}
 function fillSelect() {{
   select.innerHTML = '';
@@ -18371,6 +18567,7 @@ async function playLoaded(reason='play') {{
     unlocked = true;
     localStorage.setItem('rrp_fm_unlocked_v86','1');
     updateUi();
+    saveState();
     log(reason + ': ' + playlist[idx].title, 'ok');
     return true;
   }} catch(e) {{
@@ -18395,17 +18592,33 @@ async function goTo(newIdx, auto=false) {{
 async function goNext(auto=false) {{ await goTo(nextIndex(), auto); }}
 async function goPrev() {{ await goTo(prevIndex(), false); }}
 
-fillSelect(); updateUi(); loadTrack(idx);
+fillSelect(); updateUi();
+loadTrack(idx).then((ok) => {{
+  if (!ok) return;
+  try {{
+    if (restoreTime && isFinite(restoreTime) && restoreTime > 1) {{
+      const setTime = () => {{ try {{ audio.currentTime = Math.max(0, restoreTime - 0.8); }} catch(e) {{}} }};
+      if (audio.readyState >= 1) setTime(); else audio.addEventListener('loadedmetadata', setTime, {{once:true}});
+    }}
+    if (restoreWasPlaying && unlocked) {{
+      setTimeout(() => playLoaded('Restaurado tras actualización'), 350);
+    }}
+  }} catch(e) {{}}
+}});
 document.getElementById('activate').onclick = playCurrent;
 document.getElementById('next').onclick = () => goNext(false);
 document.getElementById('prev').onclick = goPrev;
-document.getElementById('stop').onclick = () => {{ audio.pause(); log('Pausado.'); }};
-document.getElementById('shuffle').onclick = () => {{ shuffle = !shuffle; localStorage.setItem('rrp_fm_shuffle_v86', shuffle?'1':'0'); updateUi(); }};
+document.getElementById('stop').onclick = () => {{ audio.pause(); saveState(); log('Pausado.'); }};
+document.getElementById('shuffle').onclick = () => {{ shuffle = !shuffle; localStorage.setItem('rrp_fm_shuffle_v86', shuffle?'1':'0'); updateUi(); saveState(); }};
 select.onchange = async () => {{ await goTo(parseInt(select.value,10), false); }};
 
-audio.addEventListener('play', () => {{ unlocked = true; localStorage.setItem('rrp_fm_unlocked_v86','1'); updateUi(); }});
-audio.addEventListener('ended', () => goNext(true));
+audio.addEventListener('play', () => {{ unlocked = true; localStorage.setItem('rrp_fm_unlocked_v86','1'); updateUi(); saveState(); }});
+audio.addEventListener('pause', () => {{ updateUi(); saveState(); }});
+audio.addEventListener('ended', () => {{ saveState(); goNext(true); }});
+window.addEventListener('beforeunload', saveState);
+setInterval(saveState, 1200);
 audio.addEventListener('timeupdate', () => {{
+  saveState();
   try {{
     if (audio.duration && isFinite(audio.duration) && audio.currentTime >= audio.duration - 0.25 && !audio.paused) {{
       // Si el navegador no lanza ended al arrastrar justo al final, forzamos el salto.
@@ -18584,6 +18797,7 @@ def main() -> None:
             "🗺 " + _t("Mapa completo"),
         ])
 
+        _map_rev = _get_map_revision_token(conn)
         _map_kwargs = dict(
             watched=watched_wallets if not watched_wallets.empty else None,
             conn=conn, focus_node=focused,
@@ -18591,19 +18805,20 @@ def main() -> None:
 
         _focus_hint = f"🔍 Filtrando: **{focused}** — haz click en otro nodo para cambiar, o en el mismo para deseleccionar" if focused else "👆 Haz click en cualquier nodo para ver solo sus conexiones"
         st.caption(_focus_hint)
+        st.caption(f"🧬 Revisión de mapa: `{_map_rev}` · las 3 vistas leen las mismas rutas/nodos/pruebas guardadas.")
 
         with tab_conn:
             st.caption("Solo rutas con evidencia confirmada/documentada u obligatorias. Las fijas de vigilancia no se mezclan aquí salvo que estén verificadas.")
             sel = st.plotly_chart(
                 make_map(row, title="Conexiones confirmadas + obligatorias", route_filter="confirmed", **_map_kwargs),
-                width="stretch", on_select="rerun", selection_mode="points", key="radar_map_conn",
+                width="stretch", on_select="rerun", selection_mode="points", key=f"radar_map_conn_{_map_rev}",
             )
 
         with tab_surv:
             st.caption("Rutas fijas/base, vigilancia, descubiertas por IA y futuras verificables. Aquí verás SWIFT/FedNow/etc. aunque borres asociaciones dinámicas.")
             sel_surv = st.plotly_chart(
                 make_map(row, title="Vigilancia e inferencias", route_filter="surveillance", **_map_kwargs),
-                width="stretch", on_select="rerun", selection_mode="points", key="radar_map_surv",
+                width="stretch", on_select="rerun", selection_mode="points", key=f"radar_map_surv_{_map_rev}",
             )
             pts_surv = (sel_surv or {}).get("selection", {}).get("points", [])
             if pts_surv:
@@ -18613,7 +18828,7 @@ def main() -> None:
             st.caption("Vista completa: todas las rutas superpuestas. Útil para ver la densidad total del ecosistema.")
             sel_all = st.plotly_chart(
                 make_map(row, route_filter="all", **_map_kwargs),
-                width="stretch", on_select="rerun", selection_mode="points", key="radar_map_all",
+                width="stretch", on_select="rerun", selection_mode="points", key=f"radar_map_all_{_map_rev}",
             )
             # Permitir selección también desde el mapa completo
             pts_all = (sel_all or {}).get("selection", {}).get("points", [])
