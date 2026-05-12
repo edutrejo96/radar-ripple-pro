@@ -171,7 +171,7 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v89_2026_05_12_REAL_XRP_PRICE_CINEMATIC_RADAR_FM_OK"
+BUILD_ID = "v90_2026_05_12_ADMIN_GATE_CHAT_PINS_LIMITS"
 BUILD_NOTE = "Fix cinematica _safe_float + Radar FM funcionando con GitHub Raw/static + A-B premium deduplicado"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
@@ -11660,15 +11660,17 @@ def _public_enqueue_ai(conn: sqlite3.Connection, query: str) -> int:
 
 
 def _public_can_run_ai_now(conn: sqlite3.Connection) -> bool:
-    """Solo deja ejecutar a quien está primero y no hay otra búsqueda AI en curso."""
+    """Solo deja ejecutar a quien está primero, no hay otra búsqueda AI y tiene cupo investigador."""
     try:
+        if not _can_current_user_investigate(conn):
+            return False
         _, ai_now = _active_users(conn)
         if ai_now > 0 and not _is_current_session_searching(conn):
             return False
         pos = _public_queue_position(conn)
         return pos in (0, 1)
     except Exception:
-        return True
+        return bool(st.session_state.get("rrp_can_investigate", False))
 
 
 def _public_finish_ai(conn: sqlite3.Connection) -> None:
@@ -11710,7 +11712,7 @@ def render_global_public_banner(conn: sqlite3.Connection) -> None:
 
 
 def render_public_entry_gate(conn: sqlite3.Connection) -> bool:
-    """Onboarding obligatorio: primero idioma, después usuario público."""
+    """Entrada pública obligatoria: idioma → modo usuario/admin → nombre → disclaimer."""
     lang = _preferred_lang()
 
     if not lang:
@@ -11725,9 +11727,6 @@ def render_public_entry_gate(conn: sqlite3.Connection) -> bool:
     <div style='font-size:1.05rem;color:#CBD5E1;line-height:1.58;margin-bottom:14px;'>
       Antes de entrar, elige el idioma de toda la experiencia. La interfaz y el chat se adaptarán al idioma seleccionado; las pruebas técnicas conservan su idioma original.
     </div>
-    <div style='padding:12px 14px;border-radius:16px;background:rgba(8,47,73,.45);border:1px solid rgba(34,211,238,.28);color:#BAE6FD;'>
-      🎧 Ponte los cascos para una experiencia más inmersiva.
-    </div>
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -11739,40 +11738,113 @@ def render_public_entry_gate(conn: sqlite3.Connection) -> bool:
             st.rerun()
         return False
 
-    if _public_nickname_value():
+    # Si ya aceptó todo y tiene usuario, entra.
+    if _public_nickname_value() and st.session_state.get("rrp_entry_disclaimer_ok"):
         _touch_current_user(conn)
+        # El aviso viejo de dinero queda absorbido por este onboarding.
+        st.session_state["rrp_real_money_notice_ok"] = True
         return True
 
-    st.markdown(f"""
-<div style='min-height:68vh;display:flex;align-items:center;justify-content:center;'>
-  <div style='max-width:820px;width:100%;border-radius:28px;padding:28px;
-              background:radial-gradient(circle at top left,rgba(34,211,238,.24),transparent 34%),
-                         radial-gradient(circle at bottom right,rgba(168,85,247,.20),transparent 38%),
-                         rgba(2,6,23,.96);
-              border:1px solid rgba(125,211,252,.35);box-shadow:0 28px 90px rgba(14,165,233,.18);'>
-    <div style='font-size:2rem;font-weight:1000;color:#E0F2FE;margin-bottom:8px;'>🚀 Bienvenido a Ripple Radar Pro</div>
-    <div style='font-size:1.02rem;color:#CBD5E1;line-height:1.58;'>
-      Esta beta pública funciona como un laboratorio colectivo: unos usuarios verifican, otros observan,
-      todos pueden explorar el mapa, leer pruebas guardadas, revisar wallets y participar en el chat.
-    </div>
-    <div style='margin-top:16px;padding:12px 14px;border-radius:16px;background:rgba(8,47,73,.45);border:1px solid rgba(34,211,238,.28);color:#BAE6FD;'>
-      {_ui_text('headphones', lang)}
-    </div>
-    <div style='margin-top:14px;color:#94A3B8;font-size:.88rem;'>Idioma activo: <b>{html.escape(_language_name(lang))}</b>. Puedes cambiarlo desde Comunidad.</div>
+    st.markdown("""
+<div style='max-width:980px;margin:0 auto 18px auto;border-radius:28px;padding:26px;
+            background:radial-gradient(circle at top left,rgba(34,211,238,.22),transparent 34%),
+                       radial-gradient(circle at bottom right,rgba(168,85,247,.18),transparent 40%),
+                       rgba(2,6,23,.96);
+            border:1px solid rgba(125,211,252,.35);box-shadow:0 28px 90px rgba(14,165,233,.18);'>
+  <div style='font-size:2rem;font-weight:1000;color:#E0F2FE;margin-bottom:8px;'>🚀 Entrada a Ripple Radar Pro</div>
+  <div style='font-size:1rem;color:#CBD5E1;line-height:1.58;'>
+    Esta web es un laboratorio público de investigación deductiva sobre la infraestructura Ripple: Payments, Custody/Metaco, Prime/Hidden Road, Treasury, Rail, RLUSD, XRPL, wallets, clusters, rutas A→B y fuentes.
   </div>
 </div>
 """, unsafe_allow_html=True)
-    nick = st.text_input("Elige tu nombre público para entrar", placeholder="Ej: CosmosRadar", max_chars=28, key="public_entry_nick")
-    c1, c2 = st.columns([1,1])
+
+    mode = st.radio(
+        "Tipo de entrada",
+        ["Usuario", "Admin"],
+        horizontal=True,
+        key="rrp_entry_mode",
+    )
+
+    c1, c2 = st.columns([1.1, 0.9])
     with c1:
-        if st.button("Entrar al radar", width="stretch", key="public_entry_btn"):
-            if _save_current_user(conn, nick):
-                st.toast("Bienvenido al radar.")
-                st.rerun()
-            else:
-                st.error("Pon un nombre válido de al menos 2 caracteres.")
+        nick_default = st.session_state.get("public_entry_nick", "")
+        nick = st.text_input(
+            "Nombre público",
+            value=nick_default,
+            placeholder="Ej: CosmosRadar",
+            max_chars=28,
+            key="public_entry_nick",
+        )
+        clean_nick = _clean_nickname(nick)
+        if _active_name_taken(conn, clean_nick, exclude_user_id=_community_user_id()):
+            st.error("Ese nombre ya está en línea. Elige otro para evitar dos usuarios con el mismo nombre.")
+        if mode == "Admin":
+            st.caption("Admins autorizados por ahora: edutrejo y alchemist.")
+            admin_pwd = st.text_input("Contraseña de autorización admin", type="password", key="public_admin_password")
+        else:
+            admin_pwd = ""
     with c2:
-        st.info("Después de entrar podrás usar chat, ver descubrimientos y, si hay cola, saber tu puesto.")
+        active_researchers = _active_investigator_count(conn)
+        can_take_slot = active_researchers < MAX_PUBLIC_INVESTIGATORS
+        if mode == "Admin":
+            slot_text = "Los admins no consumen cupo de investigadores."
+        elif can_take_slot:
+            slot_text = f"Cupo de investigadores: {active_researchers}/{MAX_PUBLIC_INVESTIGATORS}. Podrás usar acciones de investigación controladas."
+        else:
+            slot_text = f"Cupo lleno: {active_researchers}/{MAX_PUBLIC_INVESTIGATORS}. Entrarás como visitante: puedes ver datos, leer fichas, chat y explorar, pero no lanzar acciones que gasten API."
+        st.info(slot_text)
+
+    st.markdown("""
+<div style='border:1px solid rgba(245,158,11,.48);border-radius:20px;padding:18px 20px;
+            background:linear-gradient(135deg,rgba(120,53,15,.34),rgba(15,23,42,.92));margin-top:16px;'>
+  <div style='font-size:1.15rem;font-weight:1000;color:#FDE68A;margin-bottom:8px;'>⚠️ Lectura obligatoria antes de entrar</div>
+  <div style='color:#E5E7EB;line-height:1.55;font-size:.94rem;'>
+    <b>Ripple Radar Pro no es una prueba definitiva ni asesoramiento financiero.</b> Es un prototipo deductivo para investigar fuentes, pistas públicas, rutas A→B, wallets, clusters y señales de infraestructura.
+    <br><br>
+    Algunas acciones como <b>Discovery</b>, <b>búsqueda web/Anthropic</b>, <b>verificación de pruebas</b>, <b>traducciones automáticas</b> o análisis asistido por IA pueden gastar presupuesto de API. Úsalas con responsabilidad, revisa las fuentes antes de concluir y no conviertas una hipótesis en una afirmación.
+    <br><br>
+    En esta beta inicial solo <b>100 investigadores activos</b> pueden lanzar acciones con posible coste. El resto puede navegar, leer datos, interactuar con la web y participar sin gastar API.
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+    accepted = st.checkbox(
+        "He leído el aviso: entiendo que el radar puede equivocarse y que algunas acciones pueden gastar API.",
+        key="rrp_entry_disclaimer_checkbox",
+    )
+
+    if st.button("Entrar", width="stretch", key="public_entry_btn_v90"):
+        clean_nick = _clean_nickname(nick)
+        if len(clean_nick) < 2:
+            st.error("Pon un nombre válido de al menos 2 caracteres.")
+            return False
+        if _active_name_taken(conn, clean_nick, exclude_user_id=_community_user_id()):
+            st.error("Ese nombre ya está en línea. Elige otro.")
+            return False
+        if not accepted:
+            st.error("Debes leer y aceptar el aviso obligatorio antes de entrar.")
+            return False
+
+        if mode == "Admin":
+            if not _is_admin_name(clean_nick):
+                st.error("Ese nombre no está autorizado como admin. Usa edutrejo o alchemist.")
+                return False
+            if str(admin_pwd or "") != ADMIN_PASSWORD:
+                st.error("Contraseña admin incorrecta.")
+                return False
+            st.session_state["admin_authenticated"] = True
+            st.session_state["rrp_can_investigate"] = True
+        else:
+            st.session_state.pop("admin_authenticated", None)
+            st.session_state["rrp_can_investigate"] = bool(_active_investigator_count(conn) < MAX_PUBLIC_INVESTIGATORS)
+
+        if _save_current_user(conn, clean_nick):
+            st.session_state["rrp_entry_disclaimer_ok"] = True
+            st.session_state["rrp_real_money_notice_ok"] = True
+            st.toast("Bienvenido al radar.")
+            st.rerun()
+        else:
+            st.error(st.session_state.get("entry_name_error", "No se pudo crear el usuario."))
     return False
 
 def render_global_update_notice(conn: sqlite3.Connection) -> None:
@@ -12002,9 +12074,13 @@ PUBLIC_LANGUAGES: Dict[str, str] = {
     "ar": "العربية",
 }
 
-ADMIN_USERNAME = "edutrejo96"
+# Admins autorizados para la beta pública. Pueden fijar mensajes y moderar chat.
+ADMIN_USERNAMES = {"edutrejo", "alchemist", "edutrejo96"}
+ADMIN_USERNAME = "edutrejo"  # etiqueta histórica/compatibilidad
 # Seguridad práctica: en despliegue público puedes sobrescribirla con RRP_ADMIN_PASSWORD.
 ADMIN_PASSWORD = _os.environ.get("RRP_ADMIN_PASSWORD", "741258")
+# Límite inicial de investigadores con acceso a acciones que pueden gastar API.
+MAX_PUBLIC_INVESTIGATORS = int(_os.environ.get("RRP_MAX_PUBLIC_INVESTIGATORS", "100"))
 
 UI_TEXT = {
     "choose_lang_title": {
@@ -12680,7 +12756,49 @@ def _translate_plotly_figure_inplace(fig: Any) -> Any:
 
 
 def _is_admin_name(nickname: str) -> bool:
-    return _norm_key(nickname).replace(" ", "") == _norm_key(ADMIN_USERNAME).replace(" ", "")
+    key = _norm_key(nickname).replace(" ", "")
+    return key in {_norm_key(n).replace(" ", "") for n in ADMIN_USERNAMES}
+
+
+def _active_name_taken(conn: sqlite3.Connection, nickname: str, exclude_user_id: Optional[str] = None) -> bool:
+    """Evita que dos usuarios online usen el mismo nombre público a la vez."""
+    nickname_key = _norm_key(_clean_nickname(nickname)).replace(" ", "")
+    if not nickname_key:
+        return False
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        rows = conn.execute(
+            "SELECT user_id, nickname FROM community_users WHERE last_seen > ?",
+            (cutoff,),
+        ).fetchall()
+        for uid, nick in rows:
+            if exclude_user_id and str(uid) == str(exclude_user_id):
+                continue
+            if _norm_key(str(nick or "")).replace(" ", "") == nickname_key:
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _active_investigator_count(conn: sqlite3.Connection) -> int:
+    """Cuenta usuarios activos con permiso de investigación/API, no simples visitantes."""
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        rows = conn.execute(
+            "SELECT COUNT(*) FROM community_users WHERE last_seen > ? AND COALESCE(role,'user') IN ('user','admin')",
+            (cutoff,),
+        ).fetchone()
+        return int(rows[0] if rows else 0)
+    except Exception:
+        return 0
+
+
+def _can_current_user_investigate(conn: sqlite3.Connection) -> bool:
+    """Los visitantes por encima del cupo pueden mirar datos, pero no consumir API."""
+    if _is_admin_session(conn):
+        return True
+    return bool(st.session_state.get("rrp_can_investigate", False))
 
 
 def _is_admin_session(conn: Optional[sqlite3.Connection] = None) -> bool:
@@ -12806,15 +12924,18 @@ def _get_current_nickname(conn: sqlite3.Connection) -> str:
 
 
 def _save_current_user(conn: sqlite3.Connection, nickname: str) -> bool:
-    """Crea/actualiza el usuario local del chat."""
+    """Crea/actualiza el usuario local del chat, sin permitir nombres duplicados online."""
     nickname = _clean_nickname(nickname)
     if len(nickname) < 2:
         return False
     try:
         uid = _community_user_id()
+        if _active_name_taken(conn, nickname, exclude_user_id=uid):
+            st.session_state["entry_name_error"] = "Ese nombre ya está en línea. Elige otro para evitar confusión en el chat."
+            return False
         now = datetime.now(timezone.utc).isoformat()
         lang = _preferred_lang() or "es"
-        role = "admin" if _is_admin_name(nickname) else "user"
+        role = "admin" if (_is_admin_name(nickname) and st.session_state.get("admin_authenticated")) else "user"
         conn.execute("""
             INSERT INTO community_users (user_id, nickname, created_at, last_seen, reputation, muted, language, role)
             VALUES (?, ?, ?, ?, 1, 0, ?, ?)
@@ -12876,7 +12997,7 @@ def _send_chat_message(conn: sqlite3.Connection, body: str) -> Tuple[bool, str]:
             return False, "Tu usuario está silenciado temporalmente."
         now = datetime.now(timezone.utc).isoformat()
         lang = _preferred_lang() or "es"
-        role = "admin" if _is_admin_name(nickname) else "user"
+        role = "admin" if _is_admin_session(conn) else "user"
         conn.execute(
             "INSERT INTO community_messages (user_id, nickname, body, created_at, deleted, lang, pinned, role) VALUES (?, ?, ?, ?, 0, ?, 0, ?)",
             (uid, nickname, body, now, lang, role)
@@ -12997,10 +13118,10 @@ def render_general_chat(conn: sqlite3.Connection) -> None:
                 created = str(r.get("created_at", ""))[:16].replace("T", " ")
                 align = "flex-end" if is_me else "flex-start"
                 bg = "rgba(14,165,233,0.18)" if is_me else "rgba(30,41,59,0.92)"
-                if role == "admin" or _is_admin_name(raw_nick):
+                if role == "admin":
                     bg = "linear-gradient(135deg,rgba(14,165,233,.24),rgba(168,85,247,.18))"
                 border = "rgba(56,189,248,0.40)" if is_me else "rgba(148,163,184,0.22)"
-                badge = "<span style='border:1px solid rgba(34,211,238,.45);color:#67E8F9;background:rgba(8,47,73,.35);border-radius:999px;padding:2px 7px;font-size:.68rem;font-weight:900;'>ADMIN</span>" if (role == "admin" or _is_admin_name(raw_nick)) else ""
+                badge = "<span style='border:1px solid rgba(34,211,238,.45);color:#67E8F9;background:rgba(8,47,73,.35);border-radius:999px;padding:2px 7px;font-size:.68rem;font-weight:900;'>ADMIN</span>" if role == "admin" else ""
                 pin_badge = "<span style='color:#FDE68A;font-size:.75rem;font-weight:900;'>📌 FIJADO</span>" if pinned else ""
                 lang_badge = f"<span style='color:#64748B;font-size:.70rem;'>· {html.escape(src_lang.upper())}</span>" if src_lang else ""
                 original_note = ""
@@ -13060,7 +13181,7 @@ def render_admin_panel(conn: sqlite3.Connection) -> None:
             else:
                 st.error("Contraseña incorrecta.")
         return
-    st.success(f"Sesión admin activa: {ADMIN_USERNAME}")
+    st.success(f"Sesión admin activa: {html.escape(_get_current_nickname(conn))}")
     c1, c2, c3 = st.columns(3)
     if c1.button("Desactivar admin", width="stretch", key="admin_logout_btn"):
         st.session_state.pop("admin_authenticated", None)
@@ -13071,6 +13192,25 @@ def render_admin_panel(conn: sqlite3.Connection) -> None:
     if c3.button("Desfijar todos", width="stretch", key="admin_unpin_all"):
         conn.execute("UPDATE community_messages SET pinned=0")
         conn.commit(); st.toast("Mensajes desfijados.")
+
+    st.markdown("#### Fijar aviso admin nuevo")
+    with st.form("admin_pin_new_message_form", clear_on_submit=True):
+        pin_body = st.text_area("Mensaje fijado", height=90, max_chars=_CHAT_MAX_LEN, key="admin_new_pin_body")
+        submit_pin = st.form_submit_button("📌 Publicar y fijar", width="stretch")
+        if submit_pin:
+            body = _clean_chat_body(pin_body)
+            if len(body) < 2:
+                st.error("Escribe un mensaje válido.")
+            else:
+                now = datetime.now(timezone.utc).isoformat()
+                nick = _get_current_nickname(conn) or "admin"
+                conn.execute(
+                    "INSERT INTO community_messages (user_id, nickname, body, created_at, deleted, lang, pinned, role) VALUES (?, ?, ?, ?, 0, ?, 1, 'admin')",
+                    (_community_user_id(), nick, body, now, _preferred_lang() or "es"),
+                )
+                conn.commit()
+                st.success("Mensaje publicado y fijado.")
+                st.rerun()
 
     pinned = pd.read_sql_query("SELECT id, nickname, body, created_at FROM community_messages WHERE deleted=0 AND pinned=1 ORDER BY id DESC", conn)
     st.markdown("#### Mensajes fijados")
@@ -16429,7 +16569,8 @@ def main() -> None:
         st.caption(f"XRPL: {XRPL_SERVER}")
         st.caption(f"RLUSD issuer: {RLUSD_ISSUER}")
 
-    render_real_money_warning(conn, key_suffix="main")
+    # El aviso de uso responsable y presupuesto API ahora vive en el onboarding obligatorio.
+    st.session_state["rrp_real_money_notice_ok"] = True
     render_ui_translation_notice()
 
     if "loaded_once_advanced" not in st.session_state:
