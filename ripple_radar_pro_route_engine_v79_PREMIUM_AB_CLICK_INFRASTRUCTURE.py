@@ -1210,6 +1210,200 @@ def _source_story_key(url: str) -> str:
         return str(url or "")
 
 
+
+
+def _source_title_key(title: Any) -> str:
+    """Clave agresiva para no repetir la misma historia aunque venga de Yahoo/247/etc."""
+    t = _norm_key(str(title or ""))
+    if not t:
+        return ""
+    # Quitar coletillas típicas y palabras de fuente, conservar la historia.
+    t = re.sub(r"\b(yahoo finance|finance yahoo|247wallst|mexc learn|cointelegraph|cryptopotato|news|article|markets|crypto)\b", " ", t)
+    t = re.sub(r"\b(updated|exclusive|breaking|analysis|opinion)\b", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    # Recortar para que pequeñas diferencias de final no generen duplicados.
+    return t[:96]
+
+
+def _is_auto_recovered_evidence(ev: Any) -> bool:
+    """True si no es una prueba: es solo una URL recuperada cuando el JSON vino roto."""
+    if not isinstance(ev, dict):
+        return False
+    claim = _norm_key(ev.get("claim", ""))
+    title = _norm_key(ev.get("title", ""))
+    etype = _norm_key(ev.get("type", ""))
+    return (
+        "fuente recuperada automaticamente" in claim
+        or "respuesta json" in claim
+        or "web search" in title
+        or etype in {"news_major", "fuente recuperada", "web source"}
+    )
+
+
+def _valid_discovery_evidence_items(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Devuelve solo evidencias que no sean simples fuentes recuperadas por fallback."""
+    out: List[Dict[str, Any]] = []
+    seen_urls: Set[str] = set()
+    seen_titles: Set[str] = set()
+    for ev in result.get("evidence_items", []) or []:
+        if not isinstance(ev, dict) or _is_auto_recovered_evidence(ev):
+            continue
+        url = _canonical_source_url(str(ev.get("url", "") or ""))
+        title_key = _source_title_key(ev.get("title") or ev.get("claim") or "")
+        if url and url in seen_urls:
+            continue
+        if title_key and title_key in seen_titles:
+            continue
+        if url:
+            seen_urls.add(url)
+            ev = dict(ev)
+            ev["url"] = url
+        if title_key:
+            seen_titles.add(title_key)
+        out.append(ev)
+    return out
+
+
+def _fallback_confidence_from_sources(result: Dict[str, Any]) -> float:
+    """Confianza mínima de investigación cuando hay fuentes, no confianza de conexión."""
+    sources = result.get("sources") or []
+    urls = [_canonical_source_url(_extract_url_from_any(x) or str(x)) for x in sources]
+    urls = [u for u in urls if u.startswith("http")]
+    if not urls:
+        return 0.0
+    try:
+        from urllib.parse import urlparse
+        domains = {urlparse(u).netloc.lower().replace("www.", "") for u in urls}
+    except Exception:
+        domains = set()
+    official_hints = ("ripple.com", "swift.com", "bis.org", "federalreserve.gov", "sec.gov", "xrpl.org")
+    if any(any(d.endswith(h) for h in official_hints) for d in domains):
+        return 0.22
+    if len(urls) >= 3:
+        return 0.14
+    if len(urls) >= 1:
+        return 0.09
+    return 0.0
+
+
+def _result_add_source(result: Dict[str, Any], url: str) -> None:
+    """Añade una fuente canónica sin duplicados."""
+    if not isinstance(result, dict):
+        return
+    u = _canonical_source_url(str(url or "").strip())
+    if not u.startswith("http"):
+        return
+    current = list(result.get("sources") or [])
+    seen = {_canonical_source_url(_extract_url_from_any(x) or str(x)) for x in current}
+    if u not in seen:
+        current.append(u)
+    result["sources"] = _compact_sources(current, 12)
+
+
+def _result_add_evidence(result: Dict[str, Any], *, title: str, claim: str, url: str,
+                         target: str, evidence_type: str, confidence: float) -> None:
+    """Añade evidencia estructurada real: no se usa para fuentes recuperadas genéricas."""
+    if not isinstance(result, dict):
+        return
+    u = _canonical_source_url(str(url or "").strip())
+    ev = {
+        "title": str(title or "Prueba").strip()[:180],
+        "url": u,
+        "claim": str(claim or "").strip()[:500],
+        "target": str(target or "").strip(),
+        "type": str(evidence_type or "primary_source").strip(),
+        "confidence": float(confidence or 0.0),
+    }
+    items = list(result.get("evidence_items") or [])
+    key = (_source_title_key(ev["title"]), u, _canonical_entity_key(ev["target"]))
+    for old in items:
+        if not isinstance(old, dict):
+            continue
+        old_key = (_source_title_key(old.get("title") or old.get("claim") or ""),
+                   _canonical_source_url(str(old.get("url", ""))),
+                   _canonical_entity_key(old.get("target") or old.get("to") or old.get("node") or ""))
+        if old_key == key:
+            return
+    items.append(ev)
+    result["evidence_items"] = items
+    if u:
+        _result_add_source(result, u)
+
+
+def _result_add_route_decision(result: Dict[str, Any], *, to: str, claim: str, url: str,
+                               evidence_type: str, confidence: float, kind: str = "institutional",
+                               draw_on_map: bool = True) -> None:
+    """Añade decisión A→B para que Proof-First pueda dibujar solo lo que tenga prueba concreta."""
+    if not isinstance(result, dict):
+        return
+    rd = {
+        "from": result.get("institution", ""),
+        "to": to,
+        "kind": kind,
+        "product": to,
+        "evidence_type": evidence_type,
+        "confidence": float(confidence or 0.0),
+        "claim": str(claim or "").strip()[:500],
+        "url": _canonical_source_url(str(url or "")),
+        "draw_on_map": bool(draw_on_map),
+    }
+    rows = list(result.get("route_decisions") or [])
+    rkey = (_canonical_entity_key(rd["to"]), _canonical_source_url(rd["url"]), _source_title_key(rd["claim"]))
+    for old in rows:
+        if not isinstance(old, dict):
+            continue
+        old_key = (_canonical_entity_key(old.get("to") or old.get("target") or old.get("connects_to") or ""),
+                   _canonical_source_url(str(old.get("url") or old.get("source") or "")),
+                   _source_title_key(old.get("claim") or old.get("summary") or ""))
+        if old_key == rkey:
+            return
+    rows.append(rd)
+    result["route_decisions"] = rows
+
+
+def _result_add_connect_target(result: Dict[str, Any], target: str) -> None:
+    """Añade un destino confirmado/estructurado sin duplicados."""
+    if not isinstance(result, dict):
+        return
+    target_name = _canonical_target_node(target, set(NODES.keys())) or _canonical_entity_name(target)
+    if not target_name or target_name in {"?", "Descubierto"}:
+        return
+    vals = list(result.get("connects_to") or [])
+    if _canonical_entity_key(target_name) not in {_canonical_entity_key(v) for v in vals}:
+        vals.append(target_name)
+    result["connects_to"] = vals
+
+
+def _result_add_future_watch_target(result: Dict[str, Any], target: str, *, reason: str,
+                                    source: str = "infra_watch", kind: str = "future_watch") -> None:
+    """Añade rutas futuras/candidatas a mostrar en Discovery sin meterlas como conexión confirmada."""
+    if not isinstance(result, dict):
+        return
+    target_name = _canonical_target_node(target, set(NODES.keys())) or _canonical_entity_name(target)
+    if not target_name or target_name in {"?", "Descubierto"}:
+        return
+    rows = list(result.get("future_watch_targets") or [])
+    key = (_canonical_entity_key(target_name), str(source), str(kind))
+    for old in rows:
+        if isinstance(old, dict) and (_canonical_entity_key(old.get("target", "")), str(old.get("source", "")), str(old.get("kind", ""))) == key:
+            return
+    rows.append({"target": target_name, "reason": str(reason or "").strip()[:280], "source": source, "kind": kind})
+    result["future_watch_targets"] = rows
+
+
+def _infra_blob(result: Dict[str, Any], institution_name: str) -> str:
+    """Texto normalizado para detectar rutas infra aunque el JSON haya venido incompleto."""
+    parts = [institution_name, result.get("institution", ""), result.get("summary", "")]
+    for k in ("sources", "ripple_products", "connects_to"):
+        parts.extend([str(x) for x in (result.get(k) or [])])
+    for ev in result.get("evidence_items") or []:
+        if isinstance(ev, dict):
+            parts.extend([str(ev.get("title", "")), str(ev.get("claim", "")), str(ev.get("url", "")), str(ev.get("target", ""))])
+    for rd in result.get("route_decisions") or []:
+        if isinstance(rd, dict):
+            parts.extend([str(rd.get("to", "")), str(rd.get("claim", "")), str(rd.get("url", ""))])
+    return _norm_key(" ".join(parts))
+
 def _safe_sources_blob(sources: Any, limit: int = 1200) -> str:
     """Fuentes limpias para BD/UI: sin duplicados por URL canónica ni por historia."""
     if not sources:
@@ -1517,7 +1711,9 @@ CONNECTS_TO_NODE: Dict[str, str] = {
     "santander": "Santander", "standard chartered": "Standard Chartered",
     "bank of america": "Bank of America", "boa": "Bank of America",
     "pnc": "PNC Bank", "itau": "Itaú Unibanco",
-    "treasury": "Treasury", "prime": "Hidden Road / Prime", "ripple prime": "Hidden Road / Prime", "rail": "Rail",
+    "treasury": "Treasury", "ripple treasury": "Treasury", "gtreasury": "Treasury", "gt treasury": "Treasury",
+    "swift certified partner": "SWIFT", "swift alliance lite2": "SWIFT", "alliance lite2": "SWIFT", "swiftref": "SWIFT",
+    "prime": "Hidden Road / Prime", "ripple prime": "Hidden Road / Prime", "rail": "Rail",
     "permissioned dex": "Permissioned DEX", "dex": "DEX/AMM",
     "ethereum": "Ethereum", "eth": "Ethereum",
     "topology": "Topology Engine", "anomaly": "Anomaly Engine",
@@ -1536,6 +1732,9 @@ CONNECTS_TO_NODE: Dict[str, str] = {
 ROUTES = [
     # Rails privados / públicos vigilados por el radar
     ("SWIFT", "Topology Engine", "watch", "institutional_route_score", "SWIFT → vigilancia topológica"),
+    ("SWIFT", "Treasury", "watch", "institutional_route_score", "SWIFT ↔ Ripple Treasury/GTreasury · conector certificado/vigilancia"),
+    ("SWIFT", "Permissioned DEX", "future", "institutional_route_score", "SWIFT ledger/tokenised value → zona permissioned on-chain a vigilar"),
+    ("SWIFT", "DEX/AMM", "future", "dex_score", "SWIFT → DEX/AMM XRPL · solo watch futuro, requiere huella on-chain"),
     ("FedNow", "Topology Engine", "watch", "institutional_route_score", "FedNow → vigilancia topológica"),
     ("Mastercard", "Topology Engine", "watch", "institutional_route_score", "Mastercard → vigilancia topológica"),
     ("SEPA/ACH", "Topology Engine", "watch", "institutional_route_score", "SEPA/ACH → vigilancia topológica"),
@@ -11163,6 +11362,11 @@ def _result_future_routes_for_display(result: Dict[str, Any], limit: int = 12) -
             push(p.get("name"), "partners", "partner")
         else:
             push(p, "partners", "partner")
+    for ft in result.get("future_watch_targets") or []:
+        if isinstance(ft, dict):
+            push(ft.get("target"), ft.get("source", "future_watch"), ft.get("kind", "future_watch"))
+        else:
+            push(ft, "future_watch", "future_watch")
     return routes[:limit]
 
 def _set_search_cache(conn: sqlite3.Connection, name: str,
@@ -11496,8 +11700,14 @@ def _compact_sources(items: Any, max_items: int = 5) -> List[Any]:
     out: List[Any] = []
     seen: Set[str] = set()
     seen_stories: Set[str] = set()
+    seen_titles: Set[str] = set()
     for it in items:
         url = _extract_url_from_any(it)
+        title_key = ""
+        if isinstance(it, dict):
+            title_key = _source_title_key(it.get("title") or it.get("name") or it.get("claim") or it.get("label") or "")
+        if title_key and title_key in seen_titles:
+            continue
         if url:
             canon = _canonical_source_url(url)
             story = _source_story_key(canon)
@@ -11507,6 +11717,8 @@ def _compact_sources(items: Any, max_items: int = 5) -> List[Any]:
             seen.add(key)
             if story:
                 seen_stories.add(story)
+            if title_key:
+                seen_titles.add(title_key)
             if isinstance(it, dict):
                 it = dict(it)
                 it["url"] = canon
@@ -11517,6 +11729,8 @@ def _compact_sources(items: Any, max_items: int = 5) -> List[Any]:
             if key in seen:
                 continue
             seen.add(key)
+            if title_key:
+                seen_titles.add(title_key)
         out.append(it)
         if len(out) >= max_items:
             break
@@ -11691,12 +11905,18 @@ def _extract_anthropic_web_sources(data: Dict[str, Any], max_items: int = 10) ->
     """Recupera URLs/títulos de bloques web_search y citations aunque el JSON final venga mal formado."""
     found: List[Dict[str, str]] = []
     seen: Set[str] = set()
+    seen_titles: Set[str] = set()
 
     def add(url: Any, title: Any = "") -> None:
         u = _canonical_source_url(str(url or "").strip())
         if not u or not u.startswith("http") or u in seen:
             return
+        tkey = _source_title_key(title)
+        if tkey and tkey in seen_titles:
+            return
         seen.add(u)
+        if tkey:
+            seen_titles.add(tkey)
         found.append({"url": u, "title": str(title or "Fuente web").strip()[:180]})
 
     def walk(obj: Any) -> None:
@@ -11736,15 +11956,20 @@ def _merge_discovery_sources(result: Dict[str, Any], data: Optional[Dict[str, An
         for item in _extract_anthropic_web_sources(data, max_sources):
             u = _extract_url_from_any(item)
             if u:
-                sources_raw.append(u)
-                if not any(_canonical_source_url(_extract_url_from_any(ev)) == _canonical_source_url(u) for ev in evidence_raw):
-                    evidence_raw.append({
-                        "title": item.get("title", "Fuente recuperada de web_search"),
-                        "url": u,
-                        "claim": "Fuente recuperada automáticamente aunque la respuesta JSON viniera incompleta o mal formada.",
-                        "target": result.get("institution", "Ripple/XRPL"),
-                        "type": "regulatory_filing_pdf" if _is_pdf_or_primary_doc_url(u) else "news_major",
-                    })
+                # Importante: una URL recuperada de web_search NO es una prueba de conexión.
+                # Se muestra como fuente para revisión, pero no se guarda en evidence_items.
+                sources_raw.append(item if isinstance(item, dict) else u)
+
+    # Reparar cachés antiguos: mover "fuentes recuperadas automáticamente" fuera de pruebas.
+    cleaned_evidence: List[Any] = []
+    for ev in evidence_raw:
+        if _is_auto_recovered_evidence(ev):
+            u = _extract_url_from_any(ev)
+            if u:
+                sources_raw.append(ev)
+            continue
+        cleaned_evidence.append(ev)
+    evidence_raw = cleaned_evidence
 
     # sources debe ser lista de URLs string para que la UI las pinte bien.
     clean_sources: List[str] = []
@@ -11765,7 +11990,7 @@ def _fallback_discovery_from_partial_response(institution_name: str, entity_type
         "entity_type": entity_type,
         "connected": False,
         "confidence": 0.0,
-        "summary": f"La búsqueda respondió, pero el JSON vino mal formado. Recuperé fuentes web para revisión; error técnico: {str(err)[:120]}",
+        "summary": f"La búsqueda respondió, pero el JSON vino mal formado. Recuperé fuentes web para revisión. No cuento esas fuentes como pruebas hasta que el JSON sea válido o una verificación A→B las confirme. Error técnico: {str(err)[:120]}",
         "ripple_products": [], "layer": _classify_entity(institution_name) if entity_type else "Descubierto", "icon": "🧩",
         "connects_to": [], "route_kind": "private", "sources": [],
         "wallets": [], "corridors": [], "partners": [], "map_points": [], "evidence_items": [],
@@ -11775,7 +12000,80 @@ def _fallback_discovery_from_partial_response(institution_name: str, entity_type
 
 
 def _enrich_discovery_with_chain_seeds(result: Dict[str, Any], institution_name: str) -> Dict[str, Any]:
-    """CLEAN MODE: no añade rutas/pruebas documentales semilla al resultado."""
+    """
+    Barrido infra-wide: corrige el falso 0 cuando la conexión no es XRP directa
+    pero sí hay infraestructura documentada en capas como Treasury/SWIFT,
+    ledger permissioned, DEX/AMM o puntos on-chain a vigilar.
+
+    Regla: lo documentado se puede dibujar; lo hipotético/on-chain futuro solo se
+    muestra como watch/future, no como prueba confirmada.
+    """
+    result = dict(result or {})
+    canonical = _canonical_entity_name(institution_name)
+    key = _canonical_entity_key(canonical)
+    blob = _infra_blob(result, institution_name)
+
+    is_swift_context = (key == _canonical_entity_key("SWIFT") or " swift " in f" {blob} " or "swift" == blob)
+    is_treasury_context = any(x in blob for x in ("ripple treasury", "gtreasury", "gt treasury", "swift certified partner", "alliance lite2", "swiftref", "treasury ripple com company partners"))
+
+    # 1) SWIFT ↔ Ripple Treasury / GTreasury: conexión infra documentada, no XRP settlement.
+    if is_swift_context or is_treasury_context:
+        treasury_url = "https://treasury.ripple.com/company/partners"
+        claim = (
+            "Ripple Treasury indica que forma parte del SWIFT Certified Partner Program "
+            "y ofrece conectividad bancaria global, SWIFT Alliance Lite2 y SWIFTRef. "
+            "Esto prueba ruta de infraestructura Treasury/SWIFT, no liquidación XRP directa."
+        )
+        _result_add_evidence(
+            result,
+            title="Ripple Treasury — SWIFT Certified Partner Program",
+            claim=claim,
+            url=treasury_url,
+            target="Treasury",
+            evidence_type="official_partner",
+            confidence=0.72,
+        )
+        _result_add_route_decision(
+            result, to="Treasury", claim=claim, url=treasury_url,
+            evidence_type="official_partner", confidence=0.72, kind="institutional", draw_on_map=True,
+        )
+        _result_add_connect_target(result, "Treasury")
+        products = list(result.get("ripple_products") or [])
+        if "Ripple Treasury" not in products:
+            products.append("Ripple Treasury")
+        result["ripple_products"] = products
+        result["connected"] = True
+        try:
+            result["confidence"] = max(float(result.get("confidence", 0) or 0), 0.68)
+        except Exception:
+            result["confidence"] = 0.68
+        result["route_kind"] = result.get("route_kind") or "institutional"
+        if not result.get("summary") or "JSON" in str(result.get("summary")):
+            result["summary"] = "Conexión directa SWIFT→XRP no confirmada; sí hay ruta infra documentada SWIFT↔Ripple Treasury/GTreasury."
+        elif "Treasury" not in str(result.get("summary")):
+            result["summary"] = (str(result.get("summary", "")).rstrip(" .") + ". Además: ruta infra SWIFT↔Ripple Treasury/GTreasury documentada.")[:600]
+
+        # 2) SWIFT shared ledger / permissioned on-chain: ruta futura a vigilar.
+        swift_ledger_url = "https://www.swift.com/news-events/news/swift-add-blockchain-based-ledger"
+        swift_mvp_url = "https://www.swift.com/news-events/news/swifts-blockchain-based-shared-ledger-progresses-mvp-implementation"
+        ledger_claim = (
+            "Swift anunció un shared ledger/blockchain para pagos 24/7 e interoperabilidad con sistemas existentes y emergentes. "
+            "Se clasifica como watch permissioned/tokenised infra, no como XRPL/DEX confirmado."
+        )
+        _result_add_evidence(
+            result, title="Swift blockchain-based shared ledger", claim=ledger_claim,
+            url=swift_ledger_url, target="Topology Engine", evidence_type="primary_source", confidence=0.62,
+        )
+        _result_add_route_decision(
+            result, to="Topology Engine", claim=ledger_claim, url=swift_ledger_url,
+            evidence_type="primary_source", confidence=0.62, kind="watch", draw_on_map=True,
+        )
+        _result_add_source(result, swift_mvp_url)
+        _result_add_future_watch_target(result, "Permissioned DEX", reason="Vigilar si el ledger permissioned de Swift deja puente con redes/tokenised value compatibles.", source="swift_ledger", kind="permissioned_onchain_watch")
+        _result_add_future_watch_target(result, "DEX/AMM", reason="Vigilar si aparece huella pública XRPL: AMM, DEX, trustlines, offers o gateways.", source="xrpl_public_edge", kind="dex_amm_watch")
+        _result_add_future_watch_target(result, "XRPL", reason="No confirmado: solo se activaría con TX, trustline, wallet, gateway o fuente oficial XRPL/Ripple.", source="xrpl_public_edge", kind="onchain_watch")
+        _result_add_future_watch_target(result, "RLUSD", reason="No confirmado: vigilar emisión/movimientos/trustlines RLUSD asociados a gateways o tesorería.", source="rlusd_public_edge", kind="stablecoin_watch")
+
     return result
 
 
@@ -11799,6 +12097,12 @@ def _finalize_discovery_result(result: Dict[str, Any], institution_name: str, en
     if isinstance(result.get("summary"), str) and len(result["summary"]) > 600:
         result["summary"] = result["summary"][:600].rstrip() + "…"
     result = _merge_discovery_sources(result, data, max_sources=8)
+    # Si el JSON vino roto, no dejamos "Confianza 0" cuando sí hubo búsqueda y fuentes.
+    # Esta cifra es una confianza de investigación mínima, no una prueba de conexión.
+    if result.get("_json_recovered") and not result.get("connected") and float(result.get("confidence", 0) or 0) <= 0:
+        result["confidence"] = _fallback_confidence_from_sources(result)
+        result["_confidence_is_research_quality"] = True
+    result["evidence_items"] = _valid_discovery_evidence_items(result)
     result = _enrich_discovery_with_chain_seeds(result, institution_name)
     return result
 
@@ -14346,8 +14650,10 @@ def _build_search_prompt(entity_name: str, entity_type: str) -> str:
         '"corridors":[{"name":"nombre","pair":"USD/PHP","partner":"Coins.ph","layer":"ODL","icon":"icon"}],'
         '"partners":[{"name":"nombre","layer":"Banca_EU","icon":"icon","connects_to":"Ripple Payments"}],'
         '"map_points":[{"name":"nodo/rail/custodio/partner","layer":"Gobierno","icon":"emoji","connects_to":["FedNow"],"kind":"government_payment_rail","summary":"por que debe verse en el mapa"}],'
-        '"evidence_items":[{"title":"prueba","url":"https://...","claim":"que demuestra","target":"FedNow"}]}'
-        " — wallets/corridors/partners/map_points/evidence_items pueden ser listas vacias []."
+        '"evidence_items":[{"title":"prueba","url":"https://...","claim":"que demuestra","target":"FedNow"}],'
+        '"route_decisions":[{"from":"entidad","to":"Treasury","kind":"institutional","evidence_type":"official_partner","confidence":0.72,"claim":"prueba concreta","url":"https://...","draw_on_map":true}],'
+        '"future_watch_targets":[{"target":"DEX/AMM","kind":"dex_amm_watch","source":"xrpl_public_edge","reason":"qué vigilar"}]}'
+        " — wallets/corridors/partners/map_points/evidence_items/route_decisions/future_watch_targets pueden ser listas vacias []."
         " REGLA JSON CRÍTICA: devuelve JSON estricto parseable por json.loads: números reales tipo 0.72, no rangos, sin comentarios, sin comas finales y sin texto fuera del objeto."
         " REGLA PROOF-FIRST CRÍTICA: NO incluyas un nodo en connects_to ni draw_on_map=true si no puedes explicar la ruta con una prueba concreta en route_decisions[]. "
         "Para XRPL/RLUSD/Hidden Road/Prime/Metaco/Treasury/Rail/Standard Custody exige prueba directa, on-chain, filing o fuente oficial. "
@@ -14431,6 +14737,8 @@ def _build_search_prompt(entity_name: str, entity_type: str) -> str:
         f"4) site:ripple.com \"{entity_name}\"; "
         f"5) \"{entity_name}\" Ripple 'memorandum of understanding' OR 'MOU' OR 'partnership agreement' OR 'pilot program' (site:businesswire.com OR site:prnewswire.com OR site:globenewswire.com); "
         f"6) site:github.com \"{entity_name}\" xrpl OR ripple. "
+        f"7) BARRIDO INFRA-WIDE obligatorio: busca \"{entity_name}\" con Ripple Treasury, GTreasury, SWIFT Certified Partner Program, SWIFT Alliance Lite2, SWIFTRef, Hidden Road, Metaco/Custody, Rail, Permissioned DEX, DEX/AMM, XRPL AMM, XRPL trustlines, RLUSD, public gateway y tokenised value. "
+        f"Si la prueba es indirecta, usa route_decisions con evidence_type='official_partner' o 'primary_source'; si es solo futura/on-chain watch, ponla en future_watch_targets y NO como conexión confirmada. "
         f"{_local_docs_line}"
         f"IMPORTANTE: URLs que terminan en .pdf o provienen de sec.gov/Archives, bis.org, banco central, "
         f"bolsa local ({_script.upper()}) — clasificar como 'regulatory_filing_pdf' o 'contract_pdf'. "
@@ -14568,7 +14876,8 @@ def _build_search_prompt(entity_name: str, entity_type: str) -> str:
             "2) Busca acuerdos RippleNet, ODL, RLUSD o XRPL en comunicados de prensa y filings. "
             "3) Busca wallets XRPL asociadas (direcciones 'r...') en xrpscan.com o xrpl.org. "
             "4) Busca conexiones indirectas: custodios que usen Metaco, prime brokers Hidden Road, corredores ODL. "
-            "5) Si no hay conexion directa con Ripple, indica connected=false pero con confidence segun la evidencia indirecta encontrada. "
+            "5) Si no hay conexion directa con Ripple, indica connected=false solo si tampoco hay infraestructura indirecta. "
+            "6) Para SWIFT/rails privados, comprueba expresamente Ripple Treasury/GTreasury, SWIFT Certified Partner Program, Alliance Lite2, SWIFTRef, shared ledger, tokenised value, Permissioned DEX, DEX/AMM, XRPL public edge y RLUSD. "
         )
 
         return (
@@ -16556,10 +16865,13 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
         css  = "rrp-green" if conf >= 0.65 else "rrp-orange" if conf >= 0.35 else "rrp-red"
         icon = result.get("icon", "?")
         connected_txt = "Conexión confirmada" if result.get("connected") else "Sin conexión encontrada"
+        conf_label = "Calidad búsqueda" if result.get("_confidence_is_research_quality") else "Confianza"
         st.markdown(f"""
 <div class='rrp-alert {css}'>
-  <b>{icon} {result.get('institution','')}</b> — {connected_txt} · Confianza: <b>{conf*100:.0f}%</b>
+  <b>{icon} {result.get('institution','')}</b> — {connected_txt} · {conf_label}: <b>{conf*100:.0f}%</b>
 </div>""", unsafe_allow_html=True)
+        if result.get("_json_recovered"):
+            st.warning("La IA buscó en web pero devolvió JSON inválido. Las URLs se muestran como fuentes de revisión; no se añaden como pruebas ni rutas confirmadas.")
 
         if result.get("summary"):
             st.caption(result["summary"])
@@ -16690,7 +17002,11 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
                         unsafe_allow_html=True,
                     )
 
-            evidence_items = result.get("evidence_items") or []
+            raw_evidence_items = result.get("evidence_items") or []
+            evidence_items = _valid_discovery_evidence_items(result)
+            skipped_auto_evidence = len(raw_evidence_items) - len(evidence_items)
+            if skipped_auto_evidence > 0:
+                st.caption(f"🧹 {skipped_auto_evidence} fuente(s) recuperada(s) automáticamente se ocultaron aquí para no contarlas como prueba.")
             if evidence_items:
                 st.markdown("**🧾 Pruebas detectadas:**")
                 for ev in evidence_items[:6]:
