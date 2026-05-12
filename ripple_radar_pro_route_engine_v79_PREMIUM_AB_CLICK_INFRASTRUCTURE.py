@@ -4687,11 +4687,13 @@ def make_map(row: pd.Series,
     # Filtrar rutas según el modo del mapa
     _CONFIRMED_KINDS  = {
         "real", "public", "private", "verified", "obligatory", "odl", "partner",
-        "public_wallet", "official", "institutional", "government_payment_rail", "core_infra", "weak_evidence"
+        "public_wallet", "official", "official_announcement", "official_partner",
+        "press_release", "primary_source", "partner_page", "central_bank_pdf",
+        "institutional", "government_payment_rail", "core_infra", "weak_evidence"
     }
     _SURVEILLANCE_KINDS = {
         "watch", "watch_only", "monitoring_link", "ecosystem_watch", "discovered", "model", "future", "future_watch",
-        "deductive_watch", "infra_deduction", "transitive_watch", "watch_only"
+        "deductive_watch", "infra_deduction", "transitive_watch", "onchain_watch", "stablecoin_watch", "watch_only"
     }
     if route_filter == "confirmed":
         _all_routes = [r for r in _all_routes if r[2] in _CONFIRMED_KINDS]
@@ -16389,12 +16391,18 @@ def _route_decision_mentions_pair(rd: Dict[str, Any], node_a: Any, node_b: Any) 
     a_key = _canonical_entity_key(node_a)
     b_key = _canonical_entity_key(node_b)
     if explicit_from or explicit_to:
-        from_ok = not explicit_from or _canonical_entity_key(explicit_from) == a_key
-        to_ok = not explicit_to or _canonical_entity_key(explicit_to) == b_key
-        # Si el motor declara explícitamente to=dst, aún exigimos que el claim
-        # no sea genérico y mencione el origen cuando el origen no es núcleo Ripple.
+        # v133: comparar campos explícitos con canonicalización completa.
+        # Antes `from=Banco de la República de Colombia` no casaba con
+        # `Banco de la República`, y Proof-First bloqueaba líneas válidas.
+        from_key = _canonical_entity_key(_canonical_entity_name(explicit_from)) if explicit_from else ""
+        to_key = _canonical_entity_key(_canonical_target_node(explicit_to, _known_nodes() if callable(globals().get("_known_nodes")) else set(NODES.keys())) or _canonical_entity_name(explicit_to)) if explicit_to else ""
+        from_ok = not explicit_from or from_key == a_key
+        to_ok = not explicit_to or to_key == b_key
+        # Si el motor declara explícitamente from/to y el claim no es genérico,
+        # la arista puede pasar aunque el texto no repita literalmente ambos nombres.
+        # Esto evita que comunicados oficiales se pierdan por usar alias largos/cortos.
         if from_ok and to_ok and not _is_generic_route_claim(blob):
-            if explicit_from:
+            if explicit_from or explicit_to:
                 return True
             return _claim_mentions_pair(blob, node_a, node_b)
     return _claim_mentions_pair(blob, node_a, node_b)
@@ -16533,16 +16541,37 @@ def apply_discovery_to_map(conn: sqlite3.Connection, result: Dict[str, Any],
     min_confidence = 0.40 if is_auto_type else 0.35
     confidence = float(result.get("confidence", 0) or 0)
 
+    # v133: si el resultado trae route_decisions/evidence_items útiles, no dejarlo
+    # morir como 0% por un JSON recuperado o por connected=false. Las rutas seguirán
+    # pasando por Proof-First, pero el aplicador de mapa debe poder procesarlas.
+    structured_route_evidence = False
+    try:
+        _rd_confs = []
+        for _rd in (result.get("route_decisions") or []):
+            if not isinstance(_rd, dict):
+                continue
+            if bool(_rd.get("draw_on_map", True)) and (str(_rd.get("to") or _rd.get("target") or "").strip()):
+                _rd_confs.append(float(_rd.get("confidence", 0.0) or 0.0))
+                if _decision_has_real_proof(_rd) or str(_rd.get("evidence_type") or _rd.get("type") or "").lower() in DEDUCTIVE_EVIDENCE_TYPES:
+                    structured_route_evidence = True
+        if _rd_confs:
+            confidence = max(confidence, max(_rd_confs), 0.16)
+            result["confidence"] = max(float(result.get("confidence", 0) or 0), confidence)
+        if not structured_route_evidence:
+            structured_route_evidence = bool(_valid_discovery_evidence_items(result) if callable(globals().get("_valid_discovery_evidence_items")) else result.get("evidence_items"))
+    except Exception:
+        structured_route_evidence = bool(result.get("route_decisions") or result.get("evidence_items"))
+
     # Una entidad puede tener evidencia sólida SIN ser "connected=true":
     # ej: PBoC desarrolla mBridge como alternativa, tiene papers BIS, socios conocidos.
     # Si confianza ≥ 0.55 + hay evidencia (partners/sources/map_points), añadir igualmente
     # marcando la relación como "ecosistema adyacente" (no conexión directa a Ripple core).
     has_evidence = bool(
         result.get("partners") or result.get("map_points") or
-        result.get("connects_to") or
+        result.get("connects_to") or result.get("route_decisions") or result.get("evidence_items") or
         (result.get("sources") and len(result.get("sources", [])) >= 2)
     )
-    force_add = (not result.get("connected")) and confidence >= 0.55 and has_evidence
+    force_add = (not result.get("connected")) and ((confidence >= 0.55 and has_evidence) or structured_route_evidence)
     if force_add:
         # Sobrescribir connected para que el flujo continúe; route_kind pasa a "watch" por defecto
         result["connected"] = True
@@ -16551,7 +16580,7 @@ def apply_discovery_to_map(conn: sqlite3.Connection, result: Dict[str, Any],
         if not result.get("connects_to"):
             result["connects_to"] = []
 
-    if not result.get("connected") or confidence < min_confidence:
+    if (not result.get("connected") or confidence < min_confidence) and not structured_route_evidence:
         return {"added_node": False, "added_routes": 0, "reason": "confidence_too_low",
                 "entity_type": entity_type, "canonical_name": name}
 
@@ -16742,6 +16771,33 @@ def apply_discovery_to_map(conn: sqlite3.Connection, result: Dict[str, Any],
             _matched_direct = _canonical_target_node(target, _known_nodes()) or _canonical_display_node(target)
             if _matched_direct:
                 added_direct_targets.add(_matched_direct)
+
+    # v133: route_decisions son la fuente real de líneas A→B del Discovery.
+    # Antes solo se usaban como gate de `connects_to`; si connects_to venía vacío
+    # o genérico, la investigación enseñaba pruebas pero no creaba líneas en Radar.
+    for rd in result.get("route_decisions", []) or []:
+        if not isinstance(rd, dict) or not bool(rd.get("draw_on_map", True)):
+            continue
+        rd_dst = rd.get("to") or rd.get("dst") or rd.get("target") or rd.get("connects_to")
+        if not rd_dst:
+            continue
+        rd_src = rd.get("from") or rd.get("src") or rd.get("source_node") or name
+        rd_src = _canonical_display_node(rd_src)
+        # Si el origen de la ruta no es el nodo investigado y no existe aún, crearlo.
+        if rd_src and rd_src not in _known_nodes():
+            rd_src = _ensure_node(rd_src, result.get("layer") or entity_type or "Descubierto", icon, f"Origen declarado en ruta de {name}", 0.70) or rd_src
+        rd_kind = str(rd.get("kind") or rd.get("evidence_type") or rd.get("type") or direct_kind or "discovered")
+        rd_claim = str(rd.get("claim") or rd.get("summary") or rd.get("evidence") or rd.get("reason") or evidence_text or "")
+        rd_label = str(rd.get("label") or f"{rd_src or name} -> {rd_dst}")
+        rd_conf = None
+        try:
+            rd_conf = float(rd.get("confidence"))
+        except Exception:
+            rd_conf = None
+        if _add_route(rd_src or name, rd_dst, rd_kind, rd_label, _route_signal_for_kind(rd_kind), rd_claim, confidence_override=rd_conf):
+            _matched_rd = _canonical_target_node(rd_dst, _known_nodes()) or _canonical_display_node(rd_dst)
+            if _matched_rd:
+                added_direct_targets.add(_matched_rd)
 
     # Rutas futuras/deductivas declaradas por el motor. No son conexiones confirmadas:
     # el gate Proof-First solo las deja pasar si existe route_decision deductive_watch.
@@ -17038,7 +17094,9 @@ def load_dynamic_map_elements(conn: sqlite3.Connection) -> Tuple[Dict, List, Lis
             existing_confirmed_pairs = set()
             confirmed_like = {
                 "real", "public", "private", "verified", "obligatory", "odl", "partner",
-                "public_wallet", "official", "institutional", "government_payment_rail", "core_infra", "weak_evidence"
+                "public_wallet", "official", "official_announcement", "official_partner",
+                "press_release", "primary_source", "partner_page", "central_bank_pdf",
+                "institutional", "government_payment_rail", "core_infra", "weak_evidence"
             }
             for _rs, _rd, _rk, *_rest in list(ROUTES) + list(dyn_routes):
                 if str(_rk) in confirmed_like:
@@ -18664,10 +18722,31 @@ def _rrp_render_discovery_result_card(item: Dict[str, Any], conn: sqlite3.Connec
                 with col2:
                     if st.button("Investigar", key=f"cascade_from_card_{item.get('key')}_{_canonical_entity_key(node)}", use_container_width=True):
                         next_depth = min(int(item.get("depth", 0) or 0) + 1, RRP_CASCADE_MAX_DEPTH)
-                        if _rrp_cascade_push(node, parent=name, depth=next_depth, reason=reason or "nodo derivado de esta tarjeta"):
-                            st.success(f"Añadido a cascada: {node} · nivel {next_depth}")
-                        else:
-                            st.info(f"{node} ya estaba investigado/en cola o supera la profundidad máxima.")
+                        # v133: este botón ya no solo mete el nodo en la cola; lanza
+                        # directamente la investigación del nodo pulsado y cambia el
+                        # foco visible de Discovery. Así no sigue apareciendo arriba
+                        # el nombre del resultado anterior.
+                        node_to_search = _canonical_entity_name(node)
+                        st.session_state["disc_pending_query"] = node_to_search
+                        st.session_state["disc_active_query"] = node_to_search
+                        st.session_state["disc_raw_query"] = node_to_search
+                        st.session_state["disc_normalized_query"] = node_to_search
+                        st.session_state["rrp_cascade_inflight_key"] = _rrp_cascade_item_key(node_to_search)
+                        st.session_state["disc_cascade_active"] = True
+                        st.session_state["disc_cascade_parent"] = name
+                        st.session_state["disc_cascade_depth"] = next_depth
+                        st.session_state["disc_cascade_reason"] = reason or "nodo derivado de esta tarjeta"
+                        # Quitar el duplicado de la cola si estaba pendiente.
+                        try:
+                            _k = _rrp_cascade_item_key(node_to_search)
+                            st.session_state["cascade_queue"] = [
+                                q for q in _rrp_normalize_cascade_queue()
+                                if _rrp_cascade_item_key(q.get("name")) != _k
+                            ]
+                        except Exception:
+                            pass
+                        st.session_state.pop("disc_result", None)
+                        st.success(f"Investigando ahora: {node_to_search} · nivel {next_depth}")
                         st.rerun()
 
 
