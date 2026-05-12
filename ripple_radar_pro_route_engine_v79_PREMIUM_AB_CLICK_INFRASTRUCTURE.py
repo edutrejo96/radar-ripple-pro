@@ -171,7 +171,7 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v92_2026_05_12_CHAT_PASTE_NO_LINKS_PINS"
+BUILD_ID = "v93_2026_05_12_ROUTE_AB_CLEAN_NO_DUP"
 BUILD_NOTE = "A-B con números vivos por ficha + Pump/Adopción explicado sin duplicar señales"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
@@ -9858,317 +9858,174 @@ El volumen de tokens/IOU raros no permite entrar al radar.
     styled_table(view[cols_show])
 
 def render_route_path_engine(conn: sqlite3.Connection, df: pd.DataFrame, row: pd.Series) -> None:
+    """Route Path Engine A→B limpio.
+
+    v93: elimina duplicados visuales y narrativos dentro de la pestaña Rutas A→B.
+    Deja una única experiencia principal:
+    - 1 gráfico premium A→B clicable.
+    - 1 ficha viva por línea.
+    - 1 bloque de métricas globales.
+    - formularios y rastreo en desplegables, sin repetir Sankey/tablas antiguas.
+    """
     st.subheader("🧭 Route Path Engine A→B")
 
     st.markdown("""
 <div class="rrp-path-panel">
-  <div class="rrp-path-title">¿Qué hace este motor?</div>
+  <div class="rrp-path-title">Panel limpio A→B · una sola fuente visual</div>
   <div class="rrp-path-text">
-    Combina dos enfoques: <b>(1) Rastreo real</b> — sigue transacciones reales del ledger XRPL ahora mismo,
-    identifica quién envía, a quién llega y si hay un salto intermedio.
-    <b>(2) Inferencia por huellas</b> — cuando no hay TX directa visible, infiere la ruta probable
-    por las huellas que dejan los actores privados en la cadena pública.<br>
-    <b>Verde</b> = wallet identificada. <b>?</b> = wallet desconocida (solo dirección pública).
+    Esta pestaña muestra <b>una única vista premium deduplicada</b>. Las rutas equivalentes se fusionan
+    antes de pintar el gráfico: si la misma conexión aparece desde histórico, Discovery, pruebas fijas,
+    wallets o rutas dinámicas, se agrega en <b>una sola línea canónica</b> con sus números vivos dentro de la ficha.
   </div>
 </div>""", unsafe_allow_html=True)
+
     render_ripple_infrastructure_scope_panel()
 
-    # ── GRÁFICO VIVO FIJO: debe aparecer siempre, incluso sin datos nuevos.
-    st.markdown("---")
-    st.markdown("### 🔁 Gráfico vivo A→B — siempre fijo y autoactualizable")
-    st.markdown("""<div class='rrp-note'>
-Este gráfico se reconstruye desde el estado vivo del radar: histórico, rutas descubiertas, pruebas verificadas,
-wallets aprobadas y wallets añadidas manualmente. Si añades una wallet o una ruta, aparecerá aquí tras el rerun.
-</div>""", unsafe_allow_html=True)
-    # v71: las fichas se recalculan desde BD en cada rerun. Este panel deja claro el estado vivo
-    # y permite refresco seguro sin depender de que el usuario cambie de sección.
     try:
         proofs_n = _safe_count_table(conn, "connection_proofs")
         dyn_n = _safe_count_table(conn, "dynamic_routes")
         route_n = _safe_count_table(conn, "route_paths")
+        wallets_n = _safe_count_table(conn, "discovered_wallets")
     except Exception:
-        proofs_n = dyn_n = route_n = 0
-    cc1, cc2, cc3, cc4 = st.columns([1, 1, 1, 1.2])
-    cc1.metric("Pruebas fijas", proofs_n)
-    cc2.metric("Rutas dinámicas", dyn_n)
-    cc3.metric("Rutas base", route_n)
-    if cc4.button("🔄 Actualizar gráfico/fichas", key="route_paths_force_refresh_v71"):
+        proofs_n = dyn_n = route_n = wallets_n = 0
+
+    live_paths = load_live_route_paths(conn, df)
+
+    st.markdown("---")
+    st.markdown("### 🔁 Gráfico A→B premium · vivo y sin duplicados")
+    st.markdown("""
+<div class='rrp-note'>
+⚠️ <b>Importante:</b> pulsa <b>Actualizar gráfico/fichas</b> después de añadir pruebas, rutas o wallets.
+El gráfico se reconstruye desde <b>connection_proofs</b>, <b>dynamic_routes</b>, <b>route_paths</b> y wallets aprobadas.
+No se vuelve a mostrar el Sankey clásico ni tablas repetidas dentro de esta pestaña.
+</div>""", unsafe_allow_html=True)
+
+    c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 1.3])
+    c1.metric("Pruebas fijas", proofs_n)
+    c2.metric("Rutas dinámicas", dyn_n)
+    c3.metric("Rutas base", route_n)
+    c4.metric("Wallets vigiladas", wallets_n)
+    if c5.button("🔄 Actualizar gráfico/fichas", key="route_paths_force_refresh_v93"):
         try:
             st.cache_data.clear()
         except Exception:
             pass
         st.rerun()
-    st.caption("Las fichas A→B se reconstruyen en cada ejecución desde connection_proofs, dynamic_routes y route_paths. Si entra una prueba nueva, aparecerá al refrescar/rerun.")
-    try:
-        auto_ab = st.toggle("Auto-actualizar A→B cada 30s", value=False, key="route_paths_auto_refresh_v71", help="Úsalo si estás vigilando pruebas nuevas. Puede reiniciar el audio porque Streamlit vuelve a ejecutar la página.")
-        if auto_ab and st_autorefresh is not None:
-            st_autorefresh(interval=30000, limit=None, key="route_paths_live_autorefresh_v71")
-    except Exception:
-        pass
-    st.caption("Última reconstrucción local: " + datetime.now().strftime("%H:%M:%S"))
 
-    live_paths = load_live_route_paths(conn, df)
-    chart_paths = render_route_path_graph_and_fichas(live_paths, key_prefix="live", conn=conn)
+    chart_paths = render_route_path_graph_and_fichas(live_paths, key_prefix="clean_v93", conn=conn)
+
     if live_paths.empty:
-        st.info("El gráfico está listo, pero aún no hay rutas suficientes. Añade/verifica rutas o wallets para llenarlo.")
+        st.info("El gráfico está preparado, pero aún no hay rutas suficientes. Añade/verifica rutas o wallets para llenarlo.")
     else:
-        st.caption(f"Rutas vivas cargadas: {len(live_paths)} · rutas visibles tras deduplicar: {len(chart_paths)}")
+        st.success(f"Vista limpia: {len(live_paths)} observaciones originales → {len(chart_paths)} líneas canónicas deduplicadas.")
 
-    # ── BUSCADOR / ALTA DIRECTA DE RUTAS Y WALLETS: visible siempre.
-    st.markdown("---")
-    render_direct_route_adder(conn)
-    st.markdown("---")
-    render_direct_wallet_adder(conn)
+    st.caption("Cada línea del gráfico contiene sus datos vivos en la ficha: confianza, observaciones fusionadas, fuentes, evidencias, deduplicación e IDs internos.")
 
-    # ── SECCIÓN 1: RASTREO REAL DE TRANSACCIONES ─────────────────────────────
-    st.markdown("---")
-    st.markdown("### 🔍 Rastreo real — últimas transacciones grandes en XRPL")
-    st.markdown("""<div class='rrp-note'>
-Transacciones reales del último ledger validado de XRPL. El radar intenta identificar
-quién es el emisor y el receptor usando una base de wallets conocidas (exchanges, corredores ODL, Ripple treasury, etc.).
-Si una wallet no está en la base, aparece como <b>? dirección parcial</b>.
-El botón <b>Seguir ruta</b> mira si el receptor reenvió el dinero en los siguientes 20 ledgers (≈ 1 minuto).
+    with st.expander("➕ Añadir/investigar rutas y wallets", expanded=False):
+        st.markdown("""
+<div class='rrp-note'>
+Usa este bloque para proponer una conexión A→B o añadir una wallet. El gatekeeper decide si entra como radar,
+watchlist, hipótesis o descartada. Después pulsa <b>Actualizar gráfico/fichas</b> arriba.
 </div>""", unsafe_allow_html=True)
+        render_direct_route_adder(conn)
+        st.markdown("---")
+        render_direct_wallet_adder(conn)
 
-    with st.spinner(f"Escaneando últimos {WHALE_SCAN_LEDGERS} ledgers XRPL (~{WHALE_SCAN_LEDGERS*4}s de historia)…"):
-        real_txs = fetch_recent_large_payments(min_xrp=500.0)
-
-    # ── Panel de alertas whale (automático, sin botón) ────────────────────────
-    st.markdown("---")
-    st.markdown(f"### 🐳 Detector whale — alertas automáticas")
-    st.markdown(f"""<div class='rrp-note'>
-Detecta transacciones ≥<b>{WHALE_XRP_THRESHOLD:,} XRP</b> o ≥<b>{WHALE_RLUSD_THRESHOLD:,} RLUSD</b>.
-Las transacciones ≥<b>{AUTO_MAP_XRP:,} XRP</b> se analizan y añaden al mapa <b>automáticamente</b> sin intervención.
-Las de tamaño medio muestran un botón de análisis manual.
-Datos actualizados cada {REFRESH_SECONDS}s.
+    with st.expander("📡 Rastreo XRPL en vivo y detector whale", expanded=False):
+        st.markdown("""
+<div class='rrp-note'>
+Bloque operativo para ver pagos grandes y saltos de wallets. Está plegado para no duplicar la lectura principal A→B.
+Los resultados útiles alimentan el radar, pero el gráfico principal sigue siendo el único mapa visual de esta pestaña.
 </div>""", unsafe_allow_html=True)
-    render_whale_alerts(conn, real_txs)
+        with st.spinner(f"Escaneando últimos {WHALE_SCAN_LEDGERS} ledgers XRPL (~{WHALE_SCAN_LEDGERS*4}s de historia)…"):
+            real_txs = fetch_recent_large_payments(min_xrp=500.0)
 
-    if real_txs.empty:
-        st.warning("No se pudieron obtener transacciones del ledger XRPL ahora mismo. Intenta refrescar.")
-    else:
-        whale_count = int(real_txs["is_whale"].sum()) if "is_whale" in real_txs.columns else 0
-        identified  = real_txs[real_txs["identified"]].copy()
-        unknown     = real_txs[~real_txs["identified"]].copy()
+        render_whale_alerts(conn, real_txs)
+
+        if real_txs.empty:
+            st.warning("No se pudieron obtener transacciones del ledger XRPL ahora mismo. Intenta refrescar.")
+        else:
+            whale_count = int(real_txs["is_whale"].sum()) if "is_whale" in real_txs.columns else 0
+            identified  = real_txs[real_txs["identified"]].copy() if "identified" in real_txs.columns else pd.DataFrame()
+            unknown     = real_txs[~real_txs["identified"]].copy() if "identified" in real_txs.columns else pd.DataFrame()
+            st.markdown(
+                f"**{len(real_txs)} pagos** en los últimos {WHALE_SCAN_LEDGERS} ledgers · "
+                f"**{whale_count} whales** · **{len(identified)} identificadas** · **{len(unknown)} desconocidas**"
+            )
+
+            show_cols = [c for c in ["hash", "sender_label", "amount", "receiver_label", "ledger_offset", "is_whale"] if c in real_txs.columns]
+            if show_cols:
+                view = real_txs[show_cols].head(40).copy()
+                view = view.rename(columns={
+                    "hash": "TX", "sender_label": "Emisor", "amount": "Cantidad",
+                    "receiver_label": "Receptor", "ledger_offset": "Offset", "is_whale": "Whale"
+                })
+                styled_table(view)
+
+            tx_options = {
+                f"{r.get('hash','')} | {r.get('sender_label','?')} → {r.get('receiver_label','?')} ({r.get('amount','')})": (r.get("receiver"), int(r.get("ledger_index", 0) or 0))
+                for _, r in real_txs.head(20).iterrows()
+                if r.get("receiver") and r.get("ledger_index")
+            }
+            if tx_options:
+                selected_label = st.selectbox("Seguir una transacción:", list(tx_options.keys()), key="tx_trace_select_v93")
+                if st.button("🔗 Seguir siguiente salto", key="tx_trace_btn_v93"):
+                    recv_addr, ledger_idx = tx_options[selected_label]
+                    with st.spinner("Buscando siguiente salto en XRPL…"):
+                        hop = trace_next_hop(recv_addr, ledger_idx)
+                    if hop:
+                        st.success(f"Siguiente salto: {_label(recv_addr)} → {hop.get('amount')} → {hop.get('next_receiver_label')}")
+                        st.code(str(hop.get("next_receiver", "")))
+                    else:
+                        st.info(f"No se encontró reenvío inmediato desde {_label(recv_addr)} en la ventana analizada.")
 
         st.markdown("---")
-        st.markdown("### 📋 Todos los pagos grandes detectados")
-        st.markdown(
-            f"**{len(real_txs)} pagos** en los últimos {WHALE_SCAN_LEDGERS} ledgers · "
-            f"**{whale_count} whales** · "
-            f"**{len(identified)} con wallets identificadas** · "
-            f"**{len(unknown)} desconocidas**"
-        )
+        render_wallet_tracker(conn, real_txs)
+        render_wallet_identity_report(conn)
+        render_unknown_whales_db(conn)
 
-        # Construir tarjetas por TX
-        tx_rows_html = ""
-        for i, r in real_txs.head(40).iterrows():
-            s_known  = r["sender"] in KNOWN_XRPL_WALLETS
-            d_known  = r["receiver"] in KNOWN_XRPL_WALLETS
-            s_color  = "#3CFF9B" if s_known else "#94A3B8"
-            d_color  = "#3CFF9B" if d_known else "#94A3B8"
-            s_icon   = "✅" if s_known else "❓"
-            d_icon   = "✅" if d_known else "❓"
-            is_whale = r.get("is_whale", False)
-            auto_map = r.get("auto_map", False)
-            row_bg   = ("rgba(255,90,103,.10)" if auto_map
-                        else "rgba(255,184,77,.07)" if is_whale
-                        else "rgba(15,23,42,.95)" if i % 2 == 0
-                        else "rgba(7,17,31,.90)")
-            whale_badge = (" 🚨 MEGA" if auto_map
-                           else " 🐳 WHALE" if is_whale else "")
-            whale_color = "#FF5A67" if auto_map else "#FFB84D" if is_whale else "#FFB84D"
-            tx_rows_html += f"""
-<tr style="background:{row_bg};border-bottom:1px solid rgba(255,255,255,.06)">
-  <td style="padding:.45rem .65rem;white-space:nowrap">
-    <span style="color:#94A3B8;font-size:.80rem">{r['hash']}</span>
-    {"<br><span style='color:" + whale_color + ";font-size:.72rem;font-weight:800'>" + whale_badge.strip() + "</span>" if whale_badge else ""}
-  </td>
-  <td style="padding:.45rem .65rem">
-    <span style="color:{s_color};font-weight:700;font-size:.88rem">{s_icon} {r['sender_label']}</span><br>
-    <span style="color:#475569;font-size:.75rem">{r['sender'][:20]}…</span>
-  </td>
-  <td style="padding:.45rem .65rem;color:{whale_color};font-weight:700;font-size:.92rem;white-space:nowrap">⟶ {r['amount']}</td>
-  <td style="padding:.45rem .65rem">
-    <span style="color:{d_color};font-weight:700;font-size:.88rem">{d_icon} {r['receiver_label']}</span><br>
-    <span style="color:#475569;font-size:.75rem">{r['receiver'][:20]}…</span>
-  </td>
-  <td style="padding:.45rem .65rem;color:#64748B;font-size:.78rem">~{int(r.get('ledger_offset',0))*4}s</td>
-</tr>"""
-
-        th_s = "padding:.38rem .65rem;color:#5AD7FF;font-size:.79rem;font-weight:700;background:rgba(14,165,233,.15);border-bottom:1px solid rgba(90,215,255,.25);text-align:left;white-space:nowrap"
-        st.markdown(f"""
-<div style="border:1px solid rgba(90,215,255,.25);border-radius:14px;overflow:hidden;margin:.30rem 0 .80rem 0">
-  <div style="overflow-x:auto;max-height:400px">
-    <table style="width:100%;border-collapse:collapse">
-      <thead><tr>
-        <th style="{th_s}">TX Hash / Tipo</th>
-        <th style="{th_s}">Emisor</th>
-        <th style="{th_s}">Cantidad</th>
-        <th style="{th_s}">Receptor</th>
-        <th style="{th_s}">Hace</th>
-      </tr></thead>
-      <tbody>{tx_rows_html}</tbody>
-    </table>
-  </div>
+    with st.expander("🧪 Diagnóstico de señales A→B", expanded=False):
+        st.markdown("""
+<div class='rrp-note'>
+Diagnóstico auxiliar. No es otro gráfico A→B: solo explica qué señales internas alimentan las rutas.
 </div>""", unsafe_allow_html=True)
-
-        # ── Seguimiento de siguiente salto ────────────────────────────────────
-        st.markdown("#### 🔗 Seguir la ruta — ¿el receptor reenvió el dinero?")
-        st.markdown("""<div class='rrp-note'>
-Selecciona una transacción para intentar seguir a dónde fue el dinero a continuación.
-Si el receptor es un intermediario (corredor ODL, exchange, gateway), normalmente
-reenvía el dinero en pocos segundos. El rastreador busca en los 20 ledgers siguientes (~1 minuto).
-</div>""", unsafe_allow_html=True)
-
-        tx_options = {
-            f"{r['hash']} | {r['sender_label']} → {r['receiver_label']} ({r['amount']})": (r["receiver"], int(r["ledger_index"]))
-            for _, r in real_txs.head(20).iterrows()
-        }
-        selected_label = st.selectbox("Selecciona una transacción para rastrear:", list(tx_options.keys()), key="tx_trace_select")
-        if selected_label:
-            recv_addr, ledger_idx = tx_options[selected_label]
-            with st.spinner("Buscando siguiente salto en XRPL…"):
-                hop = trace_next_hop(recv_addr, ledger_idx)
-            if hop:
-                hop_color = "#3CFF9B" if hop["next_known"] else "#FFB84D"
-                hop_icon  = "✅" if hop["next_known"] else "❓"
-                st.markdown(f"""
-<div style="border:1px solid {hop_color};border-radius:14px;background:rgba(15,23,42,.95);
-            padding:.85rem 1.1rem;margin:.40rem 0 .80rem 0">
-  <div style="font-size:.85rem;color:#94A3B8;margin-bottom:.35rem">
-    🔗 Siguiente salto detectado — TX: <code style="color:#CBD5E1">{hop['hash']}</code>
-  </div>
-  <div style="font-size:1.05rem;font-weight:700;color:#FFFFFF">
-    {_label(recv_addr)}
-    <span style="color:#FFB84D"> → {hop['amount']} → </span>
-    <span style="color:{hop_color}">{hop_icon} {hop['next_receiver_label']}</span>
-  </div>
-  <div style="margin-top:.40rem;font-size:.86rem;color:#94A3B8">
-    Dirección destino: <code style="color:#CBD5E1">{hop['next_receiver']}</code>
-    {'<br><span style="color:#3CFF9B">✅ Wallet identificada en la base de datos del radar.</span>' if hop['next_known'] else '<br><span style="color:#94A3B8">❓ Wallet desconocida — no está en la base de datos del radar. Puede ser un cliente final, otra entidad no catalogada o una wallet de exchange sin etiquetar.</span>'}
-  </div>
-</div>""", unsafe_allow_html=True)
+        route_signals = [
+            ("🏦 Pagos / ODL activos",        "payment_flow_score",       "Pagos reales detectados en XRPL."),
+            ("🔗 Trustlines activas",          "trustline_score",          "Líneas de confianza activas o crecientes."),
+            ("🌊 DEX/AMM con liquidez",        "dex_score",                "Ofertas y AMM activos."),
+            ("🐋 Transfers grandes",           "large_transfer_score",     "Movimientos grandes compatibles con treasury/custody/market makers."),
+            ("🧩 Clusters de wallets",         "cluster_score",            "Wallets conectadas en grupo."),
+            ("🧠 Topología de red",            "topology_score",           "Concentración y hubs de flujo."),
+            ("🧬 Fingerprint institucional",   "fingerprint_score",        "Patrones de actividad institucional."),
+            ("🚨 Anomalía vs historia",        "anomaly_score",            "Actividad fuera de rango histórico."),
+            ("🛰️ Gateway público",             "public_gateway_score",     "Puntos de entrada/salida visibles."),
+            ("🏛️ Rutas institucionales",       "institutional_route_score","Señales de rutas bancarias o corporativas."),
+            ("📈 Prime / brokerage",           "prime_brokerage_score",    "Señal estilo prime broker."),
+            ("🔐 Custody / Metaco",            "custody_score",            "Señal de custodia/acumulación."),
+            ("🌐 Cross-network",              "cross_network_score",      "Actividad multired."),
+            ("⏱️ Régimen temporal",            "time_regime_score",        "Persistencia o aceleración temporal."),
+        ]
+        rows_diag = []
+        for label, col, desc in route_signals:
+            try:
+                val = float(row.get(col, 0) or 0)
+            except Exception:
+                val = 0.0
+            val_pct = val * 100 if val <= 1.0 else val
+            if val_pct >= 60:
+                estado = "🟢 Fuerte"
+            elif val_pct >= 40:
+                estado = "🟡 Moderada"
             else:
-                st.markdown(f"""
-<div style="border:1px solid rgba(255,184,77,.40);border-radius:14px;background:rgba(15,23,42,.95);
-            padding:.75rem 1rem;margin:.40rem 0 .80rem 0;color:#CBD5E1;font-size:.88rem">
-  🔍 No se encontró un reenvío inmediato desde <b>{_label(recv_addr)}</b> en los 20 ledgers siguientes.<br>
-  <span style="color:#94A3B8">Esto puede significar: (1) el receptor es el destinatario final y no reenvía,
-  (2) el reenvío ocurrió fuera de la ventana de búsqueda,
-  (3) el receptor está en otra red (cross-network) o usa canales off-ledger.</span>
-</div>""", unsafe_allow_html=True)
+                estado = "🔴 Débil"
+            rows_diag.append({"Señal": label, "Score": f"{val_pct:.1f}%", "Estado": estado, "Qué significa": desc})
+        styled_table(pd.DataFrame(rows_diag))
 
-    # ── Seguidor automático de wallets ───────────────────────────────────────
-    render_wallet_tracker(conn, real_txs)
-    render_wallet_identity_report(conn)
-    render_unknown_whales_db(conn)
-
-    st.markdown("---")
-    st.markdown("### 🧭 Inferencia por huellas — ruta probable A→B")
-    st.markdown("""<div class='rrp-note'>
-Cuando no hay transacción directa visible, el motor infiere la ruta probable cruzando
-las huellas públicas del ledger con el perfil de score de cada actor conocido.
-Esta sección es complementaria al rastreo real — no lo reemplaza.
-</div>""", unsafe_allow_html=True)
-
-    paths = load_live_route_paths(conn, df)
-    current = route_path_engine_row(row)
-
-    conf_pct = current["confidence"] * 100
-    conf_color = "#3CFF9B" if conf_pct >= 72 else "#FFB84D" if conf_pct >= 52 else "#FF5A67"
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Tipo de ruta", current["path_type"])
-    c2.metric("Confianza hoy", f"{conf_pct:.1f}%")
-    c3.metric("Punto público detectado", current["public_hop"])
-    c4.metric("Destino probable", current["destination"])
-
-    st.markdown(f"""
-<div style="padding:.80rem 1.10rem;border-radius:14px;background:rgba(15,23,42,.92);
-            border-left:4px solid {conf_color};margin:.50rem 0 .80rem 0;">
-<b style="color:{conf_color}">Ruta probable hoy:</b>
-<span style="color:#FFFFFF;font-size:1.05rem;font-weight:700"> {current['path_label']}</span><br>
-<span style="color:#94A3B8;font-size:.88rem">
-Evidencia pública detectada: <b style="color:#CBD5E1">{current['evidence'] or 'sin evidencia suficiente'}</b>
-</span><br>
-<span style="color:#CBD5E1;font-size:.90rem;margin-top:.35rem;display:block">{current.get('explanation','')}</span>
-</div>""", unsafe_allow_html=True)
-
-    # ── Diagnóstico completo de todas las rutas ─────────────────────────────
-    st.markdown("#### Diagnóstico completo de señales por ruta")
     st.markdown("""
 <div class='rrp-note'>
-Cada señal de abajo representa la fuerza de una huella pública específica que el radar usa
-para inferir si ese tipo de ruta está activo. <b>Verde ≥60%</b> = señal fuerte.
-<b>Naranja 40–60%</b> = señal moderada. <b>Rojo &lt;40%</b> = señal débil o ausente.
+✅ <b>Resumen v93:</b> esta pestaña ya no muestra gráficos duplicados, tablas cronológicas redundantes ni el Sankey clásico.
+Toda la lectura visual A→B se concentra en el gráfico premium superior y sus fichas completas.
 </div>""", unsafe_allow_html=True)
-
-    route_signals = [
-        ("🏦 Pagos / ODL activos",        "payment_flow_score",       "Hay pagos reales detectados en la cadena XRPL (remesas, ODL Bitso/SBI/Coins.ph)."),
-        ("🔗 Trustlines activas",          "trustline_score",          "Wallets estableciendo o ampliando líneas de confianza. Señal de integración."),
-        ("🌊 DEX/AMM con liquidez",        "dex_score",                "Ofertas y AMM activos. Las rutas ODL necesitan mercado líquido para convertir."),
-        ("🐋 Transfers grandes",           "large_transfer_score",     "Movimientos ≥1M RLUSD. Treasury, custody o market maker institucional."),
-        ("🧩 Clusters de wallets",         "cluster_score",            "Wallets conectadas en grupo. Patrón de broker/distribuidor/ODL."),
-        ("🧠 Topología de red",            "topology_score",           "Hubs y concentración de flujo. Alta topología = dinero canalizado."),
-        ("🧬 Fingerprint institucional",   "fingerprint_score",        "Patrón treasury/market-maker/corredor detectado por tamaño y repetición."),
-        ("🚨 Anomalía vs historia",        "anomaly_score",            "Actividad fuera de rango histórico. Puede ser un evento institucional."),
-        ("🛰️ Gateway público",             "public_gateway_score",     "Punto de entrada visible en XRPL donde rutas privadas suelen 'salir'."),
-        ("🏛️ Rutas institucionales",       "institutional_route_score","Señal de que una ruta bancaria está usando el rail de Ripple."),
-        ("📈 Prime / brokerage",           "prime_brokerage_score",    "Actividad estilo prime broker (Hidden Road, DTCC). Alta con transfers grandes."),
-        ("🔐 Custody / Metaco",            "custody_score",            "Señal de custodia: wallets que acumulan sin distribuir inmediatamente."),
-        ("🌐 Cross-network",              "cross_network_score",      "Actividad multi-red (bridges, Ethereum↔XRPL). Señal de integración avanzada."),
-        ("⏱️ Régimen temporal",            "time_regime_score",        "¿La actividad acumula o es un spike? Alta = aceleración sostenida en el tiempo."),
-    ]
-
-    rows_diag = []
-    for label, col, desc in route_signals:
-        val = float(row.get(col, 0))
-        val_pct = val * 100 if val <= 1.0 else val
-        if val_pct >= 60:
-            estado = "🟢 Fuerte"
-        elif val_pct >= 40:
-            estado = "🟡 Moderada"
-        else:
-            estado = "🔴 Débil"
-        rows_diag.append({
-            "Señal": label,
-            "Score": f"{val_pct:.1f}%",
-            "Estado": estado,
-            "Qué significa": desc,
-        })
-
-    styled_table(pd.DataFrame(rows_diag))
-
-    # ── Diagrama Sankey ─────────────────────────────────────────────────────
-    st.markdown("#### Diagrama de flujo — snapshot actualizado")
-    st.markdown("""
-<div class='rrp-note'>
-<b>Cómo leer el Sankey:</b> cada banda representa una ruta inferida.
-El <b>grosor</b> de la banda = confianza de la ruta. Las bandas van de
-Origen privado (izquierda) → Punto público XRPL (centro) → Destino (derecha).
-</div>""", unsafe_allow_html=True)
-    render_route_path_graph_and_fichas(paths, key_prefix="snapshot", conn=conn)
-
-    # ── Tabla de rutas probables ────────────────────────────────────────────
-    st.markdown("#### Últimas rutas probables detectadas")
-    st.markdown("""
-<div class='rrp-note'>
-Tabla cronológica de las rutas inferidas día a día. La columna <b>Confianza</b> va de 0 a 100%.
-<b>path_type</b> resume si la ruta es fuerte, probable, débil o ruido.
-<b>evidence</b> = huellas públicas que activaron esa inferencia.
-</div>""", unsafe_allow_html=True)
-    if not paths.empty:
-        view = paths.sort_values(["day", "confidence"], ascending=[False, False]).copy()
-        view["confidence"] = (view["confidence"].astype(float) * 100).round(1).astype(str) + "%"
-        view = view.rename(columns={
-            "day": "Fecha", "origin": "Origen", "public_hop": "Punto público",
-            "destination": "Destino", "confidence": "Confianza",
-            "path_type": "Tipo", "evidence": "Evidencia",
-        })
-        styled_table(view[["Fecha","Confianza","Tipo","Origen","Punto público","Destino","Evidencia"]].head(120))
-    else:
-        st.info("Todavía no hay rutas reconstruidas.")
 
 # =============================================================================
 # MAIN
