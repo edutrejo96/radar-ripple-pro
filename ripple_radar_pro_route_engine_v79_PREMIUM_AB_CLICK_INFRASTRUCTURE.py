@@ -171,8 +171,8 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v93_2026_05_12_ROUTE_AB_CLEAN_NO_DUP"
-BUILD_NOTE = "A-B con números vivos por ficha + Pump/Adopción explicado sin duplicar señales"
+BUILD_ID = "v94_2026_05_12_CACHE_FIRST_SHARED_MEMORY_AB_LIVE"
+BUILD_NOTE = "Cache-first obligatorio + memoria compartida + A-B limpio con números vivos"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
 import os as _os
@@ -10632,6 +10632,24 @@ def ensure_discovery_tables(conn: sqlite3.Connection) -> None:
             result_json TEXT NOT NULL,
             searched_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS search_cache_aliases (
+            alias_key       TEXT PRIMARY KEY,
+            canonical_query TEXT NOT NULL,
+            canonical_name  TEXT,
+            search_type     TEXT NOT NULL DEFAULT 'discovery',
+            created_at      TEXT NOT NULL,
+            hit_count       INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS api_search_audit (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            query_text      TEXT NOT NULL,
+            canonical_key   TEXT,
+            search_type     TEXT NOT NULL DEFAULT 'discovery',
+            decision        TEXT NOT NULL,
+            source          TEXT,
+            reason          TEXT,
+            created_at      TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS connection_proofs (
             proof_id      TEXT PRIMARY KEY,
             node_a        TEXT NOT NULL,
@@ -10758,6 +10776,11 @@ def ensure_discovery_tables(conn: sqlite3.Connection) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_connection_proofs_node_keys ON connection_proofs(node_a_key, node_b_key)")
     except Exception:
         pass
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_search_cache_aliases_canonical ON search_cache_aliases(canonical_query)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_api_search_audit_key_type ON api_search_audit(canonical_key, search_type)")
+    except Exception:
+        pass
     conn.commit()
 
 
@@ -10792,28 +10815,81 @@ def _cache_key_search(canonical_name: str, search_type: str) -> str:
     return f"{search_type}::{_norm_key(canonical)}"
 
 
+def _cache_alias_keys(name: str, search_type: str = "discovery") -> List[str]:
+    """Claves alternativas para que BlackRock, black rock, BLACKROCK INC, etc. reutilicen caché."""
+    raw = str(name or "").strip()
+    canonical = _canonical_entity_name(raw)
+    keys = []
+    for val in {raw, canonical, raw.replace("-", " "), raw.replace(".", " "), raw.replace(",", " ")}:
+        nk = _norm_key(val)
+        if nk:
+            keys.append(f"{search_type}::{nk}")
+    # Compacta nombres corporativos comunes para capturar variantes.
+    compact = re.sub(r"\b(inc|ltd|limited|llc|corp|corporation|group|holdings|plc|sa|ag|nv|bank)\b", "", _norm_key(raw))
+    compact = re.sub(r"\s+", " ", compact).strip()
+    if compact:
+        keys.append(f"{search_type}::{compact}")
+    return list(dict.fromkeys(keys))
+
+
+def _audit_search_decision(conn: sqlite3.Connection, query: str, search_type: str, decision: str, source: str = "", reason: str = "") -> None:
+    try:
+        conn.execute(
+            "INSERT INTO api_search_audit(query_text, canonical_key, search_type, decision, source, reason, created_at) VALUES(?,?,?,?,?,?,?)",
+            (str(query or "")[:240], _cache_key_search(str(query or ""), search_type), search_type, decision, source[:120], reason[:500], datetime.now(timezone.utc).isoformat())
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+
 def _get_search_cache(conn: sqlite3.Connection, name: str,
                       search_type: str = "discovery") -> Optional[Dict]:
-    """Devuelve resultado cacheado si existe y no ha expirado, o None."""
+    """Devuelve resultado cacheado si existe y no ha expirado. Primero exacto, luego alias normalizados."""
     try:
-        key = _cache_key_search(_canonical_entity_name(name), search_type)
         now = datetime.now(timezone.utc).isoformat()
-        row = conn.execute(
-            "SELECT result_json FROM institution_search_cache "
-            "WHERE query=? AND (expires_at IS NULL OR expires_at > ?)",
-            (key, now)
-        ).fetchone()
-        if row:
-            conn.execute(
-                "UPDATE institution_search_cache SET hit_count=hit_count+1 WHERE query=?",
-                (key,)
-            )
-            conn.commit()
-            try:
-                _record_cache_hit(conn)
-            except Exception:
-                pass
-            return json.loads(row[0])
+        candidate_keys = _cache_alias_keys(name, search_type)
+        key = candidate_keys[0] if candidate_keys else _cache_key_search(_canonical_entity_name(name), search_type)
+
+        # 1) Búsqueda exacta/normalizada directa.
+        for cand in candidate_keys:
+            row = conn.execute(
+                "SELECT result_json FROM institution_search_cache WHERE query=? AND (expires_at IS NULL OR expires_at > ?)",
+                (cand, now)
+            ).fetchone()
+            if row:
+                conn.execute("UPDATE institution_search_cache SET hit_count=hit_count+1 WHERE query=?", (cand,))
+                conn.commit()
+                try:
+                    _record_cache_hit(conn)
+                    _audit_search_decision(conn, name, search_type, "cache_hit", "institution_search_cache", f"key={cand}")
+                except Exception:
+                    pass
+                return json.loads(row[0])
+
+        # 2) Búsqueda por alias → canonical_query.
+        for cand in candidate_keys:
+            row_alias = conn.execute(
+                "SELECT canonical_query FROM search_cache_aliases WHERE alias_key=? AND search_type=?",
+                (cand, search_type)
+            ).fetchone()
+            if not row_alias:
+                continue
+            canonical_query = row_alias[0]
+            row = conn.execute(
+                "SELECT result_json FROM institution_search_cache WHERE query=? AND (expires_at IS NULL OR expires_at > ?)",
+                (canonical_query, now)
+            ).fetchone()
+            if row:
+                conn.execute("UPDATE search_cache_aliases SET hit_count=hit_count+1 WHERE alias_key=?", (cand,))
+                conn.execute("UPDATE institution_search_cache SET hit_count=hit_count+1 WHERE query=?", (canonical_query,))
+                conn.commit()
+                try:
+                    _record_cache_hit(conn)
+                    _audit_search_decision(conn, name, search_type, "cache_alias_hit", "search_cache_aliases", f"alias={cand} -> {canonical_query}")
+                except Exception:
+                    pass
+                return json.loads(row[0])
     except Exception:
         pass
     return None
@@ -10821,9 +10897,10 @@ def _get_search_cache(conn: sqlite3.Connection, name: str,
 
 def _set_search_cache(conn: sqlite3.Connection, name: str,
                       result: Dict, search_type: str = "discovery") -> None:
-    """Guarda resultado en caché compartida con TTL."""
+    """Guarda resultado en caché compartida con TTL y aliases normalizados."""
     try:
-        key = _cache_key_search(_canonical_entity_name(name), search_type)
+        canonical_name = _canonical_entity_name(name)
+        key = _cache_key_search(canonical_name, search_type)
         ttl = _CACHE_TTL.get(search_type, 7)
         now = datetime.now(timezone.utc)
         expires = (now + timedelta(days=ttl)).isoformat()
@@ -10834,9 +10911,83 @@ def _set_search_cache(conn: sqlite3.Connection, name: str,
                 (SELECT hit_count+1 FROM institution_search_cache WHERE query=?), 1
             ), ?)
         """, (key, json.dumps(result), now.isoformat(), expires, key, search_type))
+        # Guardar aliases: cada variante futura apunta al mismo resultado.
+        for alias in _cache_alias_keys(str(name or canonical_name), search_type):
+            conn.execute("""
+                INSERT OR REPLACE INTO search_cache_aliases(alias_key, canonical_query, canonical_name, search_type, created_at, hit_count)
+                VALUES(?,?,?,?,?, COALESCE((SELECT hit_count FROM search_cache_aliases WHERE alias_key=?), 0))
+            """, (alias, key, canonical_name, search_type, now.isoformat(), alias))
         conn.commit()
+        _audit_search_decision(conn, name, search_type, "cache_write", "institution_search_cache", f"key={key}")
     except Exception:
         pass
+
+
+def _local_knowledge_bundle(conn: sqlite3.Connection, name: str) -> Dict[str, Any]:
+    """Busca si ya hay datos internos para una entidad antes de gastar API."""
+    out = {"proofs": 0, "dynamic_routes": 0, "route_paths": 0, "examples": []}
+    try:
+        nk = _norm_key(_canonical_entity_name(name))
+        like = f"%{nk.replace(' ', '%')}%"
+        # Pruebas fijas.
+        rows = conn.execute("""
+            SELECT node_a, node_b, confidence, proof_type FROM connection_proofs
+            WHERE lower(node_a) LIKE lower(?) OR lower(node_b) LIKE lower(?) OR node_a_key LIKE ? OR node_b_key LIKE ?
+            ORDER BY confidence DESC LIMIT 5
+        """, (f"%{name}%", f"%{name}%", f"%{nk}%", f"%{nk}%")).fetchall()
+        out["proofs"] = len(rows)
+        for a,b,c,t in rows:
+            out["examples"].append(f"Prueba: {a} ↔ {b} · {float(c or 0)*100:.0f}% · {t}")
+        # Rutas dinámicas.
+        rows = conn.execute("""
+            SELECT src, dst, confidence, label FROM dynamic_routes
+            WHERE lower(src) LIKE lower(?) OR lower(dst) LIKE lower(?)
+            ORDER BY confidence DESC LIMIT 5
+        """, (f"%{name}%", f"%{name}%")).fetchall()
+        out["dynamic_routes"] = len(rows)
+        for a,b,c,l in rows:
+            out["examples"].append(f"Ruta dinámica: {a} → {b} · {float(c or 0)*100:.0f}% · {l}")
+        # Rutas A-B históricas: no conocemos esquema siempre, así que intentar columnas comunes.
+        try:
+            rows = conn.execute("SELECT * FROM route_paths LIMIT 1").fetchall()
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(route_paths)").fetchall()]
+            if cols:
+                text_cols = [c for c in cols if c.lower() in ("src","dst","source","target","origin","destination","node_a","node_b","route","label","name")]
+                if text_cols:
+                    where = " OR ".join([f"lower({c}) LIKE lower(?)" for c in text_cols])
+                    rr = conn.execute(f"SELECT COUNT(*) FROM route_paths WHERE {where}", tuple([f"%{name}%"]*len(text_cols))).fetchone()
+                    out["route_paths"] = int(rr[0] or 0) if rr else 0
+        except Exception:
+            pass
+    except Exception:
+        pass
+    out["total"] = int(out.get("proofs",0)) + int(out.get("dynamic_routes",0)) + int(out.get("route_paths",0))
+    out["examples"] = out["examples"][:8]
+    return out
+
+
+def _render_cache_first_status(conn: sqlite3.Connection, query: str, search_type: str = "discovery") -> Dict[str, Any]:
+    """Panel visible: indica si la consulta gastará API o saldrá gratis de memoria."""
+    query = str(query or "").strip()
+    status = {"cache": False, "local_total": 0, "can_skip_api": False}
+    if not query:
+        return status
+    cached = _get_search_cache(conn, query, search_type)
+    local = _local_knowledge_bundle(conn, query)
+    status["cache"] = bool(cached)
+    status["local_total"] = int(local.get("total", 0))
+    status["can_skip_api"] = bool(cached) or status["local_total"] > 0
+    if cached:
+        st.success("✅ Memoria compartida: esta búsqueda ya existe en caché · 0 gasto API")
+    elif status["local_total"] > 0:
+        st.info(f"🧠 Memoria interna: ya hay {status['local_total']} dato(s) relacionados. Revisa fichas/rutas antes de gastar API.")
+        if local.get("examples"):
+            with st.expander("Ver datos internos encontrados antes de buscar online", expanded=False):
+                for ex in local["examples"]:
+                    st.write("• " + ex)
+    else:
+        st.warning("⚠️ No hay memoria útil para esta entidad. Si lanzas búsqueda online puede consumir API.")
+    return status
 
 
 def _log_map_update(conn: sqlite3.Connection, update_type: str,
@@ -15337,8 +15488,8 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
     _heartbeat(conn, "idle")
 
     # ── Aviso API key + presupuesto ──────────────────────────────────────────
-    render_real_money_warning(conn, key_suffix="discovery")
     render_budget_bar(conn)
+    st.info("🧠 Modo cache-first activo: antes de gastar API, el radar revisa caché compartida, aliases normalizados, pruebas fijas y rutas ya guardadas.")
 
     _has_api_key = bool(_get_api_key())
     if not _has_api_key:
@@ -15360,6 +15511,14 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
     with col_btn:
         do_search = st.button("🔍 Buscar", use_container_width=True, key="disc_search_btn")
 
+    force_new_search = st.checkbox(
+        "Forzar búsqueda online aunque exista memoria/caché",
+        value=False,
+        key="disc_force_new_search",
+        help="Déjalo desactivado para no gastar API si la entidad ya fue investigada."
+    )
+    _preflight_status = _render_cache_first_status(conn, query.strip(), "discovery") if query and query.strip() else {"cache": False, "local_total": 0, "can_skip_api": False}
+
     # Guardar la query que queremos buscar en session_state para que sobreviva el rerun
     # Si no hay API key, solo permitir si hay resultado cacheado
     if do_search and query and query.strip() and not _has_api_key:
@@ -15371,6 +15530,21 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
             st.error("🔑 Sin API key — esta institución no está en caché. Configura `ANTHROPIC_API_KEY` para buscarla.")
     if do_search and query and query.strip() and _has_api_key:
         _raw_q = query.strip()
+        # Cache-first obligatorio: no meter a la fila AI si ya tenemos respuesta reutilizable.
+        if not force_new_search:
+            _cached_now = _get_search_cache(conn, _raw_q, "discovery")
+            if _cached_now is not None:
+                _cached_now = _finalize_discovery_result(_cached_now, _raw_q, _classify_entity(_raw_q), None)
+                st.session_state["disc_result"] = _cached_now
+                st.session_state["disc_from_cache"] = True
+                st.session_state["disc_query"] = _raw_q
+                _audit_search_decision(conn, _raw_q, "discovery", "served_from_cache_before_queue", "ui_preflight", "0 API cost")
+                st.rerun()
+            _local_now = _local_knowledge_bundle(conn, _raw_q)
+            if int(_local_now.get("total", 0)) > 0:
+                _audit_search_decision(conn, _raw_q, "discovery", "blocked_by_local_memory", "ui_preflight", "existing proofs/routes found")
+                st.warning("🧠 Ya existen datos internos para esta entidad. Revisa Rutas A→B / Radar antes de gastar API. Activa 'Forzar búsqueda online' si de verdad quieres ampliar.")
+                st.stop()
         _queue_pos = _public_enqueue_ai(conn, _raw_q)
         if _queue_pos > 1 or not _public_can_run_ai_now(conn):
             st.session_state["disc_pending_query"] = _raw_q
