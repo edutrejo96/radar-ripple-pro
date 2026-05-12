@@ -173,8 +173,8 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v132_2026_05_12_API_BEHAVIOR_ROLLBACK_SAFE_CASCADE"
-BUILD_NOTE = "Rollback del comportamiento API anterior + cascada protegida ante 529/5xx sin contaminar resultados"
+BUILD_ID = "v134_2026_05_12_ADMIN_UNLIMITED_SEARCH_FIX"
+BUILD_NOTE = "Admin sin límites de sesión/cupo/cola + cascada y líneas de mapa protegidas"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
 import os as _os
@@ -11784,8 +11784,25 @@ _CACHE_TTL: Dict[str, int] = {
     "batch_verify": 60,  # días — verificación en lote
     "negative":     14,  # días — reservado para futuros negativos explícitos
 }
-_MAX_AI_CALLS_SESSION = 20  # máximo de llamadas AI nuevas por sesión de usuario
+_MAX_AI_CALLS_SESSION = 20  # máximo de llamadas AI nuevas por sesión de usuario normal; admin = ilimitado
 _MAX_BATCH_PEERS = 5        # no verificar 20 rutas caras a la vez
+
+
+def _is_admin_unlimited_ai(conn: Optional[sqlite3.Connection] = None) -> bool:
+    """True si esta sesión es admin y debe saltarse límites de cupo, cola y búsquedas por sesión.
+
+    Mantiene separado el presupuesto global API/CostGuard: el admin no consume cupo público,
+    pero el presupuesto global sigue protegiendo el gasto total salvo que se cambie esa política.
+    """
+    try:
+        if st.session_state.get("admin_authenticated") and _is_admin_name(st.session_state.get("community_nickname", "")):
+            return True
+        if conn is not None and _is_admin_session(conn):
+            return True
+    except Exception:
+        pass
+    return False
+
 _PRIORITY_PEERS = [
     "RLUSD", "XRPL", "Ripple Payments", "Ripple Prime", "Hidden Road",
     "Custody/Metaco", "Metaco", "Securitize", "Treasury", "DEX/AMM",
@@ -12286,14 +12303,22 @@ def _get_map_revision_token(conn: sqlite3.Connection) -> str:
 
 
 def _session_ai_quota() -> Tuple[int, int]:
-    """Devuelve (llamadas_usadas, máximo) para la sesión actual."""
-    used = st.session_state.get("ai_calls_session", 0)
+    """Devuelve (llamadas_usadas, máximo) para la sesión actual.
+
+    Los admins no tienen límite de búsquedas por sesión. Se devuelve un máximo simbólico
+    muy alto solo para evitar dividir/romper la UI antigua.
+    """
+    used = int(st.session_state.get("ai_calls_session", 0) or 0)
+    if _is_admin_unlimited_ai(None):
+        return used, 999_999
     return used, _MAX_AI_CALLS_SESSION
 
 
 def _increment_ai_calls() -> int:
-    """Incrementa el contador de llamadas AI de la sesión. Devuelve nuevo total."""
-    n = st.session_state.get("ai_calls_session", 0) + 1
+    """Incrementa el contador de llamadas AI de la sesión. Admin no consume quota de sesión."""
+    if _is_admin_unlimited_ai(None):
+        return int(st.session_state.get("ai_calls_session", 0) or 0)
+    n = int(st.session_state.get("ai_calls_session", 0) or 0) + 1
     st.session_state["ai_calls_session"] = n
     return n
 
@@ -13172,6 +13197,9 @@ def render_queue_status(conn: sqlite3.Connection) -> None:
     """Muestra usuarios activos y número aproximado en la fila AI."""
     try:
         total, ai_now = _active_users(conn)
+        if _is_admin_unlimited_ai(conn):
+            st.caption(f"👑 Admin activo: búsquedas ilimitadas de sesión · usuarios activos: {total} · cola pública ignorada")
+            return
         searching = _is_current_session_searching(conn)
         if searching:
             pos = max(1, _queue_position(conn) + 1)
@@ -13205,7 +13233,12 @@ def _public_queue_cleanup(conn: sqlite3.Connection) -> None:
 
 
 def _public_queue_position(conn: sqlite3.Connection, session_id: Optional[str] = None) -> int:
-    """Posición 1-based del usuario en la cola AI. 0 si no está en cola."""
+    """Posición 1-based del usuario en la cola AI. 0 si no está en cola.
+
+    Admin no entra en cola pública.
+    """
+    if _is_admin_unlimited_ai(conn):
+        return 0
     try:
         _public_queue_cleanup(conn)
         sid = session_id or _session_id()
@@ -13227,7 +13260,12 @@ def _public_queue_total(conn: sqlite3.Connection) -> int:
 
 
 def _public_enqueue_ai(conn: sqlite3.Connection, query: str) -> int:
-    """Mete la sesión actual en cola AI y devuelve su posición."""
+    """Mete la sesión actual en cola AI y devuelve su posición.
+
+    Admin ejecuta directo y no ocupa cola pública.
+    """
+    if _is_admin_unlimited_ai(conn):
+        return 0
     try:
         sid = _session_id()
         nick = _public_nickname_value() or "Visitante"
@@ -13244,8 +13282,13 @@ def _public_enqueue_ai(conn: sqlite3.Connection, query: str) -> int:
 
 
 def _public_can_run_ai_now(conn: sqlite3.Connection) -> bool:
-    """Solo deja ejecutar a quien está primero, no hay otra búsqueda AI y tiene cupo investigador."""
+    """Solo deja ejecutar a quien está primero, no hay otra búsqueda AI y tiene cupo investigador.
+
+    Admin bypass: sin límite de cupo público, sin cola y sin bloqueo por otra sesión.
+    """
     try:
+        if _is_admin_unlimited_ai(conn):
+            return True
         if not _can_current_user_investigate(conn):
             return False
         _, ai_now = _active_users(conn)
@@ -13271,7 +13314,10 @@ def render_global_public_banner(conn: sqlite3.Connection) -> None:
     q_total = _public_queue_total(conn)
     q_pos = _public_queue_position(conn)
     nick = _public_nickname_value() or "sin usuario"
-    q_text = f"{html.escape('Tu puesto en fila:')} #{q_pos}" if q_pos else (f"Fila AI: {q_total} esperando" if q_total else "Fila AI libre")
+    if _is_admin_unlimited_ai(conn):
+        q_text = "👑 Admin: sin cola ni límite de búsquedas"
+    else:
+        q_text = f"{html.escape('Tu puesto en fila:')} #{q_pos}" if q_pos else (f"Fila AI: {q_total} esperando" if q_total else "Fila AI libre")
     st.markdown(f"""
 <div style='margin:.45rem 0 1rem 0;padding:16px 18px;border-radius:22px;
             background:radial-gradient(circle at 10% 0%,rgba(34,211,238,.22),transparent 32%),
@@ -14492,7 +14538,7 @@ def _active_investigator_count(conn: sqlite3.Connection) -> int:
     try:
         cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
         rows = conn.execute(
-            "SELECT COUNT(*) FROM community_users WHERE last_seen > ? AND COALESCE(role,'user') IN ('user','admin')",
+            "SELECT COUNT(*) FROM community_users WHERE last_seen > ? AND COALESCE(role,'user') = 'user'",
             (cutoff,),
         ).fetchone()
         return int(rows[0] if rows else 0)
@@ -19004,8 +19050,11 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
 
     # ── Quota de llamadas AI por sesión ─────────────────────────────────────
     _ai_used, _ai_max = _session_ai_quota()
+    _admin_unlimited = _is_admin_unlimited_ai(conn)
     _ai_remaining = _ai_max - _ai_used
-    if _ai_remaining <= 3:
+    if _admin_unlimited:
+        st.caption("👑 Admin activo: sin límite de búsquedas nuevas por sesión · caché compartida ilimitada")
+    elif _ai_remaining <= 3:
         st.warning(f"⚠️ Quedan **{_ai_remaining}** búsquedas nuevas en esta sesión. Los resultados cacheados no consumen quota.")
     elif _ai_used > 0:
         st.caption(f"Búsquedas nuevas usadas esta sesión: {_ai_used}/{_ai_max} · Resultados cacheados: ilimitados")
@@ -19052,7 +19101,7 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
                 st.warning(f"⏳ Tu búsqueda está en cola AI: puesto #{_queue_pos}. Puedes cambiar a Comunidad y usar el chat mientras esperas.")
                 return
             # ── Verificar quota antes de llamar a la API ──────────────────────
-            if _ai_remaining <= 0:
+            if (not _admin_unlimited) and _ai_remaining <= 0:
                 st.error(f"❌ Límite de {_ai_max} búsquedas nuevas por sesión alcanzado. Recarga la página para reiniciar tu sesión, o busca una institución ya investigada.")
                 st.session_state["disc_pending_query"] = ""
                 _public_finish_ai(conn)
