@@ -172,7 +172,7 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v97_2026_05_12_UNLIMITED_PINS_CHAT_NOTIFICATIONS"
+BUILD_ID = "v98_2026_05_12_SECTION_ISOLATION_NO_MIXED_TABS"
 BUILD_NOTE = "Cache-first obligatorio + memoria compartida + A-B limpio con números vivos"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
@@ -13632,8 +13632,12 @@ def render_general_chat(conn: sqlite3.Connection) -> None:
 
     st.markdown("### 💬 " + _t("Chat general"))
     st.caption(f"Chat público en vivo · idioma activo: {_language_name(target_lang)} · traducción automática cacheada si hay API disponible.")
-    if st_autorefresh is not None:
-        st_autorefresh(interval=3000, limit=None, key="community_chat_live_autorefresh")
+    # v98: desactivado el autorefresh agresivo del chat.
+    # Causaba reruns continuos y podía mezclar Comunidad con Rutas A→B.
+    # El usuario puede actualizar manualmente el chat sin romper el layout.
+    if st.button("🔄 Actualizar chat", width="stretch", key="community_manual_chat_refresh_v98"):
+        st.session_state["rrp_chat_seen_max_id"] = _chat_latest_id(conn)
+        st.rerun()
 
     if not nickname:
         st.info("Crea primero tu usuario arriba para poder escribir. Puedes leer el chat sin iniciar usuario.")
@@ -17134,8 +17138,10 @@ def main() -> None:
     render_global_public_banner(conn)
     render_global_update_notice(conn)
     inject_music_player()
-    if ENABLE_BACKGROUND_AUTOREFRESH and st_autorefresh is not None:
-        st_autorefresh(interval=15000, limit=None, key="public_map_soft_live_refresh")
+    # v98: no autorefresh global. El refresco global mezclaba componentes vivos
+    # entre Rutas A→B y Comunidad en algunos navegadores/iframes de Streamlit Cloud.
+    # Los mapas se actualizan con botones explícitos (Autoscan/Actualizar) o al cambiar de pestaña.
+    # Esto evita bucles de carga y que una pestaña conserve restos visuales de otra.
 
     # Cargar wallets descubiertas con added_to_map=1 en KNOWN_XRPL_WALLETS
     try:
@@ -17165,6 +17171,20 @@ def main() -> None:
             index=0,
         )
         section = _section_from_label(_selected_section_label)
+        # v98: aislamiento duro entre pestañas.
+        # Si venimos de Rutas A→B y entramos en Comunidad, o viceversa, limpiamos
+        # estados efímeros que pueden mantener componentes HTML/Plotly vivos.
+        _prev_section = st.session_state.get("rrp_active_section")
+        if _prev_section and _prev_section != section:
+            for _k in list(st.session_state.keys()):
+                if str(_k).startswith((
+                    "clean_v93", "premium", "rrp_route", "route_paths_force",
+                    "tx_trace_", "community_chat_live_autorefresh",
+                    "public_map_soft_live_refresh",
+                )):
+                    st.session_state.pop(_k, None)
+            st.session_state["rrp_section_switched_at"] = _time.time()
+        st.session_state["rrp_active_section"] = section
         st.divider()
         if st.button(_t("Actualizar XRPL"), use_container_width=True):
             ok, msg = refresh_history(conn, pages=18)
@@ -17304,12 +17324,15 @@ def main() -> None:
             render_node_info_panel(focused, row, conn, _all_r, _all_n)
 
     elif section == "Comunidad":
-        render_community(conn)
+        # v98: Comunidad aislada. No se renderizan gráficos ni componentes A→B aquí.
+        with st.container():
+            render_community(conn)
 
     elif section == "Route Paths A→B":
-        render_route_path_engine(conn, df, row)
-
-        render_color_legend()
+        # v98: Rutas A→B aislado. Solo se monta esta vista dentro de la pestaña A→B.
+        with st.container():
+            render_route_path_engine(conn, df, row)
+            render_color_legend()
 
     elif section == "Descubrimientos":
         render_discovery_engine(conn)
