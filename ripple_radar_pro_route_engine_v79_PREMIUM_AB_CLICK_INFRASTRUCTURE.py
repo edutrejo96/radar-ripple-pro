@@ -173,8 +173,8 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v110_2026_05_12_CORE_XRPL_MAP_LOGIC_FIX"
-BUILD_NOTE = "Sincronización total de mapas + Radar FM persistente + cruce estricto de pruebas"
+BUILD_ID = "v111_2026_05_12_NODE_CLICK_PROOFS_WEAK_EVIDENCE_FIX"
+BUILD_NOTE = "Click de nodos real + panel de pruebas/rutas + evidencias débiles visibles en confirmadas"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
 import os as _os
@@ -3092,6 +3092,9 @@ def route_signal(row: pd.Series, route: Tuple[str, str, str, str, str]) -> float
         # Las conexiones internas Ripple↔XRPL no dependen de que hoy haya una señal alta en métricas.
         # Son aristas de arquitectura del mapa y deben verse claramente siempre.
         return clamp(max(s, 0.78))
+    if kind == "weak_evidence":
+        # Una prueba débil no debe desaparecer del mapa confirmado: se ve, pero con línea discontinua/naranja.
+        return clamp(max(s, 0.42))
     if kind == "future":
         s *= 0.40
     return clamp(s)
@@ -3106,6 +3109,8 @@ def route_color(row: pd.Series, route: Tuple[str, str, str, str, str]) -> str:
         return "#FF5A67"
     if kind == "verified":
         return "#22C55E"    # verde confirmado — verificado por investigación
+    if kind == "weak_evidence":
+        return "#F59E0B"    # naranja — hay evidencia guardada, pero no suficiente para confirmación fuerte
     if kind == "core_infra":
         return "#14F195"    # verde XRPL core — infraestructura interna Ripple
     if kind == "real":
@@ -3135,6 +3140,8 @@ def route_dash(route: Tuple[str, str, str, str, str]) -> str:
     kind = route[2]
     if kind in {"real", "public", "verified", "core_infra"}:
         return "solid"      # confirmado/on-chain/público/core Ripple-XRPL
+    if kind == "weak_evidence":
+        return "dash"       # evidencia débil: visible en confirmadas, pero sin venderla como confirmación fuerte
     if kind == "obligatory":
         return "dash"       # deducción técnica irrefutable pero no TX directa verificada
     if kind in {"watch", "model"}:
@@ -3326,6 +3333,7 @@ _ROUTE_KIND_RANK: Dict[str, int] = {
     "real": 0,
     "public": 1,
     "verified": 1,
+    "weak_evidence": 2,
     "odl": 1,
     "obligatory": 1,
     "private": 2,
@@ -3342,6 +3350,7 @@ _ROUTE_KIND_LABEL: Dict[str, Tuple[str, str]] = {
     "real": ("✅ directa on-chain", "#3CFF9B"),
     "public": ("🌐 pública", "#00CFFF"),
     "verified": ("✅ verificada", "#3CFF9B"),
+    "weak_evidence": ("🟠 evidencia débil", "#F59E0B"),
     "odl": ("💸 ODL/RippleNet", "#FB923C"),
     "obligatory": ("⚡ implicación técnica", "#FF4D6D"),
     "private": ("🔒 documental/privada", "#F59E0B"),
@@ -3733,6 +3742,7 @@ def render_node_info_panel(
         "partner":     ("🤝 Partner",             "#A78BFA"),   # violeta claro
         "odl":         ("💸 Corredor ODL",        "#FB923C"),   # naranja — corredor activo
         "public_wallet":("🔑 Wallet pública",     "#34D399"),   # esmeralda
+        "weak_evidence":("🟠 Evidencia débil",    "#F59E0B"),   # evidencia guardada pero aún no fuerte
         "core_infra":("🧬 Core XRPL",             "#14F195"),   # infraestructura interna Ripple-XRPL
         "deductive_watch":("🧭 Deducción vigilada", "#B673FF"),   # morado — cadena indirecta explícita
         "future_watch":("🔮 Watch futuro",          "#8CA0B8"),   # gris — futura verificable
@@ -3989,6 +3999,53 @@ def render_node_info_panel(
         except Exception:
             proof_rows = []
 
+        _proof_pair_keys_seen = set()
+        for _na0, _nb0, *_rest0 in proof_rows:
+            try:
+                _proof_pair_keys_seen.add(_canonical_pair_key(_na0, _nb0))
+            except Exception:
+                pass
+
+        # v111: mostrar también evidencias/URLs de dynamic_routes aunque todavía no exista connection_proofs.
+        # Antes el usuario veía una línea en el mapa, pero no encontraba "prueba 1, prueba 2..." en la ficha.
+        dynamic_only_rows = []
+        try:
+            for _peer in sorted(all_peers):
+                _pk = _canonical_pair_key(focus_node, _peer)
+                if _pk in _proof_pair_keys_seen:
+                    continue
+                _meta = (_dynamic_route_evidence.get(f"{focus_node}|{_peer}")
+                         or _dynamic_route_evidence.get(f"{_peer}|{focus_node}")
+                         or _dynamic_route_evidence.get(_pk)
+                         or {})
+                _urls = _meta.get("urls") or []
+                _ev = str(_meta.get("evidence", "") or "").strip()
+                _kind = str(_meta.get("kind", "") or "")
+                _conf = float(_meta.get("confidence", 0.0) or 0.0)
+                if _ev or _urls or _conf > 0:
+                    dynamic_only_rows.append((_peer, _kind, _conf, _ev, _urls))
+        except Exception:
+            dynamic_only_rows = []
+
+        if dynamic_only_rows:
+            st.markdown("<div style='color:#F59E0B;font-weight:800;margin-top:8px'>📎 Pruebas/fuentes de rutas guardadas todavía no verificadas en connection_proofs</div>", unsafe_allow_html=True)
+            for _peer, _kind, _conf, _ev, _urls in dynamic_only_rows:
+                _links = " ".join(
+                    f'<a href="{html.escape(str(u))}" target="_blank" style="color:#5AD7FF;font-size:0.72rem;text-decoration:none;border:1px solid #5AD7FF55;border-radius:5px;padding:2px 7px;margin-right:4px">🧾 prueba {i+1}</a>'
+                    for i, u in enumerate(_urls[:8])
+                )
+                _ev_html = html.escape(_ev[:420]) if _ev else "Sin resumen de evidencia; revisar fuentes."
+                st.markdown(f"""
+<div style='background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.28);border-radius:10px;padding:9px 12px;margin:6px 0;'>
+  <div style='display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap'>
+    <b style='color:#E2E8F0'>{html.escape(focus_node)} ↔ {html.escape(str(_peer))}</b>
+    <span style='color:#F59E0B;font-size:.74rem'>{html.escape(_kind or "ruta guardada")} · Conf: {_conf*100:.0f}%</span>
+  </div>
+  <div style='color:#CBD5E1;font-size:.78rem;margin-top:4px;line-height:1.42'>{_ev_html}</div>
+  <div style='margin-top:6px'>{_links or "<span style='color:#64748B;font-size:.72rem'>Sin URLs asociadas</span>"}</div>
+</div>
+""", unsafe_allow_html=True)
+
         if proof_rows:
             for na, nb, pdata_str, is_onchain, pconf, val_at in proof_rows:
                 peer = nb if _canonical_entity_key(na) == _canonical_entity_key(focus_node) else na
@@ -4138,12 +4195,12 @@ def render_node_info_panel(
                             rprog.progress(1.0)
                         _time.sleep(0.25)
                         st.rerun()
-        else:
+        if (not proof_rows) and (not dynamic_only_rows):
             st.markdown(
                 "<div style='color:#475569;font-size:0.82rem;padding:10px;background:rgba(15,23,42,0.5);"
                 "border-radius:8px;border:1px solid rgba(255,255,255,0.06);'>"
                 "⚡ Pulsa <b>Verificar conexiones en XRPL</b> para buscar evidencia real on-chain "
-                "(transacciones, trust lines, actividad ODL, pools AMM).</div>",
+                "(transacciones, trust lines, actividad ODL, pools AMM) o evidencia documental pública.</div>",
                 unsafe_allow_html=True,
             )
 
@@ -4158,7 +4215,7 @@ def make_map(row: pd.Series,
     route_filter:
       "all"          — todas las rutas (por defecto)
       "confirmed"    — solo rutas confirmadas + obligatorias
-                       (kinds: real, public, private, obligatory, odl, partner, public_wallet)
+                       (kinds: real, public, private, obligatory, odl, partner, public_wallet, core_infra, weak_evidence)
       "surveillance" — solo rutas de vigilancia/inferencia
                        (kinds: watch, discovered, model, future)
     """
@@ -4269,7 +4326,7 @@ def make_map(row: pd.Series,
     # Filtrar rutas según el modo del mapa
     _CONFIRMED_KINDS  = {
         "real", "public", "private", "verified", "obligatory", "odl", "partner",
-        "public_wallet", "official", "institutional", "government_payment_rail", "core_infra"
+        "public_wallet", "official", "institutional", "government_payment_rail", "core_infra", "weak_evidence"
     }
     _SURVEILLANCE_KINDS = {
         "watch", "discovered", "model", "future", "future_watch",
@@ -4283,36 +4340,21 @@ def make_map(row: pd.Series,
     # Normalizar focus_node para comparaciones seguras
     focus_node = str(focus_node).strip() if focus_node else None
 
-    # Pre-calcular camino completo desde el foco hasta infraestructura Ripple/XRPL.
-    # Antes se mostraba todo el subgrafo alcanzable; ahora se prioriza la cadena real:
-    # nodo clickado → intermediarios → Ripple Payments / XRPL / RLUSD.
+    # v111: modo foco REAL. Al pinchar un nodo, el mapa debe mostrar únicamente
+    # las rutas directas donde ese nodo participa, no solo el camino calculado hacia XRPL.
+    # La ruta completa hacia Ripple/XRPL se mantiene en la ficha inferior como explicación.
     _focus_connected: set = set()
     _focus_route_edges: set = set()
     if focus_node:
-        try:
-            _focus_paths = _find_ripple_paths(focus_node, _all_routes, _all_nodes)
-        except Exception:
-            _focus_paths = []
-        if _focus_paths:
-            _focus_connected = _nodes_from_ripple_paths(_focus_paths)
-            _focus_route_edges = _edges_from_ripple_paths(_focus_paths)
-            _focus_connected.add(focus_node)
-        else:
-            # Fallback: si no hay camino a Ripple/XRPL, mostrar relaciones inmediatas
-            # para que el click nunca deje al usuario sin contexto.
-            _out_adj: dict = {}
-            _in_adj:  dict = {}
-            for _r in _all_routes:
-                _rs, _rd = str(_r[0]).strip(), str(_r[1]).strip()
-                _out_adj.setdefault(_rs, set()).add(_rd)
-                _in_adj.setdefault(_rd, set()).add(_rs)
-            _focus_connected = {focus_node}
-            for _nb in _out_adj.get(focus_node, set()):
-                _focus_connected.add(_nb)
-                _focus_route_edges.add((focus_node, _nb))
-            for _src in _in_adj.get(focus_node, set()):
-                _focus_connected.add(_src)
-                _focus_route_edges.add((_src, focus_node))
+        _focus_connected = {focus_node}
+        for _r in _all_routes:
+            _rs, _rd = str(_r[0]).strip(), str(_r[1]).strip()
+            if _rs == focus_node:
+                _focus_connected.add(_rd)
+                _focus_route_edges.add((_rs, _rd))
+            if _rd == focus_node:
+                _focus_connected.add(_rs)
+                _focus_route_edges.add((_rs, _rd))
 
     for route in _all_routes:
         src_n, dst_n = route[0], route[1]
@@ -16373,6 +16415,51 @@ def load_dynamic_map_elements(conn: sqlite3.Connection) -> Tuple[Dict, List, Lis
                 continue
             if csrc in all_nodes and cdst in all_nodes:
                 dyn_routes.append((csrc, cdst, kind, signal, label or f"{csrc} -> {cdst}"))
+
+        # v111: si existe una prueba guardada A↔B en connection_proofs, debe existir una línea
+        # en el mapa confirmado aunque la ruta original fuese watch/deductive o no existiese en ROUTES.
+        # La línea queda como weak_evidence si la evidencia es baja, o verified si es fuerte.
+        try:
+            existing_confirmed_pairs = set()
+            confirmed_like = {
+                "real", "public", "private", "verified", "obligatory", "odl", "partner",
+                "public_wallet", "official", "institutional", "government_payment_rail", "core_infra", "weak_evidence"
+            }
+            for _rs, _rd, _rk, *_rest in list(ROUTES) + list(dyn_routes):
+                if str(_rk) in confirmed_like:
+                    existing_confirmed_pairs.add(_canonical_pair_key(_rs, _rd))
+
+            proof_rows = conn.execute(
+                "SELECT node_a, node_b, proof_data, confidence, onchain FROM connection_proofs"
+            ).fetchall()
+            for _pa, _pb, _pjson, _raw_conf, _onchain in proof_rows:
+                cpa = _canonical_display_node(_pa)
+                cpb = _canonical_display_node(_pb)
+                if not cpa or not cpb or cpa == cpb:
+                    continue
+                if cpa not in all_nodes or cpb not in all_nodes:
+                    continue
+                pk = _canonical_pair_key(cpa, cpb)
+                if pk in existing_confirmed_pairs:
+                    continue
+                try:
+                    pj = json.loads(_pjson or "{}")
+                    clean = _dedupe_and_filter_proofs(cpa, cpb, pj.get("proofs") or [], max_items=5)
+                    score = _combine_evidence_score(clean)
+                except Exception:
+                    score = 0.0
+                try:
+                    score = max(float(score or 0.0), float(_raw_conf or 0.0))
+                except Exception:
+                    pass
+                if score <= 0 and not _onchain:
+                    continue
+                kind2 = "verified" if (_onchain or score >= 0.55) else "weak_evidence"
+                label2 = f"{cpa} ↔ {cpb} · prueba guardada {score*100:.0f}%"
+                dyn_routes.append((cpa, cpb, kind2, "public_xrpl_score", label2))
+                existing_confirmed_pairs.add(pk)
+        except Exception:
+            pass
     except Exception:
         pass
     return dyn_nodes, dyn_routes, new_zone_boxes
@@ -18783,7 +18870,7 @@ def main() -> None:
         if focused:
             col_info, col_reset = st.columns([6, 1])
             with col_info:
-                st.markdown(f"<div class='rrp-note'>🔍 Mostrando rutas de <b>{focused}</b> — el resto están atenuadas.</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='rrp-note'>🔍 Mostrando solo las rutas conectadas directamente a <b>{focused}</b>.</div>", unsafe_allow_html=True)
             with col_reset:
                 if st.button("✕ " + _t("Ver todo"), use_container_width=True, key="reset_focus"):
                     st.session_state.pop("map_focus_node", None)
@@ -18807,8 +18894,31 @@ def main() -> None:
         st.caption(_focus_hint)
         st.caption(f"🧬 Revisión de mapa: `{_map_rev}` · las 3 vistas leen las mismas rutas/nodos/pruebas guardadas.")
 
+        # v111: fallback manual por si el navegador/Streamlit no captura el click del Plotly.
+        # Esto evita que el usuario se quede sin ficha, sin botón de verificar y sin pruebas.
+        with st.expander("🔎 Seleccionar nodo manualmente / abrir ficha de pruebas", expanded=False):
+            try:
+                _picker_dyn_nodes, _, _ = load_dynamic_map_elements(conn)
+                _picker_nodes = sorted({**NODES, **_picker_dyn_nodes}.keys())
+            except Exception:
+                _picker_nodes = sorted(NODES.keys())
+            _qnode = st.text_input("Escribe parte del nombre del nodo", value="", key="map_focus_manual_query")
+            _matches = [n for n in _picker_nodes if _qnode.strip().lower() in n.lower()] if _qnode.strip() else _picker_nodes[:18]
+            if focused:
+                st.caption(f"Nodo activo: {focused}")
+            if _matches:
+                _cols = st.columns(3)
+                for _i, _n in enumerate(_matches[:18]):
+                    with _cols[_i % 3]:
+                        if st.button(_n, key=f"manual_focus_{_canonical_entity_key(_n)}", use_container_width=True):
+                            st.session_state["map_focus_node"] = _n
+                            st.rerun()
+            if focused and st.button("✕ Quitar filtro de nodo", key="manual_clear_focus", use_container_width=True):
+                st.session_state.pop("map_focus_node", None)
+                st.rerun()
+
         with tab_conn:
-            st.caption("Solo rutas con evidencia confirmada/documentada u obligatorias. Las fijas de vigilancia no se mezclan aquí salvo que estén verificadas.")
+            st.caption("Rutas confirmadas/obligatorias + cualquier conexión con prueba guardada. Si la evidencia es poca, aparece en naranja como “evidencia débil”, no como certeza fuerte.")
             sel = st.plotly_chart(
                 make_map(row, title="Conexiones confirmadas + obligatorias", route_filter="confirmed", **_map_kwargs),
                 width="stretch", on_select="rerun", selection_mode="points", key=f"radar_map_conn_{_map_rev}",
