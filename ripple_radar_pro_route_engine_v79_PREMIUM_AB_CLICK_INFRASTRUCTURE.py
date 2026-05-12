@@ -172,9 +172,9 @@ except Exception:
 
 
 APP_NAME = "Ripple Radar Pro"
-VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery · v150 Fixed Node Evidence Pending"
-BUILD_ID = "v153_2026_05_12_MANUAL_NODE_EVIDENCE_RESET_FIX"
-BUILD_NOTE = "Modo manual de evidencias para nodos fijos + reset admin de rutas/pruebas dinámicas · Notificaciones visuales en nodos: verificar, vigilar huella pública, revisar alcance documental y evitar repeticiones"
+VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery · v154 Fixed Node Search Pending Display"
+BUILD_ID = "v154_2026_05_12_FIXED_NODE_SEARCH_DISPLAY_FIX"
+BUILD_NOTE = "Nodos fijos en buscador: pendiente documental/on-chain, no falso 0%; cache vieja normalizada y display corregido"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
 import os as _os
@@ -25920,10 +25920,150 @@ def _render_discovery_investigation_flow(conn: sqlite3.Connection, root_result: 
         pass
 
 
+
+# =============================================================================
+# v154 · NODO FIJO EN BUSCADOR = PENDIENTE DOCUMENTAL, NO 0% NEGATIVO
+# =============================================================================
+# Problema detectado en UI:
+# - El aviso cache-first decía correctamente "Nodo fijo pendiente".
+# - Pero el resultado principal seguía saliendo como "Sin conexión encontrada · Confianza 0%"
+#   porque el resultado débil se finalizaba/renderizaba después y perdía el estado
+#   _fixed_node_pending_evidence, especialmente desde cachés antiguas.
+# Solución:
+# - Cualquier resultado débil de un nodo fijo se marca al final del pipeline.
+# - La caché antigua de falsos negativos se normaliza al leer.
+# - No se escribe caché negativa para nodos fijos.
+
 try:
-    # Limpieza defensiva de negativos antiguos creados antes de v153.
+    VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery · v154 Fixed Node Search Pending Display"
+    BUILD_ID = "v154_2026_05_12_FIXED_NODE_SEARCH_DISPLAY_FIX"
+    BUILD_NOTE = "Nodos fijos buscados manualmente quedan como pendiente documental/on-chain, no como sin conexión 0%."
+except Exception:
+    pass
+
+
+def _rrp_v154_is_fixed_weak_negative(result: Dict[str, Any], name: Any = "") -> bool:
+    """True solo cuando el resultado es un 0% vacío para un nodo fijo.
+
+    No toca resultados con evidencias, rutas o errores temporales de API.
+    """
+    try:
+        if not isinstance(result, dict):
+            return False
+        if result.get("_api_temporal_error") or result.get("_api_transient_error"):
+            return False
+        canon = _canonical_entity_name(result.get("institution") or name)
+        if not _rrp_v153_is_fixed_node(canon):
+            return False
+        ev = result.get("evidence_items") or []
+        rd = result.get("route_decisions") or []
+        src = result.get("sources") or []
+        conf = float(result.get("confidence", 0) or 0)
+        connected = bool(result.get("connected"))
+        summary = str(result.get("summary") or "").lower()
+        # Si hay rutas/evidencias reales, no degradar a pendiente.
+        if ev or rd:
+            return False
+        # Fuentes sueltas no aceptadas por Proof-First no convierten el nodo fijo en negativo.
+        if (not connected) and conf <= 0.05:
+            return True
+        if "sin conexión" in summary and conf <= 0.05 and not connected:
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def _rrp_v154_mark_pending_if_needed(result: Dict[str, Any], name: Any = "") -> Dict[str, Any]:
+    try:
+        canon = _canonical_entity_name((result or {}).get("institution") or name)
+        if _rrp_v153_is_fixed_node(canon) and (_rrp_v154_is_fixed_weak_negative(result, canon) or (isinstance(result, dict) and result.get("_fixed_node_pending_evidence"))):
+            return _rrp_v153_mark_fixed_pending(result or {"institution": canon}, canon)
+    except Exception:
+        pass
+    return result
+
+
+_ORIG_FINALIZE_DISCOVERY_RESULT_V154 = globals().get("_finalize_discovery_result")
+def _finalize_discovery_result(result: Dict[str, Any], institution_name: str, entity_type: str, raw_ai: Any = None) -> Dict[str, Any]:
+    if _ORIG_FINALIZE_DISCOVERY_RESULT_V154:
+        out = _ORIG_FINALIZE_DISCOVERY_RESULT_V154(result, institution_name, entity_type, raw_ai)
+    else:
+        out = result or {}
+    return _rrp_v154_mark_pending_if_needed(out, institution_name)
+
+
+_ORIG_SEARCH_INSTITUTION_CONNECTIONS_V154 = globals().get("search_institution_connections")
+def search_institution_connections(institution_name: str,
+                                   conn: Optional[sqlite3.Connection] = None,
+                                   force_online: bool = False) -> Dict[str, Any]:
+    canon = _canonical_entity_name(institution_name)
+    try:
+        out = _ORIG_SEARCH_INSTITUTION_CONNECTIONS_V154(canon, conn=conn, force_online=force_online)
+    except TypeError:
+        # Compatibilidad con firmas legacy.
+        out = _ORIG_SEARCH_INSTITUTION_CONNECTIONS_V154(canon)
+    except Exception:
+        if _rrp_v153_is_fixed_node(canon):
+            return _rrp_v153_mark_fixed_pending({"institution": canon}, canon)
+        raise
+    return _rrp_v154_mark_pending_if_needed(out, canon)
+
+
+_ORIG_GET_SEARCH_CACHE_V154 = globals().get("_get_search_cache")
+def _get_search_cache(conn: sqlite3.Connection, name: str, search_type: str = "discovery") -> Optional[Dict]:
+    if not _ORIG_GET_SEARCH_CACHE_V154:
+        return None
+    out = _ORIG_GET_SEARCH_CACHE_V154(conn, name, search_type)
+    if isinstance(out, dict):
+        return _rrp_v154_mark_pending_if_needed(out, name)
+    return out
+
+
+_ORIG_SET_SEARCH_CACHE_V154 = globals().get("_set_search_cache")
+def _set_search_cache(conn: sqlite3.Connection, name: str, result: Dict, search_type: str = "discovery") -> None:
+    """No persistir como caché negativa un nodo fijo pendiente.
+
+    Así, buscar XRPL/RLUSD/SWIFT/etc. no deja memoria basura de 0%.
+    """
+    try:
+        canon = _canonical_entity_name(name)
+        fixed_pending = _rrp_v153_is_fixed_node(canon) and _rrp_v154_is_fixed_weak_negative(result, canon)
+        if fixed_pending:
+            try:
+                _audit_search_decision(conn, canon, search_type, "skip_negative_cache", "fixed_node_pending", "Nodo fijo sin investigación específica; no guardar 0% como negativo")
+            except Exception:
+                pass
+            return
+    except Exception:
+        pass
+    if _ORIG_SET_SEARCH_CACHE_V154:
+        return _ORIG_SET_SEARCH_CACHE_V154(conn, name, result, search_type)
+
+
+_ORIG_RENDER_CACHE_FIRST_STATUS_V154 = globals().get("_render_cache_first_status")
+def _render_cache_first_status(conn: sqlite3.Connection, query: str, search_type: str = "discovery") -> Dict[str, Any]:
+    canon = _canonical_entity_name(query)
+    if _rrp_v153_is_fixed_node(canon):
+        # Forzar mensaje claro, aunque haya datos internos pero no prueba específica de la línea.
+        cached = _get_search_cache(conn, canon, search_type) if "_get_search_cache" in globals() else None
+        if isinstance(cached, dict) and cached.get("_fixed_node_pending_evidence"):
+            st.info("📌 Nodo fijo del mapa: pendiente de investigación documental/on-chain. No es un 0% negativo.")
+            with st.expander("Consultas sugeridas para buscar documentación", expanded=False):
+                for q in _rrp_v153_doc_queries_for_fixed_node(canon)[:8]:
+                    st.code(q, language="text")
+            return {"cache": True, "local_total": 0, "can_skip_api": False, "fixed_node": True, "pending_evidence": True}
+    if _ORIG_RENDER_CACHE_FIRST_STATUS_V154:
+        return _ORIG_RENDER_CACHE_FIRST_STATUS_V154(conn, query, search_type)
+    return {"cache": False, "local_total": 0, "can_skip_api": False}
+
+
+try:
+    # Limpieza defensiva de negativos antiguos creados antes de v154.
     if "_rrp_v151_cleanup_all_fixed_false_negatives" in globals():
         _rrp_v151_cleanup_all_fixed_false_negatives(get_conn())
+    if "_rrp_v150_cleanup_fixed_node_false_negatives" in globals():
+        _rrp_v150_cleanup_fixed_node_false_negatives(get_conn())
 except Exception:
     pass
 
