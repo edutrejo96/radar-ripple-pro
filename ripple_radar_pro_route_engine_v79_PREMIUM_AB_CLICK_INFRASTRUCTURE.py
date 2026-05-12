@@ -173,8 +173,8 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v128_2026_05_12_CASCADE_RESEED_CACHE_DERIVED_NODES_FIX"
-BUILD_NOTE = "Monitoring links para motores + foco de nodo fiable + búsqueda autónoma por tipo"
+BUILD_ID = "v129_2026_05_12_CASCADE_ADVANCE_FIX"
+BUILD_NOTE = "Fix cascada: avanza pendientes, limpia duplicados investigados y evita que hijos se conviertan en la raíz Colombia por contexto stale"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
 import os as _os
@@ -18169,10 +18169,19 @@ def _rrp_cascade_done_keys() -> Set[str]:
 
 
 def _rrp_normalize_cascade_queue() -> List[Dict[str, Any]]:
-    """Convierte colas antiguas de strings a items con parent/depth/reason."""
+    """Convierte colas antiguas de strings a items con parent/depth/reason.
+
+    v129: además filtra los hilos ya investigados antes de pintar la UI.
+    Antes podían quedarse visibles como "Pendientes" aunque ya estuvieran en el
+    árbol/done set, dando la sensación de que el botón no avanzaba.
+    """
     raw = st.session_state.get("cascade_queue", []) or []
     out: List[Dict[str, Any]] = []
     seen: Set[str] = set()
+    try:
+        done: Set[str] = _rrp_cascade_done_keys()
+    except Exception:
+        done = set(st.session_state.get("rrp_cascade_done_keys", set()) or set())
     for obj in raw:
         if isinstance(obj, dict):
             name = _canonical_entity_name(obj.get("name") or obj.get("target") or obj.get("institution") or "")
@@ -18187,7 +18196,7 @@ def _rrp_normalize_cascade_queue() -> List[Dict[str, Any]]:
         if not name or name in {"Descubierto", "?"}:
             continue
         key = _rrp_cascade_item_key(name)
-        if not key or key in seen:
+        if not key or key in seen or key in done:
             continue
         seen.add(key)
         out.append({"name": name, "parent": parent, "depth": max(1, min(depth, RRP_CASCADE_MAX_DEPTH)), "reason": reason})
@@ -18258,6 +18267,20 @@ def _rrp_record_discovery_step(result: Dict[str, Any], *, source: str = "auto") 
         tree = st.session_state.setdefault("rrp_discovery_tree", [])
         rkey = _rrp_result_key(result)
         if any(x.get("key") == rkey for x in tree):
+            # v129: si el resultado ya estaba en el árbol, aun así hay que
+            # consumir correctamente el estado de cascada. Antes se hacía return
+            # aquí, dejando disc_cascade_active/depth vivos; después el seed
+            # podía reencolar hijos con un nivel incorrecto o repetir la raíz.
+            _rrp_mark_cascade_done(name)
+            _inflight_key = str(st.session_state.pop("rrp_cascade_inflight_key", "") or "").strip()
+            if _inflight_key:
+                done = set(st.session_state.get("rrp_cascade_done_keys", set()) or set())
+                done.add(_inflight_key)
+                st.session_state["rrp_cascade_done_keys"] = done
+            if is_cascade:
+                st.session_state["disc_cascade_active"] = False
+                st.session_state["disc_cascade_parent"] = ""
+                st.session_state.pop("disc_cascade_depth", None)
             return
         # calcular profundidad por padre. v127: si la cola ya trae profundidad explícita, usarla.
         depth = 0
@@ -18283,6 +18306,14 @@ def _rrp_record_discovery_step(result: Dict[str, Any], *, source: str = "auto") 
         })
         st.session_state["rrp_discovery_tree"] = tree[-40:]
         _rrp_mark_cascade_done(name)
+        # v129: marcar también la entidad solicitada desde la cola, por si el
+        # resultado vuelve con alias canónico distinto. Así el hilo consumido no
+        # reaparece como pendiente.
+        _inflight_key = str(st.session_state.pop("rrp_cascade_inflight_key", "") or "").strip()
+        if _inflight_key:
+            done = set(st.session_state.get("rrp_cascade_done_keys", set()) or set())
+            done.add(_inflight_key)
+            st.session_state["rrp_cascade_done_keys"] = done
         if is_cascade:
             st.session_state["disc_cascade_active"] = False
             st.session_state["disc_cascade_parent"] = ""
@@ -18576,6 +18607,8 @@ def _render_discovery_investigation_flow(conn: sqlite3.Connection, current_resul
                 parent = str(_item.get("parent") or "").strip()
                 depth = int(_item.get("depth", 1) or 1)
                 st.session_state["disc_pending_query"] = _next
+                st.session_state["disc_active_query"] = _next
+                st.session_state["rrp_cascade_inflight_key"] = _rrp_cascade_item_key(_next)
                 st.session_state["disc_cascade_active"] = True
                 st.session_state["disc_cascade_parent"] = parent
                 st.session_state["disc_cascade_depth"] = depth
@@ -18664,6 +18697,7 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
         st.session_state["rrp_discovery_tree"] = []
         st.session_state["rrp_discovery_tree_root"] = _canonical_display_node(_raw_q)
         st.session_state["disc_root_query"] = _raw_q
+        st.session_state["disc_active_query"] = _raw_q
         st.session_state["disc_cascade_active"] = False
         st.session_state["disc_cascade_parent"] = ""
         st.session_state.pop("disc_cascade_depth", None)
@@ -18773,6 +18807,7 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
             _normalized_q = " ".join(_smart_cap(w) for w in _raw_q.split())
         st.session_state["disc_raw_query"] = _raw_q
         st.session_state["disc_normalized_query"] = _normalized_q
+        st.session_state["disc_active_query"] = _normalized_q
         st.session_state["disc_pending_query"] = _normalized_q
         st.session_state.pop("disc_result", None)
 
@@ -18805,6 +18840,13 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
     _pending = st.session_state.get("disc_pending_query", "")
     if _pending:
         st.session_state.pop("disc_pending_query")   # consumir la tarea
+        # v129: cada hilo de cascada debe tener su propio contexto. Antes se
+        # quedaba vivo el texto del buscador manual (por ejemplo Banco de la
+        # República) y el reparador documental podía convertir hijos como
+        # Peersyst/Ripple CBDC Platform otra vez en la raíz Colombia.
+        st.session_state["disc_raw_query"] = str(_pending)
+        st.session_state["disc_normalized_query"] = _canonical_entity_name(_pending)
+        st.session_state["disc_active_query"] = str(_pending)
         _force_online_once = bool(st.session_state.pop("disc_force_online_once", False))
 
         # ── Caché compartida: check primero, salvo en re-búsqueda limpia/forzada ─
@@ -21539,8 +21581,8 @@ def _finalize_discovery_result(result: Dict[str, Any], institution_name: str, en
     out = _RRP_OLD_FINALIZE_DISCOVERY_RESULT_V123(result, institution_name, entity_type, data)
     query_context = " ".join(str(x or "") for x in [
         institution_name,
+        st.session_state.get("disc_active_query", "") if "st" in globals() else "",
         st.session_state.get("disc_raw_query", "") if "st" in globals() else "",
-        st.session_state.get("disc_search_input", "") if "st" in globals() else "",
     ])
     out = _rrp_enrich_fednow_ripple_watch_v123(out, query_context)
     return out
@@ -21714,6 +21756,27 @@ def _rrp_enrich_colombia_cbdc_pilot_v126(result: Dict[str, Any], query_context: 
         return result
     blob = (query_context + "\n" + _rrp_result_text_blob_v126(result)).lower()
     nblob = _norm_key(blob)
+    # v129: el enriquecedor Colombia solo debe reescribir resultados cuya
+    # identidad primaria sea realmente Banco de la República/Banco Central de
+    # Colombia. En cascada, el input visual del buscador puede seguir mostrando
+    # la raíz; si no filtramos por identidad primaria, hijos como Peersyst o
+    # Ripple CBDC Platform acaban renombrados a Banco de la República y la cola
+    # parece atascada.
+    _primary_identity_blob = _norm_key(" ".join(str(x or "") for x in [
+        result.get("institution", ""),
+        result.get("query", ""),
+        result.get("input", ""),
+        result.get("_query", ""),
+        st.session_state.get("disc_active_query", "") if "st" in globals() else "",
+    ]))
+    _colombia_identity_terms = [
+        "banco central de colombia", "banco de la republica",
+        "banco de la republica colombia", "colombia central bank",
+        "central bank of colombia", "banrep"
+    ]
+    _primary_is_colombia_cb = any(x in _primary_identity_blob for x in _colombia_identity_terms)
+    if not _primary_is_colombia_cb and not result.get("_v126_colombia_documentary_pilot"):
+        return result
     is_colombia_cb = any(x in nblob for x in [
         "banco central de colombia", "banco de la republica", "banco de la republica colombia", "colombia central bank"
     ])
@@ -21813,8 +21876,8 @@ def _finalize_discovery_result(result: Dict[str, Any], institution_name: str, en
     out = _RRP_OLD_FINALIZE_DISCOVERY_RESULT_V126(result, institution_name, entity_type, data)
     query_context = " ".join(str(x or "") for x in [
         institution_name, entity_type,
+        st.session_state.get("disc_active_query", "") if "st" in globals() else "",
         st.session_state.get("disc_raw_query", "") if "st" in globals() else "",
-        st.session_state.get("disc_search_input", "") if "st" in globals() else "",
     ])
     return _rrp_enrich_colombia_cbdc_pilot_v126(out, query_context)
 
