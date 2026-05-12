@@ -173,8 +173,8 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v124_2026_05_12_AUTONOMOUS_NODE_CATEGORY_ROUTER"
-BUILD_NOTE = "Router autónomo de categorías: nodos nuevos se colocan por tipo o crean zona propia sin falsear conexiones"
+BUILD_ID = "v125_2026_05_12_MONITORING_LINK_NODE_FOCUS_RESEARCH_ENGINE"
+BUILD_NOTE = "Monitoring links para motores + foco de nodo fiable + búsqueda autónoma por tipo"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
 import os as _os
@@ -797,6 +797,11 @@ ENTITY_CANONICAL_ALIASES: Dict[str, str] = {
     "fednow service": "FedNow",
     "fedwire": "FedNow",
     # Normalizaciones frecuentes.
+    "ripple": "Ripple Payments",
+    "ripple labs": "Ripple Payments",
+    "ripple net": "Ripple Payments",
+    "ripplenet": "Ripple Payments",
+    "ripple ecosystem": "Ripple Payments",
     "black rock": "BlackRock",
     "blackrock": "BlackRock",
     "xrpl": "XRPL",
@@ -2080,6 +2085,45 @@ ROUTES = [
     ("Topology Engine", "Anomaly Engine", "model", "topology_score", "Topología → anomalías"),
     ("Anomaly Engine", "Fingerprint Engine", "model", "anomaly_score", "Anomalías → fingerprints"),
     ("Fingerprint Engine", "Clusters", "model", "fingerprint_score", "Fingerprints → clusters"),
+
+    # v125 — Enlaces internos de observabilidad. Estos SÍ deben verse en Vigilancia,
+    # porque explican qué mira cada motor, pero NO son rutas institucionales ni
+    # pueden elevar a un tercero como BIS/FedNow/SWIFT hacia XRPL.
+    ("Topology Engine", "XRPL", "monitoring_link", "topology_score", "Topology Engine observa topología XRPL"),
+    ("Topology Engine", "RLUSD", "monitoring_link", "topology_score", "Topology Engine observa zona RLUSD"),
+    ("Topology Engine", "DEX/AMM", "monitoring_link", "topology_score", "Topology Engine observa DEX/AMM"),
+    ("Topology Engine", "Trustlines", "monitoring_link", "trustline_score", "Topology Engine observa trustlines"),
+    ("Topology Engine", "Large Transfers", "monitoring_link", "large_transfer_score", "Topology Engine observa grandes transferencias"),
+    ("Topology Engine", "Clusters", "monitoring_link", "cluster_score", "Topology Engine observa clusters"),
+    ("Anomaly Engine", "XRPL", "monitoring_link", "anomaly_score", "Anomaly Engine observa anomalías XRPL"),
+    ("Anomaly Engine", "RLUSD", "monitoring_link", "anomaly_score", "Anomaly Engine observa anomalías RLUSD"),
+    ("Anomaly Engine", "DEX/AMM", "monitoring_link", "anomaly_score", "Anomaly Engine observa anomalías DEX/AMM"),
+    ("Anomaly Engine", "Large Transfers", "monitoring_link", "anomaly_score", "Anomaly Engine observa grandes transferencias"),
+    ("Fingerprint Engine", "XRPL", "monitoring_link", "fingerprint_score", "Fingerprint Engine observa fingerprints XRPL"),
+    ("Fingerprint Engine", "RLUSD", "monitoring_link", "fingerprint_score", "Fingerprint Engine observa fingerprints RLUSD"),
+    ("Fingerprint Engine", "DEX/AMM", "monitoring_link", "fingerprint_score", "Fingerprint Engine observa DEX/AMM"),
+    ("Fingerprint Engine", "Trustlines", "monitoring_link", "trustline_score", "Fingerprint Engine observa trustlines"),
+    ("Fingerprint Engine", "Public Gateway", "monitoring_link", "public_gateway_score", "Fingerprint Engine observa gateways públicos"),
+    ("Fingerprint Engine", "Clusters", "monitoring_link", "fingerprint_score", "Fingerprint Engine observa clusters"),
+
+    # v125 — Conexiones estáticas de contexto RippleNet/ODL hacia el stack Ripple.
+    # No son prueba on-chain ni obligatoria: sirven para que los nodos fijos no queden muertos.
+    # La fuente fuerte o débil debe venir luego por Discovery/Proof-First.
+    ("Santander", "Ripple Payments", "ecosystem_watch", "institutional_route_score", "Santander → Ripple Payments/RippleNet · contexto de ecosistema a verificar"),
+    ("Standard Chartered", "Ripple Payments", "ecosystem_watch", "institutional_route_score", "Standard Chartered → Ripple Payments · contexto de ecosistema a verificar"),
+    ("Bank of America", "Ripple Payments", "ecosystem_watch", "institutional_route_score", "Bank of America → Ripple Payments · contexto de ecosistema a verificar"),
+    ("PNC Bank", "Ripple Payments", "ecosystem_watch", "institutional_route_score", "PNC Bank → Ripple Payments · contexto de ecosistema a verificar"),
+    ("Itaú Unibanco", "Ripple Payments", "ecosystem_watch", "institutional_route_score", "Itaú Unibanco → Ripple Payments · contexto de ecosistema a verificar"),
+    ("Axis Bank", "Ripple Payments", "ecosystem_watch", "institutional_route_score", "Axis Bank → Ripple Payments/RippleNet · contexto de ecosistema a verificar"),
+    ("SBI Remit", "Ripple Payments", "ecosystem_watch", "institutional_route_score", "SBI Remit → Ripple Payments/ODL · contexto de ecosistema a verificar"),
+    ("MoneyTap / SBI", "Ripple Payments", "ecosystem_watch", "institutional_route_score", "MoneyTap/SBI → Ripple Payments · contexto de ecosistema a verificar"),
+    ("LianLian Pay", "Ripple Payments", "ecosystem_watch", "institutional_route_score", "LianLian Pay → RippleNet/Ripple Payments · contexto de ecosistema a verificar"),
+    ("Siam Commercial Bank", "Ripple Payments", "ecosystem_watch", "institutional_route_score", "SCB → Ripple Payments · contexto de ecosistema a verificar"),
+    ("CIMB", "Ripple Payments", "ecosystem_watch", "institutional_route_score", "CIMB → Ripple Payments · contexto de ecosistema a verificar"),
+    ("Bitso (ODL MX)", "Ripple Payments", "ecosystem_watch", "payment_flow_score", "Bitso ODL → Ripple Payments · contexto de corredor a verificar"),
+    ("BeeTech (ODL BR)", "Ripple Payments", "ecosystem_watch", "payment_flow_score", "BeeTech ODL → Ripple Payments · contexto de corredor a verificar"),
+    ("Tranglo (ODL)", "Ripple Payments", "ecosystem_watch", "payment_flow_score", "Tranglo ODL → Ripple Payments · contexto de corredor a verificar"),
+    ("Coins.ph (ODL PH)", "Ripple Payments", "ecosystem_watch", "payment_flow_score", "Coins.ph ODL → Ripple Payments · contexto de corredor a verificar"),
 
     # Huellas públicas observables
     ("Public Gateway", "XRPL", "public", "public_xrpl_score", "Gateway público → XRPL"),
@@ -3366,6 +3410,10 @@ def route_color(row: pd.Series, route: Tuple[str, str, str, str, str]) -> str:
         return "#FF4D6D"    # rojo-rosa — implicación técnica
     if kind == "public":
         return "#00CFFF"    # cian — gateway público
+    if kind == "monitoring_link":
+        return "#38BDF8"   # azul — observabilidad interna, no prueba externa
+    if kind == "ecosystem_watch":
+        return "#A78BFA"   # violeta — contexto ecosistema, requiere proof-first
     if kind == "watch_only":
         return "#64748B"   # gris — ruta de observación, no prueba verificable
     if kind == "watch":
@@ -3393,8 +3441,10 @@ def route_dash(route: Tuple[str, str, str, str, str]) -> str:
         return "dash"       # evidencia débil: visible en confirmadas, pero sin venderla como confirmación fuerte
     if kind == "obligatory":
         return "dash"       # deducción técnica declarada; debe verse como regla/estructura, no como TX directa
-    if kind == "watch_only":
+    if kind in {"watch_only", "monitoring_link"}:
         return "dot"
+    if kind == "ecosystem_watch":
+        return "dash"
     if kind in {"watch", "model"}:
         return "solid"
     if kind in {"deductive_watch", "infra_deduction", "transitive_watch"}:
@@ -3594,6 +3644,8 @@ _ROUTE_KIND_RANK: Dict[str, int] = {
     "discovered": 4,
     "watch": 5,
     "watch_only": 8,
+    "monitoring_link": 8,
+    "ecosystem_watch": 5,
     "future": 6,
     "model": 7,
 }
@@ -3612,6 +3664,8 @@ _ROUTE_KIND_LABEL: Dict[str, Tuple[str, str]] = {
     "discovered": ("🔍 descubierta", "#FFD700"),
     "watch": ("👁 vigilada/indirecta", "#B673FF"),
     "watch_only": ("🔭 observación del radar", "#64748B"),
+    "monitoring_link": ("🧠 vigilancia interna", "#38BDF8"),
+    "ecosystem_watch": ("👁 contexto ecosistema", "#A78BFA"),
     "future": ("🔮 futura", "#8CA0B8"),
     "model": ("🧠 modelo", "#60A5FA"),
 }
@@ -3685,7 +3739,7 @@ def _find_ripple_paths(
             # Ejemplo: BIS → Topology → Anomaly → Fingerprint → Clusters → XRPL NO es una conexión;
             # es solo un camino analítico del radar.
             _edge_kind = str(edge[2] or "").strip().lower()
-            if _edge_kind in {"model", "watch_only", "watch", "future"}:
+            if _edge_kind in {"model", "watch_only", "monitoring_link", "watch", "future"}:
                 continue
             kind_rank = _route_kind_rank(edge[2])
             next_score = score + 1 + kind_rank
@@ -3996,6 +4050,8 @@ def render_node_info_panel(
         "obligatory":  ("⚡ Regla técnica",       "#FF4D6D"),   # rojo-rosa — regla técnica/estructura, no prueba on-chain
         "watch":       ("👁 Indirecta vigilada",  "#B673FF"),   # morado — huella pública sin confirmar
         "watch_only":  ("🔭 Observación",          "#64748B"),   # gris — motor del radar, no conexión factual
+        "monitoring_link": ("🧠 Vigilancia interna", "#38BDF8"), # motor observa XRPL/RLUSD; no prueba adopción
+        "ecosystem_watch": ("👁 Contexto ecosistema", "#A78BFA"), # contexto RippleNet/ODL a verificar
         "discovered":  ("🔍 Indirecta descubierta","#FFD700"),  # dorado — detectada por motor IA
         "model":       ("🧠 Modelo analítico",    "#60A5FA"),   # azul — motor de inteligencia
         "future":      ("🔮 Futura",              "#8CA0B8"),   # gris — integración en desarrollo
@@ -4081,8 +4137,8 @@ def render_node_info_panel(
                     bar_html = sig_bar(sig)
                 elif kind == "core_infra":
                     bar_html = "<span style='color:#14F195;font-size:0.70rem'>🧬 Infraestructura interna XRPL · no requiere búsqueda externa</span>"
-                elif kind == "watch_only":
-                    bar_html = "<span style='color:#64748B;font-size:0.70rem'>🔭 Ruta de observación del radar · no se verifica como conexión</span>"
+                elif kind in ("watch_only", "monitoring_link"):
+                    bar_html = "<span style='color:#38BDF8;font-size:0.70rem'>🧠 Vigilancia interna del radar · observa datos, no prueba adopción externa</span>"
                 elif kind in ("watch", "deductive_watch", "future_watch", "infra_deduction", "transitive_watch"):
                     _dc = float(_dyn_meta.get("confidence", 0.0) or 0.0)
                     if _dc > 0:
@@ -4134,11 +4190,11 @@ def render_node_info_panel(
                     f"<div style='color:#94A3B8;font-size:0.68rem;margin-top:4px;line-height:1.35'>🧾 {_dyn_ev}</div>"
                     if _dyn_ev else ""
                 )
-                is_watch = kind in ("watch", "watch_only", "deductive_watch", "future_watch", "infra_deduction", "transitive_watch") or "sin verificar" in proof_html or "Sin evidencia" in proof_html
+                is_watch = kind in ("watch", "watch_only", "monitoring_link", "ecosystem_watch", "deductive_watch", "future_watch", "infra_deduction", "transitive_watch") or "sin verificar" in proof_html or "Sin evidencia" in proof_html
                 if kind == "core_infra":
                     bar_html = "<span style='color:#14F195;font-size:0.70rem'>🧬 Infraestructura interna XRPL · no requiere búsqueda externa</span>"
-                elif kind == "watch_only":
-                    bar_html = "<span style='color:#64748B;font-size:0.70rem'>🔭 Ruta de observación del radar · no se verifica como conexión</span>"
+                elif kind in ("watch_only", "monitoring_link"):
+                    bar_html = "<span style='color:#38BDF8;font-size:0.70rem'>🧠 Vigilancia interna del radar · observa datos, no prueba adopción externa</span>"
                 elif is_watch and sig <= 0 and "✅" not in proof_html and "🟡" not in proof_html:
                     _dc = float(_dyn_meta.get("confidence", 0.0) or 0.0)
                     bar_html = (f"<span style='color:#B673FF;font-size:0.70rem'>👁 Vigilancia {_dc*100:.0f}% · no prueba directa</span>" if _dc > 0 else "<span style='color:#334155;font-size:0.70rem;font-style:italic'>⏳ Verificar para obtener confianza real</span>")
@@ -4180,7 +4236,7 @@ def render_node_info_panel(
             kinds = {str(k).lower() for k in peer_kind_map.get(peer, set())}
             if _is_core_infra_pair(focus_node, peer):
                 return False
-            return bool(kinds) and kinds.issubset({"watch_only", "model"})
+            return bool(kinds) and kinds.issubset({"watch_only", "monitoring_link", "model"})
 
         all_peers = sorted(peer_kind_map.keys())
         verification_peers = [p for p in all_peers if not _is_observation_only(p) and not _is_core_infra_pair(focus_node, p)]
@@ -4627,7 +4683,7 @@ def make_map(row: pd.Series,
         "public_wallet", "official", "institutional", "government_payment_rail", "core_infra", "weak_evidence"
     }
     _SURVEILLANCE_KINDS = {
-        "watch", "watch_only", "discovered", "model", "future", "future_watch",
+        "watch", "watch_only", "monitoring_link", "ecosystem_watch", "discovered", "model", "future", "future_watch",
         "deductive_watch", "infra_deduction", "transitive_watch", "watch_only"
     }
     if route_filter == "confirmed":
@@ -17890,13 +17946,23 @@ def _rrp_node_from_plotly_selection(selection_obj: Any) -> str:
     pts = _rrp_plotly_points(selection_obj)
     if not pts:
         return ""
-    p0 = pts[0] if isinstance(pts[0], dict) else {}
+    raw_p0 = pts[0]
+    if isinstance(raw_p0, dict):
+        p0 = raw_p0
+    else:
+        # Streamlit puede devolver objetos tipo AttributeDictionary.
+        p0 = {}
+        for _k in ("customdata", "id", "label", "hovertext", "text", "point_index", "pointNumber"):
+            try:
+                _v = getattr(raw_p0, _k, None)
+                if _v is not None:
+                    p0[_k] = _v
+            except Exception:
+                pass
     cd = p0.get("customdata")
     if isinstance(cd, (list, tuple)):
         cd = cd[0] if cd else None
     node = str(cd or "").strip()
-    if node and node in NODES:
-        return node
     if node:
         return _canonical_display_node(node)
     # Fallback: algunos navegadores no devuelven customdata al hacer click sobre el texto.
@@ -17974,7 +18040,7 @@ def _route_will_be_added_label(rd: Dict[str, Any], result: Dict[str, Any]) -> Tu
         dst = str(rd.get("to") or rd.get("dst") or rd.get("target") or "")
         conf = float(rd.get("confidence", result.get("confidence", 0.0)) or 0.0)
         valid_evidence = _valid_discovery_evidence_items(result) if callable(globals().get("_valid_discovery_evidence_items")) else []
-        if kind in {"model", "watch_only", "future"}:
+        if kind in {"model", "watch_only", "monitoring_link", "future"}:
             return "🚫 no se añade", "motor interno/watch/futuro: no es conexión"
         if not dst:
             return "🚫 no se añade", "falta destino claro"
@@ -20490,21 +20556,45 @@ def main() -> None:
         st.caption(_focus_hint)
         st.caption(f"🧬 Revisión de mapa: `{_map_rev}` · las 3 vistas leen las mismas rutas/nodos/pruebas guardadas.")
 
-        # v120: se elimina el panel manual confuso. El mapa debe responder al click del nodo.
-        # Si no hay foco, se muestran todos los nodos; si hay foco, se muestran solo sus rutas directas.
+        # v125: el click de Plotly depende del navegador/Streamlit Cloud. Mantenemos el click,
+        # pero añadimos un fallback compacto y plegable para que el foco SIEMPRE funcione.
+        with st.expander("🔎 Foco fiable de nodo (solo si el click del mapa no responde)", expanded=False):
+            try:
+                _dyn_nodes_for_focus, _, _ = load_dynamic_map_elements(conn)
+                _focus_nodes = sorted({*NODES.keys(), *_dyn_nodes_for_focus.keys()})
+            except Exception:
+                _focus_nodes = sorted(NODES.keys())
+            _current_focus_idx = 0
+            _focus_options = ["— ver todo —"] + _focus_nodes
+            if focused in _focus_nodes:
+                _current_focus_idx = _focus_options.index(focused)
+            _picked_focus = st.selectbox(
+                "Abrir ficha y filtrar mapa por nodo",
+                _focus_options,
+                index=_current_focus_idx,
+                key="map_focus_node_select_v125",
+            )
+            if _picked_focus == "— ver todo —" and focused:
+                if st.button("🧭 Quitar foco", key="map_focus_select_clear_v125", use_container_width=True):
+                    st.session_state.pop("map_focus_node", None)
+                    st.rerun()
+            elif _picked_focus != "— ver todo —" and _picked_focus != focused:
+                if st.button("🔍 Abrir este nodo", key="map_focus_select_apply_v125", use_container_width=True):
+                    st.session_state["map_focus_node"] = _picked_focus
+                    st.rerun()
 
         with tab_conn:
             st.caption("Rutas verificadas + core interno XRPL/Ripple + cualquier conexión con evidencia guardada. Si la evidencia es poca, aparece en naranja como “evidencia débil”, no como certeza fuerte.")
             sel = st.plotly_chart(
                 make_map(row, title="Conexiones confirmadas + obligatorias", route_filter="confirmed", **_map_kwargs),
-                width="stretch", on_select="rerun", selection_mode="points", key=f"radar_map_conn_{_map_rev}",
+                width="stretch", on_select="rerun", selection_mode="points", key=f"radar_map_conn_{_map_rev}_{focused or 'all'}",
             )
 
         with tab_surv:
-            st.caption("Rutas fijas/base, vigilancia, descubiertas por IA y futuras verificables. Aquí verás SWIFT/FedNow/etc. aunque borres asociaciones dinámicas.")
+            st.caption("Rutas fijas/base, vigilancia, contexto ecosistema y enlaces internos de observabilidad. Los motores pueden vigilar XRPL/RLUSD, pero esas líneas no prueban adopción externa.")
             sel_surv = st.plotly_chart(
                 make_map(row, title="Vigilancia e inferencias", route_filter="surveillance", **_map_kwargs),
-                width="stretch", on_select="rerun", selection_mode="points", key=f"radar_map_surv_{_map_rev}",
+                width="stretch", on_select="rerun", selection_mode="points", key=f"radar_map_surv_{_map_rev}_{focused or 'all'}",
             )
             pts_surv = _rrp_plotly_points(sel_surv)
             if pts_surv:
@@ -20514,7 +20604,7 @@ def main() -> None:
             st.caption("Vista completa: todas las rutas superpuestas. Útil para ver la densidad total del ecosistema.")
             sel_all = st.plotly_chart(
                 make_map(row, route_filter="all", **_map_kwargs),
-                width="stretch", on_select="rerun", selection_mode="points", key=f"radar_map_all_{_map_rev}",
+                width="stretch", on_select="rerun", selection_mode="points", key=f"radar_map_all_{_map_rev}_{focused or 'all'}",
             )
             # Permitir selección también desde el mapa completo
             pts_all = _rrp_plotly_points(sel_all)
