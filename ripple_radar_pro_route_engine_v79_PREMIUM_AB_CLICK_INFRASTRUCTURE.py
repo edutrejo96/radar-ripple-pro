@@ -18214,6 +18214,23 @@ def _rrp_cascade_push(name: Any, *, parent: Any = "", depth: int = 1, reason: st
         if depth > RRP_CASCADE_MAX_DEPTH:
             return False
         key = _rrp_cascade_item_key(name)
+        # v130: si un nodo fue identificado como hijo directo de la búsqueda raíz,
+        # nunca debe reaparecer como nivel 2/3 solo porque también lo mencione una
+        # cascada intermedia. Ejemplo: Peersyst/MinTIC son hijos directos de
+        # Banco de la República, no nietos de Ripple CBDC Platform.
+        try:
+            _root_child_keys = set(st.session_state.get("rrp_cascade_root_child_keys", set()) or set())
+            if key in _root_child_keys and int(depth or 1) > 1:
+                parent = _canonical_entity_name(
+                    st.session_state.get("rrp_cascade_root_child_parent")
+                    or st.session_state.get("rrp_discovery_tree_root")
+                    or st.session_state.get("disc_root_query")
+                    or parent
+                )
+                depth = 1
+                reason = "hilo directo de la búsqueda inicial; reordenado por v130"
+        except Exception:
+            pass
         if key in _rrp_cascade_done_keys():
             return False
         q = _rrp_normalize_cascade_queue()
@@ -18448,13 +18465,19 @@ def _rrp_render_discovery_result_card(item: Dict[str, Any], conn: sqlite3.Connec
             result.get("layer") or result.get("entity_type") or "Descubierto",
             result.get("icon") or "🔎",
         )
+        # v130: la categoría visible no debe contaminarse con palabras de fuentes secundarias.
+        # Ejemplo real: Banco de la República acababa mostrando "clasificado por palabra clave: rlusd"
+        # solo porque una fuente recuperada hablaba de stablecoins. Para la UI solo mostramos
+        # la razón autónoma si realmente se ha aplicado para corregir una capa genérica.
         auto_layer, auto_icon, auto_reason = _autonomous_category_from_context(
-            name, result.get("summary", ""), result.get("sources", []) or [], result.get("evidence_items", []) or [], result.get("route_decisions", []) or []
+            name, result.get("summary", "")
         )
+        _auto_reason_visible = ""
         if auto_layer and (_layer_is_generic_for_dynamic(proposed_layer) or proposed_layer == "Descubierto"):
             proposed_layer, proposed_icon = auto_layer, auto_icon
+            _auto_reason_visible = auto_reason
         st.markdown(f"**Resumen:** {result.get('summary','Sin resumen')}")
-        st.caption(f"{proposed_icon} Categoría de mapa propuesta: {_dynamic_category_label(proposed_layer)}" + (f" · {auto_reason}" if auto_reason else ""))
+        st.caption(f"{proposed_icon} Categoría de mapa propuesta: {_dynamic_category_label(proposed_layer)}" + (f" · {_auto_reason_visible}" if _auto_reason_visible else ""))
         status_onchain, checks = _rrp_onchain_requirement(result)
         route_rows = _rrp_route_rows_for_result(result)
         src_groups = _rrp_sources_by_quality(result)
@@ -18703,6 +18726,8 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
         st.session_state.pop("disc_cascade_depth", None)
         st.session_state["cascade_queue"] = []
         st.session_state["rrp_cascade_done_keys"] = set()
+        st.session_state["rrp_cascade_root_child_keys"] = set()
+        st.session_state["rrp_cascade_root_child_parent"] = _raw_q
         _rrp_clear_cascade_seed_flags()
         if clean_research:
             ensure_sanitizer_tables(conn)
@@ -19322,6 +19347,18 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
                 except Exception:
                     current_depth = 0
                 next_depth = min(current_depth + 1, RRP_CASCADE_MAX_DEPTH)
+                # v130: guardar TODOS los candidatos detectados desde la raíz como hijos directos,
+                # aunque el limit visual solo encole algunos. Así, si una cascada posterior vuelve
+                # a mencionar Peersyst/MinTIC, no se degradan artificialmente a nivel 2.
+                try:
+                    _tree_root_key = _rrp_cascade_item_key(st.session_state.get("rrp_discovery_tree_root") or st.session_state.get("disc_root_query") or root_name)
+                    if current_depth <= 0 or _rrp_cascade_item_key(root_name) == _tree_root_key:
+                        _root_keys = set(st.session_state.get("rrp_cascade_root_child_keys", set()) or set())
+                        _root_keys.update(_rrp_cascade_item_key(c) for c in candidates if c)
+                        st.session_state["rrp_cascade_root_child_keys"] = {k for k in _root_keys if k}
+                        st.session_state["rrp_cascade_root_child_parent"] = root_name
+                except Exception:
+                    pass
                 for cand in candidates[:limit]:
                     if _rrp_cascade_push(cand, parent=root_name, depth=next_depth, reason="derivado por Discovery/Proof-First"):
                         queued.append(_canonical_entity_name(cand))
@@ -21880,6 +21917,238 @@ def _finalize_discovery_result(result: Dict[str, Any], institution_name: str, en
         st.session_state.get("disc_raw_query", "") if "st" in globals() else "",
     ])
     return _rrp_enrich_colombia_cbdc_pilot_v126(out, query_context)
+
+
+# =============================================================================
+# v130 — Cascada semántica: hijos Colombia/Ripple CBDC con Proof‑First documental
+# =============================================================================
+# Problema observado:
+# - La cola ya avanzaba, pero algunos hijos directos de Banco de la República
+#   aparecían como nivel 2.
+# - Ripple CBDC Platform / Peersyst / MinTIC / CBDC-MDBC / Sistema de pagos de alto
+#   valor podían quedar a 0% si la IA devolvía JSON reconstruido aunque las fuentes
+#   fueran documentales.
+# - La categoría visible se contaminaba con palabras de fuentes secundarias como RLUSD.
+
+
+def _rrp_primary_identity_v130(result: Dict[str, Any], query_context: Any = "") -> str:
+    """Identidad primaria de la búsqueda actual, no del blob de fuentes."""
+    parts = [
+        result.get("institution", "") if isinstance(result, dict) else "",
+        result.get("query", "") if isinstance(result, dict) else "",
+        result.get("input", "") if isinstance(result, dict) else "",
+        query_context,
+    ]
+    # Priorizar el texto activo de cascada: es lo que el usuario realmente está investigando.
+    try:
+        active = st.session_state.get("disc_active_query", "") if "st" in globals() else ""
+        pending = st.session_state.get("disc_pending_query", "") if "st" in globals() else ""
+        if active:
+            return _canonical_entity_name(active)
+        if pending:
+            return _canonical_entity_name(pending)
+    except Exception:
+        pass
+    for p in parts:
+        c = _canonical_entity_name(str(p or ""))
+        if c and c not in {"Descubierto", "?"}:
+            return c
+    return ""
+
+
+def _rrp_has_colombia_pilot_context_v130(result: Dict[str, Any], query_context: Any = "") -> bool:
+    blob = (str(query_context or "") + "\n" + _rrp_result_text_blob_v126(result)).lower()
+    nb = _norm_key(blob)
+    has_ripple = ("ripple.com" in blob) or ("businesswire.com" in blob and "ripple" in nb) or ("ripple" in nb)
+    has_colombia = any(x in nb for x in ["banco de la republica", "banrep", "colombia", "mintic"])
+    has_pilot = any(x in nb for x in ["cbdc", "mdbc", "pagos de alto valor", "high value payment", "wholesale cbdc", "ripple cbdc platform", "peersyst"])
+    return bool(has_ripple and has_colombia and has_pilot)
+
+
+def _rrp_has_ripple_cbdc_platform_context_v130(result: Dict[str, Any], query_context: Any = "") -> bool:
+    """Reconoce que Ripple CBDC Platform existe como producto documentado aunque no haya contexto Colombia."""
+    blob = (str(query_context or "") + "\n" + _rrp_result_text_blob_v126(result)).lower()
+    nb = _norm_key(blob)
+    has_product = any(x in nb for x in ["ripple cbdc platform", "cbdc platform", "development of cbdcs and stablecoins"])
+    has_source = any(x in blob for x in ["businesswire.com/news/home/20230518005115", "ripplecbdc.devpost.com", "ripple.com"])
+    return bool(has_product and (has_source or "ripple" in nb))
+
+
+def _rrp_add_v130_source_pack(result: Dict[str, Any]) -> None:
+    for u in [
+        "https://ripple.com/ripple-press/ripple-and-peersyst-partner-with-colombias-banco-de-la-republica-in-advancing-the-implementation-and-utilization-of-blockchain-technology/",
+        "https://peersyst.com/case-study/cbdc-banco-republica-colombia/",
+        "https://www.businesswire.com/news/home/20230518005115/en/Ripple-Launches-CBDC-Platform-for-the-Development-of-CBDCs-and-Stablecoins",
+        "https://cbdctracker.hrf.org/currency/colombia",
+        "https://www.banrep.gov.co/es/tags/ripple",
+    ]:
+        _result_add_source(result, u)
+
+
+def _rrp_enrich_colombia_child_nodes_v130(result: Dict[str, Any], query_context: str = "") -> Dict[str, Any]:
+    """Repara resultados de cascada que son hijos documentales del piloto Colombia.
+
+    No convierte en adopción productiva. Solo evita el falso 0% cuando hay prueba
+    documental suficiente de que el nodo participa en el hilo Colombia/Ripple/Peersyst.
+    """
+    if not isinstance(result, dict):
+        return result
+    primary = _rrp_primary_identity_v130(result, query_context)
+    pkey = _canonical_entity_key(primary)
+    if pkey in {_canonical_entity_key("Banco de la República"), ""}:
+        return result
+    _has_colombia_context = _rrp_has_colombia_pilot_context_v130(result, query_context)
+    _has_cbdc_platform_context = _rrp_has_ripple_cbdc_platform_context_v130(result, query_context)
+
+    # Ripple CBDC Platform: producto Ripple, no banco central ni RLUSD operativo.
+    # Puede validarse por su propia fuente oficial aunque no haya contexto Colombia.
+    if pkey == _canonical_entity_key("Ripple CBDC Platform") and _has_cbdc_platform_context:
+        result["institution"] = "Ripple CBDC Platform"
+        result["entity_type"] = "Ripple"
+        result["layer"] = "Ripple"
+        result["icon"] = "💠"
+        result["connected"] = True
+        result["confidence"] = max(float(result.get("confidence", 0.0) or 0.0), 0.76)
+        result["route_kind"] = "documented_product_platform"
+        result["summary"] = (
+            "Producto/plataforma de Ripple documentado para desarrollo de CBDCs y stablecoins. "
+            + ("En el caso Colombia aparece como tecnología del piloto con Banco de la República, Peersyst y MinTIC. " if _has_colombia_context else "")
+            + "No prueba uso productivo actual, no prueba RLUSD en Colombia y no prueba transacciones públicas on-chain."
+        )
+        _rrp_add_v130_source_pack(result)
+        _result_add_evidence(result,
+            title="Ripple lanza CBDC Platform",
+            claim="Ripple presenta su CBDC Platform para desarrollo de CBDCs y stablecoins; sirve como fuente primaria del producto investigado.",
+            url="https://www.businesswire.com/news/home/20230518005115/en/Ripple-Launches-CBDC-Platform-for-the-Development-of-CBDCs-and-Stablecoins",
+            target="Ripple CBDC Platform", evidence_type="official_announcement", confidence=0.76)
+        if _has_colombia_context:
+            _result_add_evidence(result,
+                title="Piloto Colombia cita Ripple CBDC Platform",
+                claim="La fuente de Ripple sobre Colombia vincula el piloto del Banco de la República y MinTIC con Ripple CBDC Platform basada en tecnología XRPL.",
+                url="https://ripple.com/ripple-press/ripple-and-peersyst-partner-with-colombias-banco-de-la-republica-in-advancing-the-implementation-and-utilization-of-blockchain-technology/",
+                target="Banco de la República", evidence_type="official_announcement", confidence=0.84)
+            _rrp_route_decision_unique_v126(result, "Banco de la República",
+                "La plataforma aparece en la fuente de Ripple como tecnología del piloto colombiano. Es conexión documental/piloto, no despliegue operativo.",
+                "https://ripple.com/ripple-press/ripple-and-peersyst-partner-with-colombias-banco-de-la-republica-in-advancing-the-implementation-and-utilization-of-blockchain-technology/",
+                "official_announcement", 0.84, "documented_pilot", True)
+        _rrp_route_decision_unique_v126(result, "XRPL",
+            "Ripple describe la plataforma CBDC como basada en tecnología central del XRP Ledger/XRPL; no implica transacciones públicas del piloto.",
+            "https://ripple.com/ripple-press/ripple-and-peersyst-partner-with-colombias-banco-de-la-republica-in-advancing-the-implementation-and-utilization-of-blockchain-technology/",
+            "technology_basis", 0.68, "technology_basis", True)
+        _targets = ["XRPL", "CBDC / MDBC"]
+        if _has_colombia_context:
+            _targets = ["Banco de la República", "Peersyst", "MinTIC Colombia"] + _targets
+        result["connects_to"] = list(dict.fromkeys(list(result.get("connects_to") or []) + _targets))
+        result["_v130_semantic_child_fix"] = True
+        return result
+
+    if not _has_colombia_context:
+        return result
+
+    # Peersyst: proveedor/socio tecnológico documentado.
+    if pkey == _canonical_entity_key("Peersyst"):
+        result["institution"] = "Peersyst"
+        result["entity_type"] = "Proveedor"
+        result["layer"] = "Proveedor"
+        result["icon"] = "🧰"
+        result["connected"] = True
+        result["confidence"] = max(float(result.get("confidence", 0.0) or 0.0), 0.82)
+        result["route_kind"] = "documented_partner"
+        result["summary"] = (
+            "Peersyst aparece como proveedor/socio tecnológico del piloto Colombia Wholesale CBDC junto a Banco de la República, MinTIC y Ripple. "
+            "Esto prueba participación documental en el piloto, no producción actual ni actividad on-chain pública."
+        )
+        _rrp_add_v130_source_pack(result)
+        _result_add_evidence(result,
+            title="Peersyst case study — Colombia Wholesale CBDC",
+            claim="Peersyst describe colaboración con Banco de la República, MinTIC y Ripple para explorar CBDC y pagos de alto valor.",
+            url="https://peersyst.com/case-study/cbdc-banco-republica-colombia/",
+            target="Banco de la República", evidence_type="partner_page", confidence=0.82)
+        _rrp_route_decision_unique_v126(result, "Banco de la República",
+            "Peersyst figura como socio/proveedor tecnológico del piloto Colombia Wholesale CBDC.",
+            "https://peersyst.com/case-study/cbdc-banco-republica-colombia/",
+            "partner_page", 0.82, "documented_partner", True)
+        _rrp_route_decision_unique_v126(result, "Ripple CBDC Platform",
+            "El piloto se describe conectado a Ripple/Ripple CBDC Platform dentro del caso Colombia.",
+            "https://peersyst.com/case-study/cbdc-banco-republica-colombia/",
+            "partner_page", 0.72, "documented_platform", True)
+        result["connects_to"] = list(dict.fromkeys(list(result.get("connects_to") or []) + ["Banco de la República", "Ripple CBDC Platform", "MinTIC Colombia", "CBDC / MDBC"]))
+        result["_v130_semantic_child_fix"] = True
+        return result
+
+    # MinTIC: actor público del piloto.
+    if pkey == _canonical_entity_key("MinTIC Colombia"):
+        result["institution"] = "MinTIC Colombia"
+        result["entity_type"] = "Gobierno"
+        result["layer"] = "Gobierno"
+        result["icon"] = "🏛️"
+        result["connected"] = True
+        result["confidence"] = max(float(result.get("confidence", 0.0) or 0.0), 0.78)
+        result["route_kind"] = "government_pilot"
+        result["summary"] = (
+            "MinTIC Colombia aparece citado como actor público del piloto/experimentación blockchain con Banco de la República, Ripple y Peersyst. "
+            "La lectura correcta es participación documental en piloto, no operación on-chain ni CBDC lanzada."
+        )
+        _rrp_add_v130_source_pack(result)
+        _result_add_evidence(result,
+            title="Ripple cita a MinTIC en el piloto colombiano",
+            claim="La fuente de Ripple vincula a MinTIC Colombia con la fase de experimentación blockchain junto a Banco de la República y Peersyst.",
+            url="https://ripple.com/ripple-press/ripple-and-peersyst-partner-with-colombias-banco-de-la-republica-in-advancing-the-implementation-and-utilization-of-blockchain-technology/",
+            target="Banco de la República", evidence_type="official_announcement", confidence=0.78)
+        _rrp_route_decision_unique_v126(result, "Banco de la República",
+            "MinTIC aparece como entidad pública relacionada con la experimentación blockchain del piloto colombiano.",
+            "https://ripple.com/ripple-press/ripple-and-peersyst-partner-with-colombias-banco-de-la-republica-in-advancing-the-implementation-and-utilization-of-blockchain-technology/",
+            "official_announcement", 0.78, "government_pilot", True)
+        result["connects_to"] = list(dict.fromkeys(list(result.get("connects_to") or []) + ["Banco de la República", "Ripple CBDC Platform", "Peersyst"]))
+        result["_v130_semantic_child_fix"] = True
+        return result
+
+    # Conceptos/casos de uso: no son instituciones, pero no deben salir como 0% si hay documentación.
+    if pkey in {_canonical_entity_key("CBDC / MDBC"), _canonical_entity_key("Sistema de pagos de alto valor")}:
+        is_payment_system = pkey == _canonical_entity_key("Sistema de pagos de alto valor")
+        result["institution"] = "Sistema de pagos de alto valor" if is_payment_system else "CBDC / MDBC"
+        result["entity_type"] = "RedPrivada" if is_payment_system else "CBDC"
+        result["layer"] = "RedPrivada" if is_payment_system else "CBDC"
+        result["icon"] = "🏦"
+        result["connected"] = True
+        result["confidence"] = max(float(result.get("confidence", 0.0) or 0.0), 0.62 if is_payment_system else 0.58)
+        result["route_kind"] = "documented_use_case" if is_payment_system else "documented_concept"
+        result["summary"] = (
+            "Caso de uso documental del piloto colombiano: pagos de alto valor sobre un prototipo blockchain/CBDC. "
+            "No es una entidad operativa por sí misma, no prueba CBDC lanzada y no prueba transacciones públicas on-chain."
+            if is_payment_system else
+            "Concepto documental del piloto: CBDC/MDBC como línea de experimentación. No equivale a emisión real, uso productivo ni RLUSD."
+        )
+        _rrp_add_v130_source_pack(result)
+        _result_add_evidence(result,
+            title="Piloto Colombia — CBDC/pagos de alto valor",
+            claim="Las fuentes Ripple/Peersyst describen el piloto como exploración de CBDC/blockchain y mejora de pagos de alto valor.",
+            url="https://ripple.com/ripple-press/ripple-and-peersyst-partner-with-colombias-banco-de-la-republica-in-advancing-the-implementation-and-utilization-of-blockchain-technology/",
+            target="Banco de la República", evidence_type="official_announcement", confidence=0.62)
+        _rrp_route_decision_unique_v126(result, "Banco de la República",
+            "El nodo representa el caso de uso/tema del piloto colombiano documentado; no una integración operativa independiente.",
+            "https://ripple.com/ripple-press/ripple-and-peersyst-partner-with-colombias-banco-de-la-republica-in-advancing-the-implementation-and-utilization-of-blockchain-technology/",
+            "official_announcement", 0.62, result["route_kind"], True)
+        result["connects_to"] = list(dict.fromkeys(list(result.get("connects_to") or []) + ["Banco de la República", "Ripple CBDC Platform", "Peersyst"]))
+        result["_v130_semantic_child_fix"] = True
+        return result
+
+    return result
+
+
+_RRP_OLD_FINALIZE_DISCOVERY_RESULT_V130 = _finalize_discovery_result
+
+def _finalize_discovery_result(result: Dict[str, Any], institution_name: str, entity_type: str,
+                               data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    out = _RRP_OLD_FINALIZE_DISCOVERY_RESULT_V130(result, institution_name, entity_type, data)
+    query_context = " ".join(str(x or "") for x in [
+        institution_name, entity_type,
+        st.session_state.get("disc_active_query", "") if "st" in globals() else "",
+        st.session_state.get("disc_pending_query", "") if "st" in globals() else "",
+        st.session_state.get("disc_cascade_parent", "") if "st" in globals() else "",
+        st.session_state.get("disc_raw_query", "") if "st" in globals() else "",
+    ])
+    return _rrp_enrich_colombia_child_nodes_v130(out, query_context)
 
 
 
