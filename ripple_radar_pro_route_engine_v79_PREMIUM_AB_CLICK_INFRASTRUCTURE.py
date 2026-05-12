@@ -23,7 +23,7 @@
 #   pip install streamlit plotly pandas numpy requests python-dateutil streamlit-autorefresh
 #
 # Ejecutar:
-#   streamlit run ripple_radar_pro_route_engine_v115_SAFE_SANITIZER_ADMIN_GUARD.py
+#   streamlit run ripple_radar_pro_route_engine_v118_ONE_BUTTON_CORE_FACTORY_RESET.py
 #
 # Nota honesta:
 # XRPL/RLUSD usa datos públicos reales. Rutas privadas como SWIFT, FedNow, DTCC,
@@ -173,8 +173,8 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v117_2026_05_12_RESET_CONFIRM_NORMALIZE_FIX"
-BUILD_NOTE = "Fix confirmación reset/admin: acepta espacios, mayúsculas/minúsculas y evita botón bloqueado por trailing space"
+BUILD_ID = "v118_2026_05_12_ONE_BUTTON_CORE_FACTORY_RESET"
+BUILD_NOTE = "Un solo botón admin limpia investigación, XRPL histórico, clusters, fingerprints, métricas y cachés; conserva comunidad, pins y presupuesto"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
 import os as _os
@@ -18963,22 +18963,93 @@ def sanitizer_autoflag_hard_invalid(conn: sqlite3.Connection) -> Dict[str, Any]:
 
 
 
-def reset_map_to_core_only(conn: sqlite3.Connection, applied_by: str = "admin", clear_cache: bool = True) -> Dict[str, Any]:
-    """Reset seguro del grafo a estado core-only.
+def _existing_table_count(conn: sqlite3.Connection, table: str) -> int:
+    """Cuenta segura: devuelve 0 si la tabla no existe."""
+    try:
+        row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+        if not row:
+            return 0
+        return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] or 0)
+    except Exception:
+        return 0
 
-    No borra la SQLite completa. Conserva chat, usuarios, pins, presupuesto,
-    raw_events, daily_metrics, clusters y fingerprints. Limpia solo memoria de
-    investigación que puede contaminar mapas/fichas: rutas dinámicas, pruebas,
-    A→B, cachés de Discovery, wallets descubiertas y colas de whales.
+
+def _clear_runtime_state_after_core_reset() -> None:
+    """Limpia memoria de sesión que podría seguir mostrando datos viejos tras reset."""
+    try:
+        keep_exact = {
+            "core_reset_admin_ok",
+            "full_core_reset_admin_ok",
+            "safe_sanitizer_admin_ok",
+            "community_user",
+            "community_user_id",
+            "rrp_lang",
+        }
+        wipe_prefixes = (
+            "disc", "discovery", "institution", "cascade", "route", "routes", "ab_",
+            "map", "node", "selected_node", "focus_node", "proof", "wallet", "whale",
+            "cluster", "fingerprint", "daily", "metric", "safe_sanitizer", "core_reset_confirm",
+        )
+        for key in list(st.session_state.keys()):
+            if key in keep_exact:
+                continue
+            low = str(key).lower()
+            if any(low.startswith(p) for p in wipe_prefixes):
+                try:
+                    del st.session_state[key]
+                except Exception:
+                    pass
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def reset_map_to_core_only(conn: sqlite3.Connection, applied_by: str = "admin", clear_cache: bool = True, full_reset: bool = True) -> Dict[str, Any]:
+    """Reset seguro del radar a estado core-only.
+
+    v118: un único botón admin deja la app limpia de investigación y señales
+    acumuladas que puedan falsear mapas/métricas. Las rutas core no viven en
+    SQLite: se reconstruyen desde constantes del código (NODES/ROUTES/core_infra).
+
+    Conserva lo mínimo operativo/social:
+    - community_users, community_messages, chat_translations, persistent_pinned_messages
+    - api_budget, active_sessions
+
+    Limpia investigación y señales calculadas:
+    - raw_events, daily_metrics, clusters, fingerprints
+    - dynamic_nodes/routes, proofs, verifications, route_paths
+    - discovery/cache/aliases/audit
+    - discovered wallets/whales, sanitizer state, queues/logs derivados
     """
     ensure_discovery_tables(conn)
     ensure_route_paths_table(conn)
     ensure_discovered_wallets_table(conn)
     ensure_unknown_whales_table(conn)
     ensure_sanitizer_tables(conn)
-    backup = create_safe_db_backup(conn, "pre_core_only_reset")
+    backup = create_safe_db_backup(conn, "pre_one_button_core_factory_reset")
     now = datetime.now(timezone.utc).isoformat()
-    tables = [
+
+    # Tablas que NO se limpian: comunidad, pins, presupuesto, sesiones y estructura.
+    preserve = {
+        "community_users",
+        "community_messages",
+        "chat_translations",
+        "persistent_pinned_messages",
+        "api_budget",
+        "active_sessions",
+    }
+
+    # Lista explícita para evitar tocar tablas sociales aunque aparezcan nuevas.
+    reset_tables = [
+        # Datos reales/históricos que alimentan métricas y pueden dejar la UI llena.
+        "raw_events",
+        "daily_metrics",
+        "clusters",
+        "fingerprints",
+        # Investigación acumulada / pruebas / rutas / mapas dinámicos.
         "dynamic_nodes",
         "dynamic_routes",
         "connection_proofs",
@@ -18986,65 +19057,101 @@ def reset_map_to_core_only(conn: sqlite3.Connection, applied_by: str = "admin", 
         "route_paths",
         "discovered_wallets",
         "unknown_whales",
+        # Caché/Discovery/IA.
+        "institution_search_cache",
+        "search_cache_aliases",
+        "api_search_audit",
+        "ai_waiting_queue",
+        # Sanitizador y logs derivados. Luego insertamos un único evento limpio.
+        "sanitizer_quarantine",
+        "sanitizer_runs",
+        "map_update_log",
+        "app_events",
     ]
-    if clear_cache:
-        tables += ["institution_search_cache", "search_cache_aliases", "api_search_audit"]
+    if not clear_cache:
+        for t in ["institution_search_cache", "search_cache_aliases", "api_search_audit"]:
+            if t in reset_tables:
+                reset_tables.remove(t)
+
+    # Defensa extra: nunca limpiar tablas preservadas aunque alguien las añada por error.
+    reset_tables = [t for t in reset_tables if t not in preserve]
+
     counts: Dict[str, int] = {}
     with conn:
-        for table in tables:
+        for table in reset_tables:
             try:
-                row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
-                counts[table] = int(row[0] or 0) if row else 0
+                row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+                if not row:
+                    counts[table] = 0
+                    continue
+                counts[table] = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] or 0)
                 conn.execute(f"DELETE FROM {table}")
             except Exception:
                 counts[table] = -1
-        try:
-            conn.execute("DELETE FROM sanitizer_quarantine")
-            conn.execute("DELETE FROM sanitizer_runs")
-        except Exception:
-            pass
-        conn.execute(
-            "INSERT INTO map_update_log(update_type,entity_name,details,updated_at) VALUES (?,?,?,?)",
-            ("core_only_reset", "global", json.dumps({"counts": counts, "backup": backup}, ensure_ascii=False), now),
-        )
+        # Evento único de reset para que otras sesiones sepan que deben refrescar cuando el usuario lo decida.
         try:
             conn.execute(
-                "INSERT INTO app_events(level,message,details,created_at) VALUES (?,?,?,?)",
-                ("warning", "Core-only reset aplicado", json.dumps({"counts": counts, "backup": backup}, ensure_ascii=False), now),
+                "INSERT INTO map_update_log(update_type,entity_name,details,updated_at) VALUES (?,?,?,?)",
+                ("one_button_core_factory_reset", "global", json.dumps({"counts": counts, "backup": backup}, ensure_ascii=False), now),
             )
         except Exception:
             pass
-    return {"backup": backup, "counts": counts}
+        try:
+            conn.execute(
+                "INSERT INTO app_events(level,message,details,created_at) VALUES (?,?,?,?)",
+                ("warning", "Reset total core-only aplicado", json.dumps({"counts": counts, "backup": backup}, ensure_ascii=False), now),
+            )
+        except Exception:
+            pass
+    try:
+        conn.execute("VACUUM")
+    except Exception:
+        pass
+    return {"backup": backup, "counts": counts, "preserved": sorted(preserve)}
 
 
 def render_core_only_reset_panel(conn: sqlite3.Connection) -> None:
-    st.markdown("### 🧼 Reset seguro a mapa limpio core-only")
+    st.markdown("### 🧼 Limpieza total segura — dejar solo infraestructura core")
     st.markdown("""
-Esto deja el radar como base limpia: **XRPL, RLUSD, Ripple Payments, Treasury, Rail, Custody/Metaco, Hidden Road/Prime, DEX/AMM, Permissioned DEX, Trustlines, Gateways y rutas core fijas**.
+Este es el botón simple para empezar de cero **sin falsear datos**.
 
-No borra chat, usuarios, mensajes fijados, presupuesto, métricas XRPL ni histórico de ledger. Solo limpia investigación acumulada que puede contaminar mapas: Discovery, cachés, rutas dinámicas, pruebas, fichas A→B y wallets descubiertas.
+Deja el radar solo con la infraestructura base definida en el código: **XRPL, RLUSD, Ripple Payments, Treasury, Rail, Custody/Metaco, Hidden Road/Prime, Permissioned DEX, DEX/AMM, Trustlines, Public Gateway, Large Transfers y Clusters**.
+
+Borra también lo que antes te seguía saliendo arriba en diagnóstico: **eventos XRPL guardados, días calculados, clusters, fingerprints, rutas dinámicas, pruebas, Discovery, cachés, fichas A→B y wallets descubiertas**.
+
+No borra comunidad, mensajes fijados, usuarios, traducciones del chat, presupuesto API ni sesiones activas.
 """)
-    c1, c2, c3 = st.columns(3)
-    def _cnt(t: str) -> int:
-        try:
-            return int(conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] or 0)
-        except Exception:
-            return 0
-    c1.metric("Rutas dinámicas", _cnt("dynamic_routes"))
-    c2.metric("Pruebas guardadas", _cnt("connection_proofs"))
-    c3.metric("Caché Discovery", _cnt("institution_search_cache"))
 
-    admin_ok = render_admin_guard("core_reset")
-    clear_cache = st.checkbox("Borrar también caché/aliases de Discovery", value=True, key="core_reset_clear_cache", disabled=not admin_ok)
-    confirm = st.text_input("Confirmación reset", key="core_reset_confirm", placeholder="Escribe RESET CORE", disabled=not admin_ok)
-    confirm_norm = str(confirm or "").strip().upper()
-    if admin_ok and confirm and confirm_norm != "RESET CORE":
-        st.warning("La confirmación debe ser RESET CORE. El sistema ahora ignora espacios al principio/final y mayúsculas/minúsculas, pero no acepta texto extra.")
-    if admin_ok and confirm_norm == "RESET CORE":
-        st.success("✅ Confirmación válida. Ya puedes aplicar el reset core-only.")
-    if st.button("🧼 Dejar mapa limpio core-only", key="core_reset_apply", use_container_width=True, disabled=(not admin_ok or confirm_norm != "RESET CORE")):
-        result = reset_map_to_core_only(conn, applied_by="admin", clear_cache=clear_cache)
-        st.success(f"Reset core-only aplicado. Backup: {result.get('backup')} · limpiado: {result.get('counts')}")
+    count_tables = [
+        ("Eventos XRPL", "raw_events"),
+        ("Días calculados", "daily_metrics"),
+        ("Clusters", "clusters"),
+        ("Fingerprints", "fingerprints"),
+        ("Rutas dinámicas", "dynamic_routes"),
+        ("Pruebas", "connection_proofs"),
+        ("Caché Discovery", "institution_search_cache"),
+        ("Wallets descubiertas", "discovered_wallets"),
+    ]
+    rows = []
+    for label, table in count_tables:
+        rows.append({"Bloque": label, "Tabla": table, "Filas que se limpiarán": _existing_table_count(conn, table)})
+    try:
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    except Exception:
+        st.table(pd.DataFrame(rows))
+
+    admin_ok = render_admin_guard("full_core_reset")
+    if not admin_ok:
+        st.info("Desbloquea como admin con `RRP_ADMIN_TOKEN`. Después aparecerá un único botón rojo de limpieza.")
+        return
+
+    st.warning("Esta acción crea backup automático y luego limpia los datos acumulados. Las rutas core se regeneran desde el código. No se borran usuarios, chat ni pins.")
+    if st.button("🧼 LIMPIAR TODO Y DEJAR SOLO CORE", key="one_button_full_core_reset_apply", use_container_width=True, type="primary"):
+        result = reset_map_to_core_only(conn, applied_by="admin", clear_cache=True, full_reset=True)
+        _clear_runtime_state_after_core_reset()
+        st.success(f"Limpieza total core-only aplicada. Backup: {result.get('backup')}")
+        with st.expander("Ver resumen técnico de lo limpiado", expanded=False):
+            st.json(result)
         st.session_state["map_last_seen_global"] = _get_last_map_update(conn)
         st.session_state["map_last_seen"] = _get_last_map_update(conn)
         st.rerun()
@@ -20323,7 +20430,7 @@ La simulación usa precio {price_txt} (fuente: {html.escape(str(price_source))})
         st.code("""python -m venv .venv
 .venv\\Scripts\\activate
 pip install streamlit plotly pandas numpy requests python-dateutil
-streamlit run ripple_radar_pro_route_engine_v115_SAFE_SANITIZER_ADMIN_GUARD.py""", language="bash")
+streamlit run ripple_radar_pro_route_engine_v118_ONE_BUTTON_CORE_FACTORY_RESET.py""", language="bash")
         st.warning("Las rutas privadas no se ven por dentro. Este radar vigila las huellas públicas obligatorias.")
 
     st.divider()
