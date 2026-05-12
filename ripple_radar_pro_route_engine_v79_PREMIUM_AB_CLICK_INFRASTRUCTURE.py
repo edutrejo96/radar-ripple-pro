@@ -173,8 +173,8 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v116_2026_05_12_CORE_ONLY_RESET_QUIET_SYNC"
-BUILD_NOTE = "Reset core-only seguro + sync silencioso con aviso flotante, sin rerun agresivo"
+BUILD_ID = "v117_2026_05_12_RESET_CONFIRM_NORMALIZE_FIX"
+BUILD_NOTE = "Fix confirmación reset/admin: acepta espacios, mayúsculas/minúsculas y evita botón bloqueado por trailing space"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
 import os as _os
@@ -19037,7 +19037,12 @@ No borra chat, usuarios, mensajes fijados, presupuesto, métricas XRPL ni histó
     admin_ok = render_admin_guard("core_reset")
     clear_cache = st.checkbox("Borrar también caché/aliases de Discovery", value=True, key="core_reset_clear_cache", disabled=not admin_ok)
     confirm = st.text_input("Confirmación reset", key="core_reset_confirm", placeholder="Escribe RESET CORE", disabled=not admin_ok)
-    if st.button("🧼 Dejar mapa limpio core-only", key="core_reset_apply", use_container_width=True, disabled=(not admin_ok or confirm != "RESET CORE")):
+    confirm_norm = str(confirm or "").strip().upper()
+    if admin_ok and confirm and confirm_norm != "RESET CORE":
+        st.warning("La confirmación debe ser RESET CORE. El sistema ahora ignora espacios al principio/final y mayúsculas/minúsculas, pero no acepta texto extra.")
+    if admin_ok and confirm_norm == "RESET CORE":
+        st.success("✅ Confirmación válida. Ya puedes aplicar el reset core-only.")
+    if st.button("🧼 Dejar mapa limpio core-only", key="core_reset_apply", use_container_width=True, disabled=(not admin_ok or confirm_norm != "RESET CORE")):
         result = reset_map_to_core_only(conn, applied_by="admin", clear_cache=clear_cache)
         st.success(f"Reset core-only aplicado. Backup: {result.get('backup')} · limpiado: {result.get('counts')}")
         st.session_state["map_last_seen_global"] = _get_last_map_update(conn)
@@ -19089,9 +19094,10 @@ Reglas principales: sin motores internos como conexiones, sin 0% como prueba, si
 
     admin_ok = render_admin_guard("safe_sanitizer")
     confirm = st.text_input("Confirmación para aplicar", key="safe_sanitizer_confirm", placeholder="Escribe SANEAR para aplicar cuarentena reversible", disabled=not admin_ok)
+    confirm_sanear_norm = str(confirm or "").strip().upper()
     cols = st.columns(2)
     with cols[0]:
-        if st.button("🛡️ Aplicar cuarentena reversible", key="safe_sanitizer_apply", use_container_width=True, disabled=(not admin_ok or confirm != "SANEAR")):
+        if st.button("🛡️ Aplicar cuarentena reversible", key="safe_sanitizer_apply", use_container_width=True, disabled=(not admin_ok or confirm_sanear_norm != "SANEAR")):
             result = apply_sanitizer_quarantine(conn, report, applied_by="admin")
             st.session_state.pop("safe_sanitizer_report", None)
             st.success(f"Saneo aplicado. Backup: {result.get('backup') or 'no disponible'} · {result.get('counts')}")
