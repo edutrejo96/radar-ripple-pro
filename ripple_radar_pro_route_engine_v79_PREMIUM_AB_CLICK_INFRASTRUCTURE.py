@@ -172,8 +172,8 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v98_2026_05_12_SECTION_ISOLATION_NO_MIXED_TABS"
-BUILD_NOTE = "Cache-first obligatorio + memoria compartida + A-B limpio con números vivos"
+BUILD_ID = "v101_2026_05_12_CLEAN_RESEARCH_AND_STATIC_CLICK_ROUTES"
+BUILD_NOTE = "Cache-first + reparación de rutas fijas + nodos estáticos recuperables"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
 import os as _os
@@ -1528,10 +1528,43 @@ CONNECTS_TO_NODE: Dict[str, str] = {
     "corredores fx": "Corredores FX", "fx": "Corredores FX",
 }
 
-ROUTES = []
-# CLEAN MODE: sin rutas/aristas preestablecidas.
-# El mapa arranca sin conexiones. Las rutas se crean solo cuando una búsqueda,
-# una verificación documental o una señal on-chain aporta evidencia concreta A↔B.
+# Rutas fijas mínimas de vigilancia del mapa.
+# IMPORTANTE: estas líneas NO afirman una integración confirmada A↔B.
+# Son el esqueleto visual/operativo para que los nodos fijos como SWIFT, FedNow,
+# Mastercard o SEPA/ACH no queden muertos si se limpian las rutas dinámicas.
+# Las conexiones confirmadas siguen entrando por dynamic_routes + connection_proofs.
+ROUTES = [
+    # Rails privados / públicos vigilados por el radar
+    ("SWIFT", "Topology Engine", "watch", "institutional_route_score", "SWIFT → vigilancia topológica"),
+    ("FedNow", "Topology Engine", "watch", "institutional_route_score", "FedNow → vigilancia topológica"),
+    ("Mastercard", "Topology Engine", "watch", "institutional_route_score", "Mastercard → vigilancia topológica"),
+    ("SEPA/ACH", "Topology Engine", "watch", "institutional_route_score", "SEPA/ACH → vigilancia topológica"),
+    ("Federal Reserve", "Topology Engine", "watch", "institutional_route_score", "Federal Reserve → vigilancia topológica"),
+    ("Bank for International Settlements (BIS)", "Topology Engine", "watch", "institutional_route_score", "BIS → vigilancia topológica"),
+    ("Project mBridge", "Topology Engine", "watch", "institutional_route_score", "mBridge → vigilancia topológica"),
+
+    # Motores internos del radar
+    ("Topology Engine", "Anomaly Engine", "model", "topology_score", "Topología → anomalías"),
+    ("Anomaly Engine", "Fingerprint Engine", "model", "anomaly_score", "Anomalías → fingerprints"),
+    ("Fingerprint Engine", "Clusters", "model", "fingerprint_score", "Fingerprints → clusters"),
+
+    # Huellas públicas observables
+    ("Public Gateway", "XRPL", "public", "public_xrpl_score", "Gateway público → XRPL"),
+    ("Trustlines", "XRPL", "public", "trustline_score", "Trustlines → XRPL"),
+    ("DEX/AMM", "XRPL", "public", "dex_score", "DEX/AMM → XRPL"),
+    ("Large Transfers", "XRPL", "public", "large_transfer_score", "Large transfers → XRPL"),
+    ("Clusters", "XRPL", "public", "cluster_score", "Clusters → XRPL"),
+    ("RLUSD", "XRPL", "public", "public_xrpl_score", "RLUSD → XRPL"),
+    ("Ethereum", "Fingerprint Engine", "watch", "cross_network_score", "Ethereum → vigilancia cross-network"),
+
+    # Núcleo Ripple como nodos de vigilancia, no como prueba directa contra entidades externas
+    ("Ripple Payments", "Public Gateway", "watch", "payment_flow_score", "Ripple Payments → huella pública observable"),
+    ("Custody/Metaco", "Fingerprint Engine", "watch", "custody_score", "Custody/Metaco → fingerprints institucionales"),
+    ("Hidden Road / Prime", "Fingerprint Engine", "watch", "prime_brokerage_score", "Prime brokerage → fingerprints institucionales"),
+    ("Treasury", "Fingerprint Engine", "watch", "institutional_route_score", "Treasury → fingerprints institucionales"),
+    ("Rail", "Topology Engine", "watch", "institutional_route_score", "Rail → vigilancia topológica"),
+    ("Ripple Escrow", "Large Transfers", "watch", "large_transfer_score", "Ripple Escrow → grandes transferencias"),
+]
 
 
 # =============================================================================
@@ -3429,9 +3462,10 @@ def render_node_info_panel(
                 )
                 is_watch = kind in ("watch",) or "sin verificar" in proof_html or "Sin evidencia" in proof_html
                 bar_html = (
-                    f"<span style='color:#475569;font-size:0.70rem'>📡 Señal XRPL: {int(sig*100)}%</span>"
-                    if is_watch and "✅" not in proof_html and "🟡" not in proof_html
-                    else sig_bar(sig)
+                    "<span style='color:#334155;font-size:0.70rem;font-style:italic'>⏳ Verificar para obtener confianza real</span>"
+                    if is_watch and sig <= 0 and "✅" not in proof_html and "🟡" not in proof_html
+                    else (f"<span style='color:#475569;font-size:0.70rem'>📡 Señal XRPL: {int(sig*100)}%</span>"
+                          if is_watch and "✅" not in proof_html and "🟡" not in proof_html else sig_bar(sig))
                 )
                 st.markdown(f"""
 <div style='background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.10);
@@ -10896,6 +10930,241 @@ def _get_search_cache(conn: sqlite3.Connection, name: str,
     return None
 
 
+
+def _delete_discovery_cache_for_entity(conn: sqlite3.Connection, name: str,
+                                       search_type: str = "discovery") -> int:
+    """Borra caché/aliases de una entidad para obligar a una búsqueda online real.
+
+    Incluye claves modernas (discovery::<normalizado>) y claves legacy guardadas
+    como nombre plano en versiones antiguas.
+    """
+    deleted = 0
+    try:
+        raw = str(name or "").strip()
+        canonical = _canonical_entity_name(raw)
+        variants = {raw, canonical, raw.lower(), canonical.lower(), _norm_key(raw), _norm_key(canonical)}
+        variants.update(_entity_alias_keys(raw))
+        variants.update(_entity_alias_keys(canonical))
+        cache_keys = set()
+        for v in list(variants):
+            v = str(v or "").strip()
+            if not v:
+                continue
+            cache_keys.add(v)
+            cache_keys.add(v.lower())
+            cache_keys.add(f"{search_type}::{_norm_key(v)}")
+        cache_keys.update(_cache_alias_keys(raw, search_type))
+        cache_keys.update(_cache_alias_keys(canonical, search_type))
+
+        canonical_queries = set()
+        for k in list(cache_keys):
+            for row in conn.execute(
+                "SELECT canonical_query FROM search_cache_aliases WHERE alias_key=? OR canonical_query=?",
+                (k, k),
+            ).fetchall():
+                if row and row[0]:
+                    canonical_queries.add(row[0])
+        cache_keys.update(canonical_queries)
+
+        for k in list(cache_keys):
+            cur = conn.execute("DELETE FROM institution_search_cache WHERE query=?", (k,))
+            deleted += int(cur.rowcount or 0)
+            cur = conn.execute(
+                "DELETE FROM search_cache_aliases WHERE alias_key=? OR canonical_query=?",
+                (k, k),
+            )
+            deleted += int(cur.rowcount or 0)
+        conn.commit()
+        _audit_search_decision(conn, raw, search_type, "cache_purged_for_clean_research", "ui_clean_research", f"deleted={deleted}")
+    except Exception:
+        pass
+    return deleted
+
+
+def _purge_discovery_associations_for_entity(conn: sqlite3.Connection, name: str,
+                                             purge_cache: bool = True) -> Dict[str, int]:
+    """Elimina lo que la entidad ya encontró para poder re-investigar de cero.
+
+    Borra solo memoria dinámica/derivada de esa entidad: rutas dinámicas, pruebas
+    guardadas, route_paths y caché de búsqueda. No toca NODES ni ROUTES fijas.
+    """
+    ensure_discovery_tables(conn)
+    try:
+        ensure_route_paths_table(conn)
+    except Exception:
+        pass
+
+    raw = str(name or "").strip()
+    canonical = _canonical_entity_name(raw)
+    entity_key = _canonical_entity_key(canonical)
+    counters = {"cache": 0, "dynamic_routes": 0, "connection_proofs": 0, "route_paths": 0, "node_verifications": 0, "dynamic_nodes": 0, "audit": 0}
+
+    def same_entity(value: Any) -> bool:
+        try:
+            return _canonical_entity_key(value) == entity_key
+        except Exception:
+            return False
+
+    try:
+        # 1) Rutas dinámicas directas A→B donde la entidad participa.
+        rows = conn.execute("SELECT route_id, src, dst FROM dynamic_routes").fetchall()
+        ids = [r[0] for r in rows if same_entity(r[1]) or same_entity(r[2])]
+        for rid in ids:
+            cur = conn.execute("DELETE FROM dynamic_routes WHERE route_id=?", (rid,))
+            counters["dynamic_routes"] += int(cur.rowcount or 0)
+
+        # 2) Pruebas guardadas A↔B donde la entidad participa.
+        rows = conn.execute("SELECT proof_id, node_a, node_b, node_a_key, node_b_key FROM connection_proofs").fetchall()
+        pids = []
+        for pid, a, b, ak, bk in rows:
+            if same_entity(a) or same_entity(b) or str(ak or "") == entity_key or str(bk or "") == entity_key:
+                pids.append(pid)
+        for pid in pids:
+            cur = conn.execute("DELETE FROM connection_proofs WHERE proof_id=?", (pid,))
+            counters["connection_proofs"] += int(cur.rowcount or 0)
+
+        # 3) Rutas A→B materializadas.
+        try:
+            rows = conn.execute("SELECT rowid, origin, public_hop, destination FROM route_paths").fetchall()
+            rowids = [r[0] for r in rows if same_entity(r[1]) or same_entity(r[2]) or same_entity(r[3])]
+            for rowid in rowids:
+                cur = conn.execute("DELETE FROM route_paths WHERE rowid=?", (rowid,))
+                counters["route_paths"] += int(cur.rowcount or 0)
+        except Exception:
+            pass
+
+        # 4) Verificación manual/derivada del nodo.
+        try:
+            rows = conn.execute("SELECT node FROM node_verifications").fetchall()
+            for (node,) in rows:
+                if same_entity(node):
+                    cur = conn.execute("DELETE FROM node_verifications WHERE node=?", (node,))
+                    counters["node_verifications"] += int(cur.rowcount or 0)
+        except Exception:
+            pass
+
+        # 5) Nodo dinámico principal solo si NO es nodo fijo. SWIFT/FedNow/etc. se conservan.
+        if canonical not in NODES:
+            try:
+                rows = conn.execute("SELECT name FROM dynamic_nodes").fetchall()
+                for (node,) in rows:
+                    if same_entity(node):
+                        cur = conn.execute("DELETE FROM dynamic_nodes WHERE name=?", (node,))
+                        counters["dynamic_nodes"] += int(cur.rowcount or 0)
+            except Exception:
+                pass
+
+        # 6) Auditoría de búsquedas de esa entidad: no afecta al mapa, pero evita que
+        # el panel siga sugiriendo que la última investigación antigua es la actual.
+        try:
+            rows = conn.execute("SELECT id, query_text, canonical_key FROM api_search_audit WHERE search_type='discovery'").fetchall()
+            for aid, qtxt, ckey in rows:
+                if same_entity(qtxt) or str(ckey or "") == entity_key:
+                    cur = conn.execute("DELETE FROM api_search_audit WHERE id=?", (aid,))
+                    counters["audit"] += int(cur.rowcount or 0)
+        except Exception:
+            pass
+
+        if purge_cache:
+            counters["cache"] = _delete_discovery_cache_for_entity(conn, raw, "discovery")
+
+        conn.commit()
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+        _log_map_update(conn, "clean_research_purge", canonical, json.dumps(counters, ensure_ascii=False))
+    except Exception as exc:
+        counters["error"] = str(exc)[:240]
+    return counters
+
+
+
+def _static_routes_for_entity(name: Any, limit: int = 12) -> List[Dict[str, Any]]:
+    """Devuelve las rutas base/fijas donde participa una entidad.
+
+    Sirve para que Descubrimientos muestre lo que ya existe en el grafo aunque
+    la re-búsqueda limpia haya borrado rutas dinámicas/pruebas previas. Estas
+    rutas son clicables indirectamente: el botón enfoca el nodo en Radar y allí
+    se ven junto con las futuras rutas descubiertas.
+    """
+    raw = str(name or "").strip()
+    if not raw:
+        return []
+    canonical = _canonical_target_node(raw, set(NODES.keys())) or _canonical_entity_name(raw)
+    entity_key = _canonical_entity_key(canonical)
+    out: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for src, dst, kind, signal_col, label in ROUTES:
+        try:
+            src_key = _canonical_entity_key(src)
+            dst_key = _canonical_entity_key(dst)
+        except Exception:
+            src_key, dst_key = str(src).lower(), str(dst).lower()
+        if entity_key not in {src_key, dst_key}:
+            continue
+        peer = dst if entity_key == src_key else src
+        direction = "out" if entity_key == src_key else "in"
+        rkey = f"{src_key}->{dst_key}:{kind}:{signal_col}"
+        if rkey in seen:
+            continue
+        seen.add(rkey)
+        out.append({
+            "src": src,
+            "dst": dst,
+            "peer": peer,
+            "direction": direction,
+            "kind": kind,
+            "signal_col": signal_col,
+            "label": label,
+            "canonical_node": canonical,
+            "fixed": True,
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _result_future_routes_for_display(result: Dict[str, Any], limit: int = 12) -> List[Dict[str, Any]]:
+    """Rutas candidatas/futuras derivadas del resultado actual de Discovery.
+
+    No garantiza que estén verificadas. Solo prepara una lectura clara de lo que
+    el resultado propone añadir/actualizar para compararlo con rutas fijas.
+    """
+    if not isinstance(result, dict):
+        return []
+    root = _canonical_entity_name(result.get("institution", ""))
+    routes: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+
+    def push(dst: Any, source: str = "resultado", kind: str = "candidate") -> None:
+        nonlocal routes
+        dst_name = _canonical_target_node(dst, set(NODES.keys())) or _canonical_entity_name(dst)
+        if not dst_name or dst_name in {"Descubierto", "?"}:
+            return
+        if _canonical_entity_key(dst_name) == _canonical_entity_key(root):
+            return
+        key = f"{_canonical_entity_key(root)}->{_canonical_entity_key(dst_name)}:{source}:{kind}"
+        if key in seen:
+            return
+        seen.add(key)
+        routes.append({"src": root, "dst": dst_name, "peer": dst_name, "direction": "out", "kind": kind, "source": source})
+
+    for x in result.get("connects_to") or []:
+        push(x, "connects_to", "detected")
+    for mp in result.get("map_points") or []:
+        if isinstance(mp, dict):
+            for target in mp.get("connects_to") or []:
+                push(target, f"map_point:{mp.get('name','')}", "map_point")
+        else:
+            push(mp, "map_points", "map_point")
+    for p in result.get("partners") or []:
+        if isinstance(p, dict):
+            push(p.get("name"), "partners", "partner")
+        else:
+            push(p, "partners", "partner")
+    return routes[:limit]
+
 def _set_search_cache(conn: sqlite3.Connection, name: str,
                       result: Dict, search_type: str = "discovery") -> None:
     """Guarda resultado en caché compartida con TTL y aliases normalizados."""
@@ -14318,7 +14587,8 @@ def _build_search_prompt(entity_name: str, entity_type: str) -> str:
 
 
 def search_institution_connections(institution_name: str,
-                                   conn: Optional[sqlite3.Connection] = None) -> Dict[str, Any]:
+                                   conn: Optional[sqlite3.Connection] = None,
+                                   force_online: bool = False) -> Dict[str, Any]:
     """
     Clasifica la entidad y usa un prompt especializado para buscar su conexion
     con la infraestructura Ripple/XRPL. Cada tipo de entidad deja un rastro
@@ -14330,7 +14600,7 @@ def search_institution_connections(institution_name: str,
     entity_type = _classify_entity(institution_name)
 
     # ── Caché compartida: check antes de cualquier llamada AI ────────────────
-    if conn is not None:
+    if conn is not None and not force_online:
         _cached = _get_search_cache(conn, institution_name, "discovery")
         if _cached is not None:
             # Re-finalizar resultados antiguos: evita que un caché con JSON roto conserve confianza 0%.
@@ -15985,21 +16255,46 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
         "Forzar búsqueda online aunque exista memoria/caché",
         value=False,
         key="disc_force_new_search",
-        help="Déjalo desactivado para no gastar API si la entidad ya fue investigada."
+        help="Actívalo para consultar internet otra vez aunque exista caché. Si quieres borrar lo anterior antes, activa también la opción de re-búsqueda limpia."
+    )
+    clean_research = st.checkbox(
+        "🧹 Re-búsqueda limpia: borrar lo anterior de esta entidad antes de buscar",
+        value=False,
+        key="disc_clean_research",
+        help="Borra caché, rutas dinámicas, pruebas y fichas A→B anteriores de esa entidad. No borra nodos fijos como SWIFT; solo sus asociaciones dinámicas."
     )
     _preflight_status = _render_cache_first_status(conn, query.strip(), "discovery") if query and query.strip() else {"cache": False, "local_total": 0, "can_skip_api": False}
 
     # Guardar la query que queremos buscar en session_state para que sobreviva el rerun
     # Si no hay API key, solo permitir si hay resultado cacheado
     if do_search and query and query.strip() and not _has_api_key:
-        _precheck = _get_search_cache(conn, query.strip(), "discovery")
-        if _precheck:
-            st.session_state["disc_pending_query"] = query.strip()
-            st.rerun()
+        if clean_research or force_new_search:
+            st.error("🔑 Sin API key no puedo hacer re-búsqueda online. Desactiva la re-búsqueda limpia/forzada para ver caché, o configura `ANTHROPIC_API_KEY`.")
         else:
-            st.error("🔑 Sin API key — esta institución no está en caché. Configura `ANTHROPIC_API_KEY` para buscarla.")
+            _precheck = _get_search_cache(conn, query.strip(), "discovery")
+            if _precheck:
+                st.session_state["disc_pending_query"] = query.strip()
+                st.rerun()
+            else:
+                st.error("🔑 Sin API key — esta institución no está en caché. Configura `ANTHROPIC_API_KEY` para buscarla.")
     if do_search and query and query.strip() and _has_api_key:
         _raw_q = query.strip()
+        if clean_research:
+            _purged = _purge_discovery_associations_for_entity(conn, _raw_q, purge_cache=True)
+            st.info(
+                "🧹 Re-búsqueda limpia preparada: "
+                f"{_purged.get('dynamic_routes',0)} rutas dinámicas, "
+                f"{_purged.get('connection_proofs',0)} pruebas, "
+                f"{_purged.get('route_paths',0)} fichas A→B, "
+                f"{_purged.get('audit',0)} rastros de auditoría y "
+                f"{_purged.get('cache',0)} entradas de caché/alias eliminadas."
+            )
+            force_new_search = True
+            st.session_state["disc_force_online_once"] = True
+        elif force_new_search:
+            st.session_state["disc_force_online_once"] = True
+        else:
+            st.session_state.pop("disc_force_online_once", None)
         # Cache-first obligatorio: no meter a la fila AI si ya tenemos respuesta reutilizable.
         if not force_new_search:
             _cached_now = _get_search_cache(conn, _raw_q, "discovery")
@@ -16012,8 +16307,58 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
                 st.rerun()
             _local_now = _local_knowledge_bundle(conn, _raw_q)
             if int(_local_now.get("total", 0)) > 0:
-                _audit_search_decision(conn, _raw_q, "discovery", "blocked_by_local_memory", "ui_preflight", "existing proofs/routes found")
-                st.warning("🧠 Ya existen datos internos para esta entidad. Revisa Rutas A→B / Radar antes de gastar API. Activa 'Forzar búsqueda online' si de verdad quieres ampliar.")
+                _audit_search_decision(conn, _raw_q, "discovery", "local_memory_found", "ui_preflight", "existing proofs/routes found")
+                st.warning(
+                    "🧠 Ya existen datos internos para esta entidad. No bloqueo la recuperación: "
+                    "puedes reconstruir el resultado desde caché/memoria o forzar una búsqueda online si quieres ampliar."
+                )
+
+                c_mem1, c_mem2 = st.columns([1, 1])
+                with c_mem1:
+                    rebuild_from_memory = st.button(
+                        "♻️ Reconstruir desde memoria/caché",
+                        use_container_width=True,
+                        key="disc_rebuild_from_local_memory_btn",
+                    )
+                with c_mem2:
+                    st.caption("Esto no gasta API y sirve cuando el nodo fijo existe pero sus rutas fueron borradas.")
+
+                if rebuild_from_memory:
+                    _cached_restore = _get_search_cache(conn, _raw_q, "discovery")
+                    if _cached_restore is not None:
+                        _cached_restore = _finalize_discovery_result(_cached_restore, _raw_q, _classify_entity(_raw_q), None)
+                        _repair_info = apply_discovery_to_map(conn, _cached_restore, auto=False)
+                        st.session_state["disc_result"] = _cached_restore
+                        st.session_state["disc_from_cache"] = True
+                        st.session_state["disc_query"] = _raw_q
+                        st.success(
+                            f"♻️ Reconstruido desde caché: "
+                            f"{_repair_info.get('added_routes', 0)} rutas · "
+                            f"{_repair_info.get('added_nodes', 0)} nodos/puntos."
+                        )
+                        st.rerun()
+                    else:
+                        _canon_static = _canonical_target_node(_raw_q, set(NODES.keys())) or _canonical_entity_name(_raw_q)
+                        if _canon_static in NODES:
+                            # Aunque no haya caché, los nodos fijos vuelven a tener su esqueleto visual en ROUTES.
+                            st.session_state["disc_result"] = {
+                                "institution": _canon_static,
+                                "entity_type": _classify_entity(_canon_static),
+                                "connected": True,
+                                "confidence": 0.40,
+                                "summary": "Nodo fijo restaurado: se muestran rutas base de vigilancia; no equivale a prueba directa.",
+                                "ripple_products": [],
+                                "layer": NODES[_canon_static].get("layer", "Descubierto"),
+                                "icon": NODES[_canon_static].get("icon", "🔎"),
+                                "connects_to": [],
+                                "route_kind": "watch",
+                                "sources": [],
+                                "wallets": [], "corridors": [], "partners": [], "map_points": [], "evidence_items": [],
+                            }
+                            st.success("♻️ Nodo fijo restaurado. Ve a Radar: el esqueleto de vigilancia vuelve a dibujarse.")
+                            st.rerun()
+                        else:
+                            st.error("No encontré caché reutilizable ni nodo fijo con ese nombre. Activa 'Forzar búsqueda online' para ampliar.")
                 st.stop()
         _queue_pos = _public_enqueue_ai(conn, _raw_q)
         if _queue_pos > 1 or not _public_can_run_ai_now(conn):
@@ -16069,9 +16414,10 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
     _pending = st.session_state.get("disc_pending_query", "")
     if _pending:
         st.session_state.pop("disc_pending_query")   # consumir la tarea
+        _force_online_once = bool(st.session_state.pop("disc_force_online_once", False))
 
-        # ── Caché compartida: check primero ──────────────────────────────────
-        _cached_result = _get_search_cache(conn, _pending, "discovery")
+        # ── Caché compartida: check primero, salvo en re-búsqueda limpia/forzada ─
+        _cached_result = None if _force_online_once else _get_search_cache(conn, _pending, "discovery")
         # Invalidar si le faltan campos obligatorios (resultado parcial/antiguo)
         if _cached_result and not any(k in _cached_result for k in ("wallets", "corridors", "partners")):
             _cached_result = None
@@ -16088,6 +16434,8 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
             _queue_pos = _public_queue_position(conn) or _public_enqueue_ai(conn, _pending)
             if not _public_can_run_ai_now(conn):
                 st.session_state["disc_pending_query"] = _pending
+                if _force_online_once:
+                    st.session_state["disc_force_online_once"] = True
                 st.warning(f"⏳ Tu búsqueda está en cola AI: puesto #{_queue_pos}. Puedes cambiar a Comunidad y usar el chat mientras esperas.")
                 return
             # ── Verificar quota antes de llamar a la API ──────────────────────
@@ -16127,7 +16475,7 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
                             _disc_progress(0.50, f"🔍 Reintentando búsqueda de **{_pending}**…")
                         else:
                             _disc_progress(0.28, f"🌐 Investigando **{_pending}** con CostGuard + web_search…")
-                        res = search_institution_connections(_pending, conn=conn)
+                        res = search_institution_connections(_pending, conn=conn, force_online=_force_online_once)
                         _disc_progress(0.78, "🧠 Interpretando respuesta y preparando el mapa…")
                         summ = res.get("summary", "")
                         if "429" not in summ and "Too Many" not in summ:
@@ -16218,6 +16566,34 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
 
         # Contador PDF/documentos primarios siempre visible en Discovery, incluso con 0 resultados.
         st.markdown(_discovery_pdf_line_html(result), unsafe_allow_html=True)
+
+        # ── Rutas fijas + candidatas nuevas de la investigación ────────────────
+        _fixed_routes_view = _static_routes_for_entity(result.get("institution", ""), limit=16)
+        _future_routes_view = _result_future_routes_for_display(result, limit=16)
+        if _fixed_routes_view or _future_routes_view:
+            with st.expander("🧭 Rutas fijas del mapa + posibles rutas nuevas de esta investigación", expanded=True):
+                if _fixed_routes_view:
+                    st.markdown("**Fijas/base ya visibles al hacer click en Radar** — son vigilancia/estructura, no prueba nueva:")
+                    for rr in _fixed_routes_view[:10]:
+                        arrow = "→" if rr.get("direction") == "out" else "←"
+                        st.markdown(
+                            f"- `{rr.get('src')}` {arrow} `{rr.get('dst')}` · **{rr.get('kind')}** · {rr.get('label','')}"
+                        )
+                    _focus_static_node = _fixed_routes_view[0].get("canonical_node") or result.get("institution", "")
+                    if st.button("🎯 Enfocar este nodo en Radar", use_container_width=True, key="disc_focus_static_node_in_radar"):
+                        st.session_state["map_focus_node"] = _focus_static_node
+                        st.success("Nodo preparado. Entra en la pestaña Radar y verás sus rutas fijas, dinámicas y futuras verificables al hacer click.")
+                else:
+                    st.caption("Esta entidad no tiene rutas fijas/base en el grafo actual.")
+
+                if _future_routes_view:
+                    st.markdown("**Candidatas de la investigación actual** — se añadirán/verificarán si aceptas actualizar el mapa:")
+                    for rr in _future_routes_view[:10]:
+                        src = rr.get("src", result.get("institution", ""))
+                        dst = rr.get("dst", rr.get("peer", ""))
+                        st.markdown(f"- `{src}` → `{dst}` · **{rr.get('kind','candidate')}** · {rr.get('source','resultado')}")
+                else:
+                    st.caption("La investigación actual no propone conexiones nuevas aparte de las fuentes/resumen.")
 
         # ── Columnas: info principal | descubrimientos extra ──────────────────
         col_main, col_extra = st.columns([3, 2])
@@ -16485,10 +16861,14 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
 
             elif already or is_in_static:
                 st.success(f"✅ {result['institution']} ya está en el mapa.")
-                if st.button("🔁 Actualizar rutas y pruebas", use_container_width=True, key="btn_update_known_node"):
+                st.caption(
+                    "Si el nodo fijo existe pero perdió sus líneas, usa este botón: "
+                    "reconstruye rutas/pruebas desde el resultado actual sin repetir la búsqueda online."
+                )
+                if st.button("🔁 Actualizar/restaurar rutas y pruebas", use_container_width=True, key="btn_update_known_node"):
                     info = apply_discovery_to_map(conn, result, auto=False)
-                    if info.get("added_node"):
-                        st.success(f"Actualizado: {info.get('added_routes',0)} rutas · {info.get('added_nodes',0)} nodos/puntos · ve al Radar.")
+                    if info.get("added_node") or info.get("added_routes", 0) >= 0 or is_in_static:
+                        st.success(f"Actualizado/restaurado: {info.get('added_routes',0)} rutas dinámicas · {info.get('added_nodes',0)} nodos/puntos · ve al Radar.")
                         _queued_now = _queue_cascade_entities_from_result(result)
                         if _queued_now:
                             st.info("🔗 Cascada activada: " + ", ".join(_queued_now[:6]))
@@ -17273,14 +17653,14 @@ def main() -> None:
         st.caption(_focus_hint)
 
         with tab_conn:
-            st.caption("Solo rutas con evidencia confirmada (on-chain, documentada) o implicación técnica irrefutable (⚡ rojo-rosa). Sin ruido de vigilancia.")
+            st.caption("Solo rutas con evidencia confirmada/documentada u obligatorias. Las fijas de vigilancia no se mezclan aquí salvo que estén verificadas.")
             sel = st.plotly_chart(
                 make_map(row, title="Conexiones confirmadas + obligatorias", route_filter="confirmed", **_map_kwargs),
                 width="stretch", on_select="rerun", selection_mode="points", key="radar_map_conn",
             )
 
         with tab_surv:
-            st.caption("Solo rutas de vigilancia (👁 morado), descubiertas por IA (🔍 dorado) y modelos analíticos. Sin rutas confirmadas.")
+            st.caption("Rutas fijas/base, vigilancia, descubiertas por IA y futuras verificables. Aquí verás SWIFT/FedNow/etc. aunque borres asociaciones dinámicas.")
             sel_surv = st.plotly_chart(
                 make_map(row, title="Vigilancia e inferencias", route_filter="surveillance", **_map_kwargs),
                 width="stretch", on_select="rerun", selection_mode="points", key="radar_map_surv",
