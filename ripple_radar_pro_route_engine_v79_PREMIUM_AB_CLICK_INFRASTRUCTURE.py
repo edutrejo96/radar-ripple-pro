@@ -173,8 +173,8 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v101_2026_05_12_CLEAN_RESEARCH_AND_STATIC_CLICK_ROUTES"
-BUILD_NOTE = "Cache-first + reparación de rutas fijas + nodos estáticos recuperables"
+BUILD_ID = "v107_2026_05_12_CASCADE_MAP_XRPL_PROOFS_FIX"
+BUILD_NOTE = "Fix _raw_q caché/sesión + deductive_watch visible + pruebas dinámicas expuestas en ficha"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
 import os as _os
@@ -3041,6 +3041,10 @@ def route_color(row: pd.Series, route: Tuple[str, str, str, str, str]) -> str:
         return "#00CFFF"    # cian — gateway público
     if kind == "watch":
         return "#B673FF" if s >= 0.45 else "#9B59B6"   # morado — vigilada
+    if kind in {"deductive_watch", "infra_deduction", "transitive_watch"}:
+        return "#B673FF" if s >= 0.35 else "#8B5CF6"   # morado — deducción/vigilancia explícita
+    if kind in {"government_payment_rail", "official", "institutional"}:
+        return "#FCD34D" if s >= 0.35 else "#F59E0B"
     if kind == "model":
         return "#5AD7FF" if s >= 0.45 else "#60A5FA"
     if kind == "future":
@@ -3060,6 +3064,10 @@ def route_dash(route: Tuple[str, str, str, str, str]) -> str:
         return "dash"       # deducción técnica irrefutable pero no TX directa verificada
     if kind in {"watch", "model"}:
         return "solid"
+    if kind in {"deductive_watch", "infra_deduction", "transitive_watch"}:
+        return "dash"
+    if kind in {"government_payment_rail", "official", "institutional"}:
+        return "dashdot"
     if kind == "future":
         return "dot"
     if kind == "discovered":
@@ -3554,6 +3562,7 @@ def render_node_info_panel(
     # Info extra si es nodo descubierto (en BD)
     dyn_info = None
     _evidence_map: Dict[str, list] = {}   # "src|dst" -> lista de URLs de fuente
+    _dynamic_route_evidence: Dict[str, Dict[str, Any]] = {}  # "src|dst" -> evidencia dinámica/ruta
     if conn:
         try:
             dyn_info = conn.execute(
@@ -3562,8 +3571,35 @@ def render_node_info_panel(
             ).fetchone()
         except Exception:
             pass
-        # Fuentes por par: SOLO de connection_proofs verificados, no del blob general del nodo
-        _evidence_map = _proof_sources
+        # Fuentes por par: primero connection_proofs verificados, y además rutas dinámicas
+        # aceptadas por Proof-First. Así la ficha del nodo expone las pruebas/URLs de
+        # Discovery, cascada y rutas deductive_watch sin hacerlas pasar por confirmadas.
+        _evidence_map = dict(_proof_sources)
+        try:
+            for _src, _dst, _kind, _conf, _ev, _urls in conn.execute(
+                "SELECT src, dst, kind, confidence, evidence, source_urls FROM dynamic_routes "
+                "WHERE src=? OR dst=?",
+                (focus_node, focus_node),
+            ).fetchall():
+                _urls_list = []
+                for _u in _rrp_extract_urls_from_text(str(_urls or ""), limit=6):
+                    _cu = _canonical_source_url(_u)
+                    if _cu.startswith("http") and _cu not in _urls_list:
+                        _urls_list.append(_cu)
+                _ev_txt = str(_ev or "").strip()
+                _meta = {
+                    "kind": str(_kind or ""),
+                    "confidence": float(_conf or 0.0),
+                    "evidence": _ev_txt,
+                    "urls": _urls_list,
+                }
+                for _k in (f"{_src}|{_dst}", f"{_dst}|{_src}", _canonical_pair_key(_src, _dst)):
+                    # No machacar pruebas fijas si ya existen; solo complementar URLs/meta dinámicas.
+                    if _k not in _evidence_map:
+                        _evidence_map[_k] = _urls_list
+                    _dynamic_route_evidence[_k] = _meta
+        except Exception:
+            pass
 
     # Cuadro pedagógico: explica cadenas directas/indirectas/watch para que el usuario no confunda ruta con operación.
     try:
@@ -3616,6 +3652,13 @@ def render_node_info_panel(
         "partner":     ("🤝 Partner",             "#A78BFA"),   # violeta claro
         "odl":         ("💸 Corredor ODL",        "#FB923C"),   # naranja — corredor activo
         "public_wallet":("🔑 Wallet pública",     "#34D399"),   # esmeralda
+        "deductive_watch":("🧭 Deducción vigilada", "#B673FF"),   # morado — cadena indirecta explícita
+        "future_watch":("🔮 Watch futuro",          "#8CA0B8"),   # gris — futura verificable
+        "infra_deduction":("🧩 Deducción infra",    "#A78BFA"),   # violeta — infraestructura transitiva
+        "transitive_watch":("🧭 Watch transitivo",  "#B673FF"),
+        "government_payment_rail":("🏛️ Rail público", "#FCD34D"),
+        "official":("📄 Oficial/documental",       "#3CFF9B"),
+        "institutional":("🏢 Institucional",       "#38BDF8"),
     }
 
     def sig_bar(sig: float) -> str:
@@ -3674,13 +3717,25 @@ def render_node_info_panel(
                     f'🔗 Fuente {i+1}</a>'
                     for i, u in enumerate(ev_urls)
                 )
-                # Mostrar barra solo si hay score verificado real
+                _dyn_meta = _dynamic_route_evidence.get(f"{focus_node}|{dst}") or _dynamic_route_evidence.get(_canonical_pair_key(focus_node, dst), {})
+                _dyn_ev = html.escape(str(_dyn_meta.get("evidence", "") or "")[:220])
+                dyn_ev_html = (
+                    f"<div style='color:#94A3B8;font-size:0.68rem;margin-top:4px;line-height:1.35'>🧾 {_dyn_ev}</div>"
+                    if _dyn_ev else ""
+                )
+                # Mostrar barra solo si hay score verificado real. Las deductive/watch no se inflan:
+                # muestran confianza de ruta dinámica, pero explícitamente como vigilancia.
                 if sig > 0:
                     bar_html = sig_bar(sig)
-                elif kind == "watch":
-                    bar_html = "<span style='color:#334155;font-size:0.70rem;font-style:italic'>⏳ Verificar para obtener confianza real</span>"
+                elif kind in ("watch", "deductive_watch", "future_watch", "infra_deduction", "transitive_watch"):
+                    _dc = float(_dyn_meta.get("confidence", 0.0) or 0.0)
+                    if _dc > 0:
+                        bar_html = f"<span style='color:#B673FF;font-size:0.70rem'>👁 Vigilancia {_dc*100:.0f}% · no prueba directa</span>"
+                    else:
+                        bar_html = "<span style='color:#334155;font-size:0.70rem;font-style:italic'>⏳ Verificar para obtener confianza real</span>"
                 else:
-                    bar_html = "<span style='color:#334155;font-size:0.70rem;font-style:italic'>⏳ Sin datos de confianza</span>"
+                    _dc = float(_dyn_meta.get("confidence", 0.0) or 0.0)
+                    bar_html = (f"<span style='color:#64748B;font-size:0.70rem'>📎 Ruta guardada {_dc*100:.0f}%</span>" if _dc > 0 else "<span style='color:#334155;font-size:0.70rem;font-style:italic'>⏳ Sin datos de confianza</span>")
                 st.markdown(f"""
 <div style='background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.10);
      border-radius:10px;padding:8px 12px;margin-bottom:5px;'>
@@ -3696,6 +3751,7 @@ def render_node_info_panel(
     {bar_html}
     {src_links}
   </div>
+  {dyn_ev_html}
 </div>""", unsafe_allow_html=True)
         else:
             st.markdown("<span style='color:#475569;font-size:0.82rem'>Sin conexiones salientes</span>", unsafe_allow_html=True)
@@ -3716,13 +3772,18 @@ def render_node_info_panel(
                     f'🔗 Fuente {i+1}</a>'
                     for i, u in enumerate(ev_urls)
                 )
-                is_watch = kind in ("watch",) or "sin verificar" in proof_html or "Sin evidencia" in proof_html
-                bar_html = (
-                    "<span style='color:#334155;font-size:0.70rem;font-style:italic'>⏳ Verificar para obtener confianza real</span>"
-                    if is_watch and sig <= 0 and "✅" not in proof_html and "🟡" not in proof_html
-                    else (f"<span style='color:#475569;font-size:0.70rem'>📡 Señal XRPL: {int(sig*100)}%</span>"
-                          if is_watch and "✅" not in proof_html and "🟡" not in proof_html else sig_bar(sig))
+                _dyn_meta = _dynamic_route_evidence.get(f"{src}|{focus_node}") or _dynamic_route_evidence.get(_canonical_pair_key(src, focus_node), {})
+                _dyn_ev = html.escape(str(_dyn_meta.get("evidence", "") or "")[:220])
+                dyn_ev_html = (
+                    f"<div style='color:#94A3B8;font-size:0.68rem;margin-top:4px;line-height:1.35'>🧾 {_dyn_ev}</div>"
+                    if _dyn_ev else ""
                 )
+                is_watch = kind in ("watch", "deductive_watch", "future_watch", "infra_deduction", "transitive_watch") or "sin verificar" in proof_html or "Sin evidencia" in proof_html
+                if is_watch and sig <= 0 and "✅" not in proof_html and "🟡" not in proof_html:
+                    _dc = float(_dyn_meta.get("confidence", 0.0) or 0.0)
+                    bar_html = (f"<span style='color:#B673FF;font-size:0.70rem'>👁 Vigilancia {_dc*100:.0f}% · no prueba directa</span>" if _dc > 0 else "<span style='color:#334155;font-size:0.70rem;font-style:italic'>⏳ Verificar para obtener confianza real</span>")
+                else:
+                    bar_html = (f"<span style='color:#475569;font-size:0.70rem'>📡 Señal XRPL: {int(sig*100)}%</span>" if is_watch and "✅" not in proof_html and "🟡" not in proof_html else sig_bar(sig))
                 st.markdown(f"""
 <div style='background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.10);
      border-radius:10px;padding:8px 12px;margin-bottom:5px;'>
@@ -3738,6 +3799,7 @@ def render_node_info_panel(
     {bar_html}
     {src_links}
   </div>
+  {dyn_ev_html}
 </div>""", unsafe_allow_html=True)
         else:
             st.markdown("<span style='color:#475569;font-size:0.82rem'>Sin conexiones entrantes</span>", unsafe_allow_html=True)
@@ -4119,8 +4181,14 @@ def make_map(row: pd.Series,
             _all_routes.append(_r)
 
     # Filtrar rutas según el modo del mapa
-    _CONFIRMED_KINDS  = {"real", "public", "private", "verified", "obligatory", "odl", "partner", "public_wallet"}
-    _SURVEILLANCE_KINDS = {"watch", "discovered", "model", "future"}
+    _CONFIRMED_KINDS  = {
+        "real", "public", "private", "verified", "obligatory", "odl", "partner",
+        "public_wallet", "official", "institutional", "government_payment_rail"
+    }
+    _SURVEILLANCE_KINDS = {
+        "watch", "discovered", "model", "future", "future_watch",
+        "deductive_watch", "infra_deduction", "transitive_watch", "watch_only"
+    }
     if route_filter == "confirmed":
         _all_routes = [r for r in _all_routes if r[2] in _CONFIRMED_KINDS]
     elif route_filter == "surveillance":
@@ -17658,7 +17726,16 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
 
         # Activar la cascada nada más tener resultado: antes solo se encolaba
         # después de añadir/restaurar, por eso parecía apagada en nodos fijos como SWIFT.
-        _cascade_seed_key = "cascade_seeded_" + _canonical_entity_key(result.get("institution", _raw_q))
+        # v107: _raw_q solo existe dentro del bloque de búsqueda online. Si el resultado
+        # viene de caché/memoria/session_state, usar una raíz segura para no romper Discovery.
+        _cascade_seed_root = (
+            result.get("institution")
+            or st.session_state.get("disc_query")
+            or st.session_state.get("disc_pending_query")
+            or str(query or "").strip()
+            or "discovery"
+        )
+        _cascade_seed_key = "cascade_seeded_" + _canonical_entity_key(_cascade_seed_root)
         if not st.session_state.get(_cascade_seed_key):
             _queued_seed = _queue_cascade_entities_from_result(result)
             st.session_state[_cascade_seed_key] = True
