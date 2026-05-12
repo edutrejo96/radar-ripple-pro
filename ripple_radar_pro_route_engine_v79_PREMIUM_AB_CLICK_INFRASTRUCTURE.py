@@ -172,8 +172,8 @@ except Exception:
 
 
 APP_NAME = "Ripple Radar Pro"
-VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v141_2026_05_12_PUBLIC_WATCHPOINT_CASCADE_GUARD_FIX"
+VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery · v150 Fixed Node Evidence Pending"
+BUILD_ID = "v150_2026_05_12_FIXED_NODE_PENDING_EVIDENCE_FIX"
 BUILD_NOTE = "Notificaciones visuales en nodos: verificar, vigilar huella pública, revisar alcance documental y evitar repeticiones"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
@@ -23379,7 +23379,7 @@ def _finalize_discovery_result(result: Dict[str, Any], institution_name: str, en
 # solo se muestran como watchpoints/on-chain cuando proceda.
 
 BUILD_ID = "v142_2026_05_12_DEEP_AUDIT_CLASSIFICATION_FIX"
-BUILD_NOTE = "Test profundo: canon primero en clasificador + watchpoints publicos bien clasificados"
+BUILD_NOTE = "Watchpoints publicos no generan falsos negativos 0%; rutas de vigilancia separadas de pruebas"
 
 _RRP_OLD_FORCED_LAYER_ICON_V142 = _forced_layer_icon_for_node_name
 
@@ -24420,6 +24420,652 @@ def _rrp_v147_selftest_international_sweep() -> Dict[str, Any]:
             "instruction_head": _native_query_instruction(s)[:280],
         })
     return {"ok": True, "rows": rows}
+
+
+# =============================================================================
+# v148 · WATCHPOINTS: NO CREAR FALSOS NEGATIVOS DE EVIDENCIA
+# =============================================================================
+# Problema corregido:
+# Al pulsar Verificar desde un nodo publico como XRPL, la app validaba pares
+# estructurales del mapa (XRPL↔RLUSD, XRPL↔DEX/AMM, XRPL↔Clusters, etc.) como
+# si fueran relaciones documentales A↔B. Como no hay una “institucion” detrás,
+# se guardaban filas en connection_proofs con 0%, que luego aparecían como
+# “❌ Sin evidencia verificable”. Eso era falso y confuso: esas líneas son
+# zonas de vigilancia/observabilidad, no hipótesis documentales fallidas.
+
+_ORIG_VALIDATE_NODE_FAST_V148_PRE = validate_node_fast
+_ORIG_VALIDATE_CONNECTION_ONCHAIN_V148_PRE = validate_connection_onchain
+
+_RRP_STRUCTURAL_ROUTE_KINDS_V148: Set[str] = {
+    "public",
+    "monitoring_link",
+    "public_trace_watch",
+    "public_watchpoint",
+    "watch_only",
+    "watch",
+    "deductive_watch",
+    "indirect_watch",
+    "core_infra",
+    "technology_basis",
+    "model",
+    "future",
+}
+
+_RRP_FALSE_NEGATIVE_PROOF_TYPES_V148: Set[str] = {"sin_wallet", "unknown", "ai_inference"}
+
+
+def _rrp_v148_route_kind_between(node_a: Any, node_b: Any, conn: Optional[sqlite3.Connection] = None) -> str:
+    """Devuelve el tipo de ruta ya existente entre A y B, si es estructural/dinámica."""
+    try:
+        ka = _canonical_entity_key(node_a)
+        kb = _canonical_entity_key(node_b)
+        for r in ROUTES:
+            try:
+                a, b, kind = r[0], r[1], str(r[2] or "")
+                if {ka, kb} == {_canonical_entity_key(a), _canonical_entity_key(b)}:
+                    return kind
+            except Exception:
+                continue
+        if conn is not None:
+            try:
+                rows = conn.execute(
+                    "SELECT source, target, kind FROM dynamic_routes WHERE COALESCE(sanitizer_status,'active')!='quarantined'"
+                ).fetchall()
+                for a, b, kind in rows:
+                    if {ka, kb} == {_canonical_entity_key(a), _canonical_entity_key(b)}:
+                        return str(kind or "")
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return ""
+
+
+def _rrp_v148_is_structural_watch_pair(node_a: Any, node_b: Any, conn: Optional[sqlite3.Connection] = None) -> bool:
+    """True si el par es una línea de mapa/vigilancia y no debe guardarse como prueba negativa."""
+    try:
+        kind = _rrp_v148_route_kind_between(node_a, node_b, conn)
+        if str(kind or "").strip() in _RRP_STRUCTURAL_ROUTE_KINDS_V148:
+            return True
+        # Si ambos son nodos públicos/observabilidad, siempre es estructura del radar.
+        if _rrp_is_public_watchpoint_node(node_a) and _rrp_is_public_watchpoint_node(node_b):
+            return True
+        # Si uno es watchpoint y el otro es motor interno, también es observabilidad.
+        engines = {"Topology Engine", "Anomaly Engine", "Fingerprint Engine"}
+        if (_rrp_is_public_watchpoint_node(node_a) and _canonical_entity_name(node_b) in engines) or (_rrp_is_public_watchpoint_node(node_b) and _canonical_entity_name(node_a) in engines):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _rrp_v148_proof_has_real_evidence(proof_data: Any) -> bool:
+    try:
+        if isinstance(proof_data, str):
+            data = json.loads(proof_data or "{}")
+        elif isinstance(proof_data, dict):
+            data = proof_data
+        else:
+            data = {}
+        proofs = data.get("proofs") or []
+        for p in proofs:
+            if not isinstance(p, dict):
+                continue
+            typ = str(p.get("type") or "").strip()
+            if typ in _RRP_FALSE_NEGATIVE_PROOF_TYPES_V148:
+                continue
+            if p.get("onchain") or p.get("internet") or p.get("url") or p.get("tx_hash"):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _rrp_v148_cleanup_false_negative_watchpoint_proofs(conn: Optional[sqlite3.Connection]) -> int:
+    """Elimina pruebas 0% creadas sobre líneas estructurales/watchpoint del mapa."""
+    if conn is None:
+        return 0
+    removed = 0
+    try:
+        ensure_discovery_tables(conn)
+        rows = conn.execute(
+            "SELECT proof_id, node_a, node_b, proof_type, proof_data, confidence FROM connection_proofs "
+            "WHERE COALESCE(sanitizer_status,'active')!='quarantined'"
+        ).fetchall()
+        for proof_id, a, b, ptype, pdata, conf in rows:
+            try:
+                conf_f = float(conf or 0.0)
+                if not _rrp_v148_is_structural_watch_pair(a, b, conn):
+                    continue
+                if conf_f > 0.05 and _rrp_v148_proof_has_real_evidence(pdata):
+                    continue
+                if str(ptype or "") in _RRP_FALSE_NEGATIVE_PROOF_TYPES_V148 or conf_f <= 0.05 or not _rrp_v148_proof_has_real_evidence(pdata):
+                    cur = conn.execute("DELETE FROM connection_proofs WHERE proof_id=?", (proof_id,))
+                    removed += int(cur.rowcount or 0)
+            except Exception:
+                continue
+        if removed:
+            conn.commit()
+    except Exception:
+        pass
+    return removed
+
+
+def _rrp_v148_watchpoint_skip_result(node_a: Any, node_b: Any, conn: Optional[sqlite3.Connection] = None) -> Dict[str, Any]:
+    kind = _rrp_v148_route_kind_between(node_a, node_b, conn) or "watchpoint"
+    return {
+        "from_cache": False,
+        "node_a": _canonical_entity_name(node_a),
+        "node_b": _canonical_entity_name(node_b),
+        "proofs": [],
+        "wallets_a": [],
+        "wallets_b": [],
+        "active_wallets": [],
+        "cert_label": "🛰 Punto de vigilancia del mapa",
+        "cert_color": "#FB923C",
+        "calibrated_score": 0.0,
+        "has_onchain": False,
+        "has_internet": False,
+        "route_kind": kind,
+        "_watchpoint_only": True,
+        "summary": f"{_canonical_entity_name(node_a)} ↔ {_canonical_entity_name(node_b)} es una línea estructural/de vigilancia ({kind}); no se guarda como prueba negativa 0%.",
+    }
+
+
+def validate_node_fast(focus_node: str, peers: List[str], conn: sqlite3.Connection, progress_cb: Optional[Any] = None) -> None:
+    """v148: verifica solo pares investigables; las líneas públicas/watch no generan 0%."""
+    try:
+        _rrp_v148_cleanup_false_negative_watchpoint_proofs(conn)
+    except Exception:
+        pass
+    if not peers:
+        return
+    investigable: List[str] = []
+    skipped: List[str] = []
+    for p in peers:
+        if _rrp_v148_is_structural_watch_pair(focus_node, p, conn):
+            skipped.append(str(p))
+        else:
+            investigable.append(p)
+    if skipped:
+        try:
+            st.session_state["rrp_v148_watchpoint_skipped"] = {
+                "focus": str(focus_node),
+                "peers": skipped,
+                "at": datetime.now(timezone.utc).isoformat(),
+                "reason": "Líneas de vigilancia/observabilidad del mapa: no se guardan como falso negativo 0%.",
+            }
+        except Exception:
+            pass
+    if not investigable:
+        if progress_cb is not None:
+            try:
+                progress_cb(1.0, f"{len(skipped)} línea(s) eran vigilancia del mapa; no se crean falsos negativos.")
+            except Exception:
+                pass
+        try:
+            conn.commit()
+        except Exception:
+            pass
+        return
+    return _ORIG_VALIDATE_NODE_FAST_V148_PRE(focus_node, investigable, conn, progress_cb=progress_cb)
+
+
+def validate_connection_onchain(node_a: str, node_b: str, conn: sqlite3.Connection, force: bool = False) -> Dict[str, Any]:
+    """v148: una línea pública/watchpoint no se convierte en prueba 0% si no hay wallet/TX."""
+    try:
+        _rrp_v148_cleanup_false_negative_watchpoint_proofs(conn)
+        if _rrp_v148_is_structural_watch_pair(node_a, node_b, conn):
+            return _rrp_v148_watchpoint_skip_result(node_a, node_b, conn)
+    except Exception:
+        pass
+    return _ORIG_VALIDATE_CONNECTION_ONCHAIN_V148_PRE(node_a, node_b, conn, force=force)
+
+
+def _rrp_v148_boot_cleanup_watchpoint_false_negatives() -> int:
+    try:
+        conn = get_conn()
+        return _rrp_v148_cleanup_false_negative_watchpoint_proofs(conn)
+    except Exception:
+        return 0
+
+
+try:
+    _rrp_v148_boot_cleanup_watchpoint_false_negatives()
+except Exception:
+    pass
+
+
+# =============================================================================
+# v149 · WATCHPOINTS: PENDIENTE DOCUMENTAL, NO “SIN EVIDENCIA”
+# =============================================================================
+# Matiz importante:
+# v148 evitó crear falsos negativos 0% para XRPL/RLUSD/DEX/AMM/Trustlines/etc.
+# Pero el usuario tiene razón: muchas de esas relaciones estructurales SÍ pueden
+# tener documentos públicos que las respalden; simplemente todavía no se han
+# investigado en el módulo documental. Por eso el estado correcto no es
+# “sin evidencia”, sino “pendiente de investigación documental / on-chain”.
+
+_RRP_V149_DOC_PENDING_KINDS: Set[str] = set(_RRP_STRUCTURAL_ROUTE_KINDS_V148) | {
+    "public", "core_infra", "technology_basis", "public_trace_watch",
+    "monitoring_link", "public_watchpoint", "watchpoint", "watch",
+}
+
+
+def _rrp_v149_pair_has_real_saved_evidence(conn: Optional[sqlite3.Connection], node_a: Any, node_b: Any) -> bool:
+    """True si ya existe una prueba real guardada para el par."""
+    if conn is None:
+        return False
+    try:
+        row = _connection_proof_row(conn, _canonical_entity_name(node_a), _canonical_entity_name(node_b))
+        if not row:
+            return False
+        pdata, onchain, conf, *_ = row
+        if bool(onchain):
+            return True
+        if float(conf or 0.0) >= 0.20 and _rrp_v148_proof_has_real_evidence(pdata):
+            return True
+        return _rrp_v148_proof_has_real_evidence(pdata)
+    except Exception:
+        return False
+
+
+def _rrp_v149_route_note_for_pair(node_a: Any, node_b: Any, conn: Optional[sqlite3.Connection] = None) -> Tuple[str, str]:
+    """Devuelve (kind, note) para explicar una línea estructural pendiente."""
+    kind = _rrp_v148_route_kind_between(node_a, node_b, conn) or "watchpoint"
+    ca = _canonical_entity_name(node_a)
+    cb = _canonical_entity_name(node_b)
+    k = str(kind or "").strip().lower()
+    if k == "technology_basis":
+        return kind, "Base tecnológica posible/documental: requiere revisar documentos, no transacciones." 
+    if k == "core_infra":
+        return kind, "Infraestructura interna del stack Ripple/XRPL: no es una operación, pero puede tener documentación pública." 
+    if k in {"public", "monitoring_link", "public_watchpoint", "public_trace_watch"}:
+        return kind, "Zona pública observable del radar: se verifica con documentos y/o señales on-chain cuando haya una ruta institucional." 
+    if _rrp_is_public_watchpoint_node(ca) or _rrp_is_public_watchpoint_node(cb):
+        return kind, "Punto público de vigilancia: pendiente de investigación documental/on-chain; no equivale a ausencia de evidencia." 
+    return kind, "Línea pendiente de revisión documental: todavía no se debe marcar como negativa." 
+
+
+def _rrp_v149_is_document_pending_pair(node_a: Any, node_b: Any, conn: Optional[sqlite3.Connection] = None) -> bool:
+    """Pares que no deben mostrarse como 0%, sino como pendientes de investigar documentos."""
+    try:
+        if _rrp_v149_pair_has_real_saved_evidence(conn, node_a, node_b):
+            return False
+        kind = str(_rrp_v148_route_kind_between(node_a, node_b, conn) or "").strip()
+        if kind in _RRP_V149_DOC_PENDING_KINDS:
+            return True
+        if _rrp_v148_is_structural_watch_pair(node_a, node_b, conn):
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def _rrp_v149_document_pending_pairs_for_node(conn: Optional[sqlite3.Connection], focus_node: Any, limit: int = 16) -> List[Dict[str, Any]]:
+    """Lista líneas del foco que son estructura/watchpoint/core y aún no tienen prueba documental guardada."""
+    if conn is None or not focus_node:
+        return []
+    focus = _canonical_entity_name(focus_node)
+    fkey = _canonical_entity_key(focus)
+    pairs: Dict[str, Dict[str, Any]] = {}
+
+    def add_pair(peer: Any, kind: Any, evidence: Any = "", urls: Optional[List[str]] = None) -> None:
+        peer_name = _canonical_entity_name(peer)
+        if not peer_name or _canonical_entity_key(peer_name) == fkey:
+            return
+        if not _rrp_v149_is_document_pending_pair(focus, peer_name, conn):
+            return
+        pk = _canonical_pair_key(focus, peer_name)
+        k, note = _rrp_v149_route_note_for_pair(focus, peer_name, conn)
+        pairs[pk] = {
+            "peer": peer_name,
+            "kind": str(kind or k or "watchpoint"),
+            "note": note,
+            "evidence": str(evidence or ""),
+            "urls": list(urls or []),
+        }
+
+    try:
+        for a, b, kind, *_rest in ROUTES:
+            if _canonical_entity_key(a) == fkey:
+                add_pair(b, kind)
+            elif _canonical_entity_key(b) == fkey:
+                add_pair(a, kind)
+    except Exception:
+        pass
+
+    try:
+        ensure_discovery_tables(conn)
+        rows = conn.execute(
+            "SELECT source, target, kind, evidence, source_urls FROM dynamic_routes "
+            "WHERE COALESCE(sanitizer_status,'active')!='quarantined' AND (source_key=? OR target_key=? OR source=? OR target=?)",
+            (fkey, fkey, focus, focus),
+        ).fetchall()
+        for src, dst, kind, ev, urls_json in rows:
+            peer = dst if _canonical_entity_key(src) == fkey else src
+            urls = []
+            try:
+                urls = json.loads(urls_json or "[]") if isinstance(urls_json, str) else []
+            except Exception:
+                urls = []
+            add_pair(peer, kind, ev, urls)
+    except Exception:
+        pass
+
+    # Prioridad: bases tecnológicas y rutas públicas antes que motores internos.
+    def sort_key(item: Dict[str, Any]) -> Tuple[int, str]:
+        k = str(item.get("kind") or "").lower()
+        p = str(item.get("peer") or "")
+        pri = 5
+        if k in {"technology_basis", "core_infra"}: pri = 0
+        elif k in {"public", "public_trace_watch", "public_watchpoint"}: pri = 1
+        elif k in {"monitoring_link"}: pri = 4
+        return (pri, p)
+
+    return sorted(pairs.values(), key=sort_key)[:limit]
+
+
+# Reemplazar el resultado skip de v148: ya no dice “no hay evidencia”, dice pendiente documental.
+def _rrp_v148_watchpoint_skip_result(node_a: Any, node_b: Any, conn: Optional[sqlite3.Connection] = None) -> Dict[str, Any]:
+    kind, note = _rrp_v149_route_note_for_pair(node_a, node_b, conn)
+    return {
+        "from_cache": False,
+        "node_a": _canonical_entity_name(node_a),
+        "node_b": _canonical_entity_name(node_b),
+        "proofs": [],
+        "wallets_a": [],
+        "wallets_b": [],
+        "active_wallets": [],
+        "cert_label": "🧾 Pendiente de investigación documental/on-chain",
+        "cert_color": "#F59E0B",
+        "calibrated_score": 0.0,
+        "has_onchain": False,
+        "has_internet": False,
+        "route_kind": kind,
+        "_watchpoint_only": True,
+        "_doc_pending": True,
+        "summary": (
+            f"{_canonical_entity_name(node_a)} ↔ {_canonical_entity_name(node_b)} es una línea estructural/de vigilancia ({kind}). "
+            f"Estado correcto: pendiente de investigar documentos y señales públicas. {note} No se guarda como negativo 0%."
+        ),
+    }
+
+
+# Limpieza ampliada: filas antiguas 0% sobre watchpoints se eliminan para que no reaparezcan como ❌.
+def _rrp_v149_cleanup_doc_pending_false_negatives(conn: Optional[sqlite3.Connection]) -> int:
+    if conn is None:
+        return 0
+    removed = 0
+    try:
+        ensure_discovery_tables(conn)
+        rows = conn.execute(
+            "SELECT proof_id, node_a, node_b, proof_type, proof_data, confidence FROM connection_proofs "
+            "WHERE COALESCE(sanitizer_status,'active')!='quarantined'"
+        ).fetchall()
+        for proof_id, a, b, ptype, pdata, conf in rows:
+            try:
+                if not _rrp_v149_is_document_pending_pair(a, b, conn):
+                    continue
+                if _rrp_v149_pair_has_real_saved_evidence(conn, a, b):
+                    continue
+                cur = conn.execute("DELETE FROM connection_proofs WHERE proof_id=?", (proof_id,))
+                removed += int(cur.rowcount or 0)
+            except Exception:
+                continue
+        if removed:
+            conn.commit()
+    except Exception:
+        pass
+    return removed
+
+
+# Añadir un panel pedagógico al mapa/nodo: lo pendiente no es negativo.
+_ORIG_RENDER_NODE_INFO_PANEL_V149 = render_node_info_panel
+
+def render_node_info_panel(
+    focus_node: str,
+    all_nodes: Dict[str, Dict[str, Any]],
+    all_routes: List[Tuple],
+    conn: Optional[sqlite3.Connection] = None,
+    accent: str = "#5AD7FF",
+) -> None:
+    try:
+        if conn is not None:
+            _rrp_v149_cleanup_doc_pending_false_negatives(conn)
+    except Exception:
+        pass
+
+    _ORIG_RENDER_NODE_INFO_PANEL_V149(focus_node, all_nodes, all_routes, conn=conn, accent=accent)
+
+    try:
+        pending = _rrp_v149_document_pending_pairs_for_node(conn, focus_node, limit=12)
+    except Exception:
+        pending = []
+    if not pending:
+        return
+
+    st.markdown(
+        "<div style='margin-top:10px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.30);"
+        "border-radius:12px;padding:10px 12px;'>"
+        "<div style='color:#F59E0B;font-weight:900'>🧾 Líneas pendientes de investigación documental / on-chain</div>"
+        "<div style='color:#CBD5E1;font-size:.80rem;margin-top:4px;line-height:1.45'>"
+        "Estas líneas no son <b>0%</b> ni <b>sin evidencia</b>. Son puntos estructurales o de vigilancia donde puede haber documentación pública, "
+        "pero todavía no se ha hecho una investigación documental específica de esa línea."
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    for item in pending:
+        peer = item.get("peer") or ""
+        kind = item.get("kind") or "watchpoint"
+        note = item.get("note") or "Pendiente de revisión documental."
+        ev = item.get("evidence") or ""
+        urls = item.get("urls") or []
+        with st.expander(f"🧾 Pendiente · {focus_node} ↔ {peer} · {kind}", expanded=False):
+            st.markdown(f"**Estado:** pendiente de investigar documentos/señales públicas.  \n**Lectura correcta:** {note}")
+            if ev:
+                st.caption(str(ev)[:650])
+            if urls:
+                links = " ".join(f"[fuente {i+1}]({u})" for i, u in enumerate(urls[:6]))
+                st.markdown(links)
+            c1, c2 = st.columns([1, 1])
+            with c1:
+                if st.button("🧾 Investigar documentos de esta línea", key=f"v149_doc_line_{_canonical_pair_key(focus_node, peer)}", use_container_width=True):
+                    q = f"{_canonical_entity_name(focus_node)} {_canonical_entity_name(peer)}"
+                    if conn is None:
+                        st.error("No hay conexión SQLite disponible para lanzar la investigación.")
+                    else:
+                        with st.spinner(f"Investigando documentos para: {q}"):
+                            try:
+                                res = search_institution_connections(q, conn=conn, force_online=True)
+                                res = _finalize_discovery_result(res, q, _classify_entity(q), None)
+                                apply_info = apply_discovery_to_map(conn, res, auto=True)
+                                st.session_state["disc_result"] = res
+                                st.session_state["disc_query"] = q
+                                st.session_state["disc_from_cache"] = False
+                                st.success(
+                                    f"Investigación documental lanzada: {apply_info.get('added_routes',0)} rutas · "
+                                    f"{apply_info.get('added_nodes',0)} nodos/puntos actualizados. Revisa Descubrimientos para ver el detalle."
+                                )
+                            except Exception as e:
+                                st.error(f"No pude completar la investigación documental de la línea: {e}")
+            with c2:
+                st.caption("No se repite como búsqueda normal salvo que pulses el botón; así no se gasta API sin intención.")
+
+
+try:
+    _rrp_v149_cleanup_doc_pending_false_negatives(get_conn())
+except Exception:
+    pass
+
+
+# =============================================================================
+# v150 · CUALQUIER NODO FIJO: PENDIENTE DOCUMENTAL/ON-CHAIN, NO FALSO 0%
+# =============================================================================
+# Extiende la filosofía de v149: no solo XRPL/RLUSD/watchpoints. Si una línea
+# pertenece a un nodo fijo del mapa (NODES) y todavía no hay una investigación
+# documental específica guardada, el estado correcto es "pendiente", no
+# "sin evidencia verificable 0%". Esto evita confundir líneas estructurales del
+# mapa con conclusiones negativas.
+
+_ORIG_RRP_V148_IS_STRUCTURAL_WATCH_PAIR_V150 = _rrp_v148_is_structural_watch_pair
+_ORIG_RRP_V149_IS_DOCUMENT_PENDING_PAIR_V150 = _rrp_v149_is_document_pending_pair
+_ORIG_RRP_V149_ROUTE_NOTE_FOR_PAIR_V150 = _rrp_v149_route_note_for_pair
+
+
+def _rrp_v150_is_fixed_node(name: Any) -> bool:
+    """True si el nodo forma parte del mapa base/fijado, no descubierto dinámicamente."""
+    try:
+        key = _canonical_entity_key(_canonical_entity_name(name))
+        return key in {_canonical_entity_key(k) for k in (NODES or {}).keys()}
+    except Exception:
+        return False
+
+
+def _rrp_v150_known_route_kind_between(node_a: Any, node_b: Any, conn: Optional[sqlite3.Connection] = None) -> str:
+    """Devuelve tipo de ruta si el par existe en ROUTES o dynamic_routes."""
+    try:
+        kind = _rrp_v148_route_kind_between(node_a, node_b, conn)
+        if kind:
+            return str(kind or "")
+    except Exception:
+        pass
+    return ""
+
+
+def _rrp_v150_is_fixed_map_pair(node_a: Any, node_b: Any, conn: Optional[sqlite3.Connection] = None) -> bool:
+    """Par con al menos un nodo fijo y una línea ya existente en el mapa.
+
+    No convierte cualquier combinación de nodos fijos en pendiente: solo las
+    líneas que el mapa ya dibuja o que Discovery guardó en dynamic_routes.
+    """
+    try:
+        if not (_rrp_v150_is_fixed_node(node_a) or _rrp_v150_is_fixed_node(node_b)):
+            return False
+        return bool(_rrp_v150_known_route_kind_between(node_a, node_b, conn))
+    except Exception:
+        return False
+
+
+def _rrp_v148_is_structural_watch_pair(node_a: Any, node_b: Any, conn: Optional[sqlite3.Connection] = None) -> bool:
+    """v150: también trata líneas de nodos fijos como pendientes, no falso negativo.
+
+    La validación rápida/on-chain no debe escribir 0% solo porque una línea fija
+    no tenga wallet/TX inmediata. Eso se investiga documentalmente con un botón
+    específico, o queda pendiente.
+    """
+    try:
+        if _ORIG_RRP_V148_IS_STRUCTURAL_WATCH_PAIR_V150(node_a, node_b, conn):
+            return True
+        if _rrp_v150_is_fixed_map_pair(node_a, node_b, conn):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _rrp_v149_is_document_pending_pair(node_a: Any, node_b: Any, conn: Optional[sqlite3.Connection] = None) -> bool:
+    """v150: watchpoints + cualquier línea existente de nodo fijo sin evidencia real."""
+    try:
+        if _rrp_v149_pair_has_real_saved_evidence(conn, node_a, node_b):
+            return False
+        if _ORIG_RRP_V149_IS_DOCUMENT_PENDING_PAIR_V150(node_a, node_b, conn):
+            return True
+        if _rrp_v150_is_fixed_map_pair(node_a, node_b, conn):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _rrp_v149_route_note_for_pair(node_a: Any, node_b: Any, conn: Optional[sqlite3.Connection] = None) -> Tuple[str, str]:
+    """v150: nota pedagógica distinta para líneas de nodos fijos."""
+    try:
+        if _rrp_v150_is_fixed_map_pair(node_a, node_b, conn) and not _rrp_v149_pair_has_real_saved_evidence(conn, node_a, node_b):
+            kind = _rrp_v150_known_route_kind_between(node_a, node_b, conn) or "fixed_map_route"
+            return kind, (
+                "Línea del mapa base/fijado: todavía no se ha investigado documentalmente esta relación concreta. "
+                "No debe leerse como 0% ni como ausencia de evidencia; queda pendiente de documentos, fuentes oficiales u on-chain si procede."
+            )
+    except Exception:
+        pass
+    return _ORIG_RRP_V149_ROUTE_NOTE_FOR_PAIR_V150(node_a, node_b, conn)
+
+
+def _rrp_v150_cleanup_fixed_node_false_negatives(conn: Optional[sqlite3.Connection]) -> int:
+    """Borra antiguos 0% guardados sobre rutas de nodos fijos que solo estaban sin investigar."""
+    if conn is None:
+        return 0
+    removed = 0
+    try:
+        ensure_discovery_tables(conn)
+        rows = conn.execute(
+            "SELECT proof_id, node_a, node_b, proof_type, proof_data, confidence FROM connection_proofs "
+            "WHERE COALESCE(sanitizer_status,'active')!='quarantined'"
+        ).fetchall()
+        for proof_id, a, b, ptype, pdata, conf in rows:
+            try:
+                conf_f = float(conf or 0.0)
+                if not _rrp_v150_is_fixed_map_pair(a, b, conn):
+                    continue
+                if _rrp_v149_pair_has_real_saved_evidence(conn, a, b):
+                    continue
+                if conf_f <= 0.05 or str(ptype or "") in _RRP_FALSE_NEGATIVE_PROOF_TYPES_V148 or not _rrp_v148_proof_has_real_evidence(pdata):
+                    cur = conn.execute("DELETE FROM connection_proofs WHERE proof_id=?", (proof_id,))
+                    removed += int(cur.rowcount or 0)
+            except Exception:
+                continue
+        if removed:
+            conn.commit()
+    except Exception:
+        pass
+    return removed
+
+
+# Refuerza la limpieza existente de v149 para que también cubra nodos fijados.
+_ORIG_RRP_V149_CLEANUP_DOC_PENDING_FALSE_NEGATIVES_V150 = _rrp_v149_cleanup_doc_pending_false_negatives
+
+def _rrp_v149_cleanup_doc_pending_false_negatives(conn: Optional[sqlite3.Connection]) -> int:
+    total = 0
+    try:
+        total += int(_ORIG_RRP_V149_CLEANUP_DOC_PENDING_FALSE_NEGATIVES_V150(conn) or 0)
+    except Exception:
+        pass
+    try:
+        total += int(_rrp_v150_cleanup_fixed_node_false_negatives(conn) or 0)
+    except Exception:
+        pass
+    return total
+
+
+# Mensaje más claro en el panel: ahora cubre watchpoints y nodos fijados.
+_ORIG_RENDER_NODE_INFO_PANEL_V150 = render_node_info_panel
+
+def render_node_info_panel(
+    focus_node: str,
+    all_nodes: Dict[str, Dict[str, Any]],
+    all_routes: List[Tuple],
+    conn: Optional[sqlite3.Connection] = None,
+    accent: str = "#5AD7FF",
+) -> None:
+    try:
+        if conn is not None:
+            _rrp_v149_cleanup_doc_pending_false_negatives(conn)
+    except Exception:
+        pass
+    _ORIG_RENDER_NODE_INFO_PANEL_V150(focus_node, all_nodes, all_routes, conn=conn, accent=accent)
+    try:
+        if _rrp_v150_is_fixed_node(focus_node):
+            st.caption("📌 Nodo fijado: las líneas sin prueba específica se muestran como pendientes de investigación, no como 0% ni como ausencia de evidencia.")
+    except Exception:
+        pass
+
+
+try:
+    _rrp_v149_cleanup_doc_pending_false_negatives(get_conn())
+except Exception:
+    pass
 
 
 if __name__ == "__main__":
