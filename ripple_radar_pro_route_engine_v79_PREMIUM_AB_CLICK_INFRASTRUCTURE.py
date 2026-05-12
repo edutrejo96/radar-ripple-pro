@@ -173,8 +173,8 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery"
-BUILD_ID = "v115_2026_05_12_SAFE_SANITIZER_ADMIN_GUARD"
-BUILD_NOTE = "Sanitizador seguro con backup/quarantine/admin + filtros anti-rutas falsas"
+BUILD_ID = "v116_2026_05_12_CORE_ONLY_RESET_QUIET_SYNC"
+BUILD_NOTE = "Reset core-only seguro + sync silencioso con aviso flotante, sin rerun agresivo"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
 import os as _os
@@ -189,8 +189,9 @@ BACKFILL_DAYS        = 240
 # polling ligero de SQLite + datarevision, para que las rutas/pruebas que añade
 # cualquier usuario aparezcan en mapas, métricas y gráficos sin pulsar Autoscan/Actualizar.
 ENABLE_BACKGROUND_AUTOREFRESH = False
-ENABLE_SHARED_LIVE_SYNC = True
-LIVE_SHARED_REFRESH_SECONDS = 12
+ENABLE_SHARED_LIVE_SYNC = False  # v116: OFF por defecto para no cortar la experiencia ni Radar FM
+LIVE_SHARED_REFRESH_SECONDS = 60  # solo si el admin lo activa desde Diagnóstico
+ENABLE_FLOATING_UPDATE_NOTICE = True
 
 # ── Umbrales whale / auto-mapa ─────────────────────────────────────────────
 WHALE_XRP_THRESHOLD   = 100_000      # XRP mínimo para considerarlo whale
@@ -10621,9 +10622,9 @@ def render_route_path_engine(conn: sqlite3.Connection, df: pd.DataFrame, row: pd
     st.markdown("### 🔁 Gráfico A→B premium · vivo y sin duplicados")
     st.markdown("""
 <div class='rrp-note'>
-🔄 <b>Live Sync:</b> las fichas A→B se reconstruyen automáticamente desde <b>connection_proofs</b>,
-<b>dynamic_routes</b>, <b>route_paths</b> y wallets aprobadas. Ya no hace falta pulsar un botón después
-de añadir pruebas, rutas o wallets; si otro usuario cambia SQLite, esta vista se actualiza en el siguiente tick.
+🔄 <b>Sincronización limpia:</b> las fichas A→B se reconstruyen desde <b>connection_proofs</b>,
+<b>dynamic_routes</b>, <b>route_paths</b> y wallets aprobadas. Si otro usuario cambia datos, aparece aviso flotante;
+el usuario decide cuándo aplicar para no cortar música, formularios ni investigación.
 </div>""", unsafe_allow_html=True)
 
     c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 1.3])
@@ -10631,7 +10632,7 @@ de añadir pruebas, rutas o wallets; si otro usuario cambia SQLite, esta vista s
     c2.metric("Rutas dinámicas", dyn_n)
     c3.metric("Rutas base", route_n)
     c4.metric("Wallets vigiladas", wallets_n)
-    c5.metric("Sync", f"{LIVE_SHARED_REFRESH_SECONDS}s")
+    c5.metric("Sync", "aviso manual")
 
     chart_paths = render_route_path_graph_and_fichas(live_paths, key_prefix="clean_v93", conn=conn)
 
@@ -13168,17 +13169,24 @@ def render_public_entry_gate(conn: sqlite3.Connection) -> bool:
     return False
 
 def render_shared_live_sync(conn: sqlite3.Connection) -> None:
-    """Sincronización multiusuario ligera.
+    """Sincronización multiusuario opcional.
 
-    Streamlit no empuja eventos entre sesiones por sí solo. Para que un mapa de
-    un usuario se actualice cuando otro guarda rutas/pruebas, cada sesión hace un
-    ping silencioso cada pocos segundos. Si SQLite cambió, datarevision + keys
-    fuerzan el repintado de mapas/gráficos. No hay que pulsar Autoscan.
+    v116 cambia la filosofía: por defecto NO se refresca toda la app cada pocos
+    segundos, porque eso corta música, formularios, scroll y fichas abiertas.
+
+    Streamlit no tiene push real desde SQLite a navegador. Para saber que otro
+    usuario guardó datos hacen falta una de estas dos cosas:
+    1) interacción normal del usuario, o
+    2) polling/auto-refresh.
+
+    Por seguridad UX, el polling queda desactivado salvo que el admin lo active
+    en la sesión. Si se activa, solo muestra aviso de cambios; no fuerza rerun
+    infinito ni aplica cambios sin que el usuario acepte.
     """
-    if not ENABLE_SHARED_LIVE_SYNC:
+    polling_enabled = bool(st.session_state.get("rrp_live_polling_enabled", ENABLE_SHARED_LIVE_SYNC))
+    if not polling_enabled:
         return
     try:
-        # Guardamos el token para diagnóstico y para detectar cambios entre ticks.
         current_rev = _get_map_revision_token(conn)
         last_rev = st.session_state.get("rrp_live_last_revision", "")
         if last_rev and current_rev != last_rev:
@@ -13189,17 +13197,38 @@ def render_shared_live_sync(conn: sqlite3.Connection) -> None:
     try:
         if st_autorefresh is not None:
             st_autorefresh(
-                interval=int(LIVE_SHARED_REFRESH_SECONDS * 1000),
-                key="rrp_shared_live_sync_tick_v114",
+                interval=int(max(30, LIVE_SHARED_REFRESH_SECONDS) * 1000),
+                key="rrp_shared_live_sync_tick_v116_quiet",
             )
     except Exception:
-        # Si falta streamlit-autorefresh, la app sigue funcionando; solo pierde live sync.
         pass
 
 
-def render_global_update_notice(conn: sqlite3.Connection) -> None:
-    """Notificación global sin botón: aplica automáticamente cambios compartidos."""
+def _consume_apply_updates_query(conn: sqlite3.Connection) -> bool:
+    """Gestiona el enlace ?rrp_apply_updates=1 del aviso flotante."""
     try:
+        qp = st.query_params
+        if str(qp.get("rrp_apply_updates", "")) == "1":
+            last = _get_last_map_update(conn)
+            if last:
+                st.session_state["map_last_seen_global"] = last
+                st.session_state["map_last_seen"] = last
+            try:
+                del st.query_params["rrp_apply_updates"]
+            except Exception:
+                st.query_params.clear()
+            st.toast("✅ Cambios del radar cargados.")
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def render_global_update_notice(conn: sqlite3.Connection) -> None:
+    """Aviso flotante de cambios compartidos sin aplicar rerun automáticamente."""
+    try:
+        if _consume_apply_updates_query(conn):
+            return
         last = _get_last_map_update(conn)
         seen = st.session_state.get("map_last_seen_global", "")
         if not last:
@@ -13211,13 +13240,34 @@ def render_global_update_notice(conn: sqlite3.Connection) -> None:
         pending = _get_pending_updates(conn, seen)
         if pending <= 0:
             return
-        st.session_state["map_last_seen_global"] = last
-        st.session_state["map_last_seen"] = last
-        try:
-            st.toast(f"🔄 Radar actualizado: {pending} cambio(s) compartidos aplicados automáticamente.")
-        except Exception:
-            pass
-        st.rerun()
+        st.session_state["rrp_pending_shared_updates"] = pending
+        if ENABLE_FLOATING_UPDATE_NOTICE:
+            st.markdown(f"""
+<style>
+#rrp-floating-update {{
+  position: fixed; right: 18px; bottom: 22px; z-index: 999999;
+  max-width: 340px; padding: 14px 16px; border-radius: 18px;
+  background: rgba(15,23,42,.96); color: #E2E8F0;
+  border: 1px solid rgba(34,211,238,.45);
+  box-shadow: 0 18px 60px rgba(0,0,0,.38); font-family: system-ui, sans-serif;
+}}
+#rrp-floating-update b {{ color:#67E8F9; }}
+#rrp-floating-update a {{
+  display:inline-block; margin-top:10px; padding:8px 12px;
+  border-radius:999px; text-decoration:none; font-weight:800;
+  background: linear-gradient(90deg,#22D3EE,#A78BFA); color:#020617;
+}}
+#rrp-floating-update small {{ display:block; color:#94A3B8; margin-top:6px; line-height:1.3; }}
+</style>
+<div id="rrp-floating-update">
+  <div>🔔 <b>{pending} dato(s) nuevos detectados</b></div>
+  <div style="font-size:.88rem;margin-top:4px">Hay rutas/pruebas/mapas actualizados por otra sesión.</div>
+  <a href="?rrp_apply_updates=1">Aplicar ahora</a>
+  <small>No se aplica solo para no cortar música, formularios ni investigación.</small>
+</div>
+""", unsafe_allow_html=True)
+        else:
+            st.info(f"🔔 {pending} cambios compartidos pendientes. Recarga/aplica cambios cuando quieras.")
     except Exception:
         pass
 
@@ -17791,20 +17841,14 @@ el resultado queda guardado como investigacion/watch, pero <b>no se dibuja como 
         st.session_state.pop("disc_result", None)
 
     # ── Actualizaciones pendientes del mapa ─────────────────────────────────
-    # v114: ya no hay botón "Aplicar actualizaciones". Si otro usuario añade
-    # rutas/pruebas/nodos, la sesión lo aplica automáticamente en el siguiente
-    # tick de Live Sync para que todos vean el mismo mapa.
+    # v116: no se aplican automáticamente para no cortar la experiencia.
+    # El aviso flotante global permite aplicar cuando el usuario quiera.
     _map_seen  = st.session_state.get("map_last_seen", "")
     _map_last  = _get_last_map_update(conn)
     _n_pending = _get_pending_updates(conn, _map_seen) if _map_seen else 0
     if _n_pending > 0:
-        st.session_state["map_last_seen"] = _map_last
-        try:
-            st.toast(f"🔄 {_n_pending} actualización(es) del mapa aplicadas automáticamente.")
-        except Exception:
-            pass
-        st.rerun()
-    elif _map_last:
+        st.caption(f"🔔 Hay {_n_pending} actualización(es) del mapa pendientes. Usa el aviso flotante para aplicarlas cuando quieras.")
+    elif _map_last and not _map_seen:
         st.session_state["map_last_seen"] = _map_last
 
     # ── Quota de llamadas AI por sesión ─────────────────────────────────────
@@ -18917,6 +18961,88 @@ def sanitizer_autoflag_hard_invalid(conn: sqlite3.Connection) -> Dict[str, Any]:
     result = apply_sanitizer_quarantine(conn, hard, applied_by="auto_hard_rules")
     return result
 
+
+
+def reset_map_to_core_only(conn: sqlite3.Connection, applied_by: str = "admin", clear_cache: bool = True) -> Dict[str, Any]:
+    """Reset seguro del grafo a estado core-only.
+
+    No borra la SQLite completa. Conserva chat, usuarios, pins, presupuesto,
+    raw_events, daily_metrics, clusters y fingerprints. Limpia solo memoria de
+    investigación que puede contaminar mapas/fichas: rutas dinámicas, pruebas,
+    A→B, cachés de Discovery, wallets descubiertas y colas de whales.
+    """
+    ensure_discovery_tables(conn)
+    ensure_route_paths_table(conn)
+    ensure_discovered_wallets_table(conn)
+    ensure_unknown_whales_table(conn)
+    ensure_sanitizer_tables(conn)
+    backup = create_safe_db_backup(conn, "pre_core_only_reset")
+    now = datetime.now(timezone.utc).isoformat()
+    tables = [
+        "dynamic_nodes",
+        "dynamic_routes",
+        "connection_proofs",
+        "node_verifications",
+        "route_paths",
+        "discovered_wallets",
+        "unknown_whales",
+    ]
+    if clear_cache:
+        tables += ["institution_search_cache", "search_cache_aliases", "api_search_audit"]
+    counts: Dict[str, int] = {}
+    with conn:
+        for table in tables:
+            try:
+                row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+                counts[table] = int(row[0] or 0) if row else 0
+                conn.execute(f"DELETE FROM {table}")
+            except Exception:
+                counts[table] = -1
+        try:
+            conn.execute("DELETE FROM sanitizer_quarantine")
+            conn.execute("DELETE FROM sanitizer_runs")
+        except Exception:
+            pass
+        conn.execute(
+            "INSERT INTO map_update_log(update_type,entity_name,details,updated_at) VALUES (?,?,?,?)",
+            ("core_only_reset", "global", json.dumps({"counts": counts, "backup": backup}, ensure_ascii=False), now),
+        )
+        try:
+            conn.execute(
+                "INSERT INTO app_events(level,message,details,created_at) VALUES (?,?,?,?)",
+                ("warning", "Core-only reset aplicado", json.dumps({"counts": counts, "backup": backup}, ensure_ascii=False), now),
+            )
+        except Exception:
+            pass
+    return {"backup": backup, "counts": counts}
+
+
+def render_core_only_reset_panel(conn: sqlite3.Connection) -> None:
+    st.markdown("### 🧼 Reset seguro a mapa limpio core-only")
+    st.markdown("""
+Esto deja el radar como base limpia: **XRPL, RLUSD, Ripple Payments, Treasury, Rail, Custody/Metaco, Hidden Road/Prime, DEX/AMM, Permissioned DEX, Trustlines, Gateways y rutas core fijas**.
+
+No borra chat, usuarios, mensajes fijados, presupuesto, métricas XRPL ni histórico de ledger. Solo limpia investigación acumulada que puede contaminar mapas: Discovery, cachés, rutas dinámicas, pruebas, fichas A→B y wallets descubiertas.
+""")
+    c1, c2, c3 = st.columns(3)
+    def _cnt(t: str) -> int:
+        try:
+            return int(conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] or 0)
+        except Exception:
+            return 0
+    c1.metric("Rutas dinámicas", _cnt("dynamic_routes"))
+    c2.metric("Pruebas guardadas", _cnt("connection_proofs"))
+    c3.metric("Caché Discovery", _cnt("institution_search_cache"))
+
+    admin_ok = render_admin_guard("core_reset")
+    clear_cache = st.checkbox("Borrar también caché/aliases de Discovery", value=True, key="core_reset_clear_cache", disabled=not admin_ok)
+    confirm = st.text_input("Confirmación reset", key="core_reset_confirm", placeholder="Escribe RESET CORE", disabled=not admin_ok)
+    if st.button("🧼 Dejar mapa limpio core-only", key="core_reset_apply", use_container_width=True, disabled=(not admin_ok or confirm != "RESET CORE")):
+        result = reset_map_to_core_only(conn, applied_by="admin", clear_cache=clear_cache)
+        st.success(f"Reset core-only aplicado. Backup: {result.get('backup')} · limpiado: {result.get('counts')}")
+        st.session_state["map_last_seen_global"] = _get_last_map_update(conn)
+        st.session_state["map_last_seen"] = _get_last_map_update(conn)
+        st.rerun()
 
 def render_safe_sanitizer_panel(conn: sqlite3.Connection) -> None:
     ensure_sanitizer_tables(conn)
@@ -20092,6 +20218,9 @@ La simulación usa precio {price_txt} (fuente: {html.escape(str(price_source))})
             styled_table(events)
         else:
             st.info("Sin eventos registrados.")
+
+        with st.expander("🧼 Reset seguro a mapa limpio core-only", expanded=False):
+            render_core_only_reset_panel(conn)
 
         with st.expander("🛡️ Sanitizador seguro de conexiones", expanded=False):
             render_safe_sanitizer_panel(conn)
