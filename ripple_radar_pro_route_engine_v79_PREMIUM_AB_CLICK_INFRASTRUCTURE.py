@@ -26426,5 +26426,577 @@ except Exception:
     pass
 
 
+
+# =============================================================================
+# v156 — CLEAN SIMPLE DISCOVERY RESET
+# =============================================================================
+# Objetivo: quitar la confusión acumulada de versiones anteriores.
+# - No tratar nodos fijos como 0% ni como "pendientes" especiales.
+# - Búsqueda normal para cualquier texto: nodo fijo, institución o relación.
+# - Caché primero si el usuario quiere; búsqueda online si no hay caché o fuerza novedades.
+# - Rutas válidas se aplican automáticamente a dynamic_routes para los 3 mapas.
+# - Cascada sencilla: resultado -> nodos/rutas derivados -> investigar siguiente.
+# - Reset admin real: borra datos dinámicos/cachés para reconstruir desde cero.
+try:
+    VERSION = "Route Path Intelligence v6.2.3 PRO — Clean Simple Discovery"
+    BUILD_ID = "v156_2026_05_12_CLEAN_SIMPLE_DISCOVERY_RESET"
+    BUILD_NOTE = "Discovery simplificado: reset total, búsqueda normal, cascada simple y rutas aplicadas a los 3 mapas."
+except Exception:
+    pass
+
+_RRP_V156_BASE_SEARCH = globals().get("_ORIG_SEARCH_INSTITUTION_CONNECTIONS_V153") or globals().get("_ORIG_SEARCH_INSTITUTION_CONNECTIONS_V147_PRE") or globals().get("search_institution_connections")
+_RRP_V156_BASE_FINALIZE = globals().get("_ORIG_FINALIZE_DISCOVERY_RESULT_V154") or globals().get("_ORIG_FINALIZE_DISCOVERY_RESULT_V151") or globals().get("_finalize_discovery_result")
+_RRP_V156_BASE_NODE_PANEL = globals().get("_RRP_TRUE_BASE_RENDER_NODE_INFO_PANEL_V152") or globals().get("_ORIG_RENDER_NODE_INFO_PANEL_V149") or globals().get("_RRP_V155_TRUE_BASE_NODE_PANEL")
+_RRP_V156_PARSE_NODE_PANEL_ARGS = globals().get("_rrp_v152_parse_node_panel_args")
+
+
+def _rrp_v156_table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    try:
+        return bool(conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone())
+    except Exception:
+        return False
+
+
+def _rrp_v156_count_table(conn: sqlite3.Connection, table: str) -> int:
+    try:
+        if not _rrp_v156_table_exists(conn, table):
+            return 0
+        return int((conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone() or [0])[0] or 0)
+    except Exception:
+        return 0
+
+
+def _rrp_v156_clear_table(conn: sqlite3.Connection, table: str) -> int:
+    try:
+        if not _rrp_v156_table_exists(conn, table):
+            return 0
+        n = _rrp_v156_count_table(conn, table)
+        conn.execute(f"DELETE FROM {table}")
+        return n
+    except Exception:
+        return 0
+
+
+def _rrp_v156_full_reset(conn: sqlite3.Connection) -> Dict[str, int]:
+    """Borra todo lo dinámico para empezar una investigación limpia.
+
+    No borra NODES/ROUTES constantes porque son el esqueleto del mapa.
+    """
+    for fn in [globals().get("ensure_discovery_tables"), globals().get("ensure_route_paths_table"), globals().get("ensure_discovered_wallets_table")]:
+        try:
+            if callable(fn):
+                fn(conn)
+        except Exception:
+            pass
+    tables = [
+        "dynamic_routes",
+        "dynamic_nodes",
+        "connection_proofs",
+        "route_paths",
+        "node_verifications",
+        "map_update_log",
+        "institution_search_cache",
+        "search_cache_aliases",
+        "api_search_audit",
+        "sanitizer_quarantine",
+        "discovered_wallets",
+        "unknown_whales",
+    ]
+    counts: Dict[str, int] = {}
+    for t in tables:
+        counts[t] = _rrp_v156_clear_table(conn, t)
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    # Limpiar estados antiguos de Streamlit que contaminaban cascadas.
+    try:
+        for k in list(st.session_state.keys()):
+            if str(k).startswith(("disc_", "cascade_", "rrp_cascade_", "rrp_discovery_tree", "cascade_results")):
+                del st.session_state[k]
+        st.session_state["rrp_simple_flow"] = []
+        st.session_state["rrp_simple_queue"] = []
+    except Exception:
+        pass
+    return counts
+
+
+def _rrp_v156_pair_key(a: Any, b: Any) -> str:
+    try:
+        return _canonical_pair_key(a, b)
+    except Exception:
+        aa = _canonical_entity_key(a) if "_canonical_entity_key" in globals() else str(a).lower().strip()
+        bb = _canonical_entity_key(b) if "_canonical_entity_key" in globals() else str(b).lower().strip()
+        return "::".join(sorted([aa, bb]))
+
+
+def _rrp_v156_direct_cache_get(conn: sqlite3.Connection, query: str) -> Optional[Dict[str, Any]]:
+    """Lee caché de forma directa, sin wrappers de 'nodo fijo pendiente'."""
+    try:
+        ensure_discovery_tables(conn)
+    except Exception:
+        pass
+    keys: List[str] = []
+    try:
+        keys = list(_cache_alias_keys(query, "discovery"))
+    except Exception:
+        keys = []
+    for k in [query, _canonical_entity_name(query) if "_canonical_entity_name" in globals() else query] + keys:
+        try:
+            if not k:
+                continue
+            row = conn.execute(
+                "SELECT result_json FROM institution_search_cache WHERE query=? ORDER BY searched_at DESC LIMIT 1",
+                (str(k),),
+            ).fetchone()
+            if row and row[0]:
+                obj = json.loads(row[0])
+                if isinstance(obj, dict):
+                    obj["_from_cache_direct"] = True
+                    return obj
+        except Exception:
+            continue
+    return None
+
+
+def _rrp_v156_clean_negative_fixed_artifacts(conn: sqlite3.Connection) -> None:
+    """Elimina los falsos 0% antiguos de nodos fijos/watchpoints, sin borrar rutas válidas."""
+    fixed_keys = set()
+    try:
+        for n in list(NODES.keys()):
+            fixed_keys.add(_canonical_entity_key(n))
+    except Exception:
+        fixed_keys = set()
+    try:
+        if _rrp_v156_table_exists(conn, "connection_proofs"):
+            cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(connection_proofs)").fetchall()}
+            rows = conn.execute("SELECT proof_id,node_a,node_b,confidence,proof_data FROM connection_proofs").fetchall() if "proof_id" in cols else []
+            for pid, a, b, conf, pdata in rows:
+                try:
+                    if float(conf or 0) > 0.001:
+                        continue
+                    if _canonical_entity_key(a) in fixed_keys or _canonical_entity_key(b) in fixed_keys:
+                        conn.execute("DELETE FROM connection_proofs WHERE proof_id=?", (pid,))
+                except Exception:
+                    pass
+        conn.commit()
+    except Exception:
+        pass
+
+
+def _rrp_v156_finalize_normal(result: Dict[str, Any], query: str) -> Dict[str, Any]:
+    out = dict(result or {})
+    try:
+        if _RRP_V156_BASE_FINALIZE and _RRP_V156_BASE_FINALIZE is not _finalize_discovery_result:
+            out = _RRP_V156_BASE_FINALIZE(out, query, _classify_entity(query), None)
+        else:
+            # No llamar a wrappers posteriores que convierten nodos fijos en 'pendientes'.
+            out.setdefault("institution", _canonical_entity_name(query))
+            out.setdefault("entity_type", _classify_entity(out.get("institution") or query))
+            out.setdefault("confidence", float(out.get("confidence", 0) or 0))
+            out.setdefault("connected", bool(out.get("connected", False)))
+    except Exception:
+        out.setdefault("institution", _canonical_entity_name(query))
+        out.setdefault("confidence", float(out.get("confidence", 0) or 0))
+    try:
+        out["institution"] = _canonical_entity_name(out.get("institution") or query)
+    except Exception:
+        out["institution"] = str(out.get("institution") or query)
+    # Quitar banderas visuales de versiones anteriores.
+    for k in ["_fixed_node_pending_evidence", "_do_not_cache_as_negative", "suggested_document_queries"]:
+        out.pop(k, None)
+    return out
+
+
+def _rrp_v156_search(query: str, conn: sqlite3.Connection, *, use_cache: bool = True, force_online: bool = False) -> Dict[str, Any]:
+    query = str(query or "").strip()
+    if not query:
+        return {}
+    if use_cache and not force_online:
+        cached = _rrp_v156_direct_cache_get(conn, query)
+        if cached:
+            return _rrp_v156_finalize_normal(cached, query)
+    base = _RRP_V156_BASE_SEARCH or search_institution_connections
+    try:
+        res = base(query, conn=conn, force_online=force_online)
+    except TypeError:
+        try:
+            res = base(query, conn, force_online)
+        except TypeError:
+            res = base(query)
+    res = _rrp_v156_finalize_normal(res, query)
+    try:
+        if conn is not None and not res.get("_api_temporal_error") and not res.get("_api_transient_error"):
+            # Guardar caché normal; si hay wrapper actual, escribimos también directo para evitar filtros de nodo fijo.
+            ensure_discovery_tables(conn)
+            key = _canonical_entity_name(res.get("institution") or query)
+            now = datetime.now(timezone.utc).isoformat()
+            payload = json.dumps(res, ensure_ascii=False)
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO institution_search_cache(query,result_json,searched_at,expires_at,search_type,hit_count)
+                VALUES(?,?,?,?,?,COALESCE((SELECT hit_count+1 FROM institution_search_cache WHERE query=?),1))
+                """,
+                (key, payload, now, None, "discovery", key),
+            )
+            if query and _canonical_entity_key(query) != _canonical_entity_key(key):
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO institution_search_cache(query,result_json,searched_at,expires_at,search_type,hit_count)
+                    VALUES(?,?,?,?,?,COALESCE((SELECT hit_count+1 FROM institution_search_cache WHERE query=?),1))
+                    """,
+                    (query, payload, now, None, "discovery", query),
+                )
+            conn.commit()
+    except Exception:
+        pass
+    return res
+
+
+# Reemplazar el buscador global por uno limpio para cualquier llamada posterior.
+def search_institution_connections(institution_name: str,
+                                   conn: Optional[sqlite3.Connection] = None,
+                                   force_online: bool = False) -> Dict[str, Any]:
+    if conn is None:
+        try:
+            conn = get_conn()
+        except Exception:
+            conn = None
+    if conn is None:
+        base = _RRP_V156_BASE_SEARCH
+        if base:
+            try:
+                return base(institution_name, force_online=force_online)
+            except Exception:
+                pass
+        return {"institution": str(institution_name or ""), "connected": False, "confidence": 0.0, "summary": "No hay conexión SQLite disponible."}
+    return _rrp_v156_search(institution_name, conn, use_cache=not force_online, force_online=force_online)
+
+
+def _rrp_v156_result_routes(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    routes: List[Dict[str, Any]] = []
+    if not isinstance(result, dict):
+        return routes
+    src = _canonical_entity_name(result.get("institution") or "")
+    seen: Set[str] = set()
+    for rd in result.get("route_decisions") or []:
+        if not isinstance(rd, dict):
+            continue
+        dst = rd.get("to") or rd.get("target") or rd.get("dst") or rd.get("node")
+        dst = _canonical_entity_name(dst)
+        if not src or not dst or src == dst:
+            continue
+        key = _rrp_v156_pair_key(src, dst)
+        if key in seen:
+            continue
+        seen.add(key)
+        routes.append({
+            "src": src,
+            "dst": dst,
+            "kind": str(rd.get("evidence_type") or rd.get("type") or rd.get("kind") or "route"),
+            "confidence": float(rd.get("confidence", result.get("confidence", 0) or 0) or 0),
+            "claim": str(rd.get("claim") or rd.get("evidence") or rd.get("reason") or ""),
+            "status": "map" if bool(rd.get("draw_on_map", True)) else "review",
+        })
+    for dst in result.get("connects_to") or []:
+        dst = _canonical_entity_name(dst)
+        if src and dst and src != dst:
+            key = _rrp_v156_pair_key(src, dst)
+            if key not in seen:
+                seen.add(key)
+                routes.append({"src": src, "dst": dst, "kind": str(result.get("route_kind") or "connects_to"), "confidence": float(result.get("confidence", 0) or 0), "claim": "detectado en connects_to", "status": "candidate"})
+    return routes
+
+
+def _rrp_v156_derived_nodes(result: Dict[str, Any], limit: int = 12) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    src = _canonical_entity_name((result or {}).get("institution") or "")
+    try:
+        if callable(globals().get("_rrp_extract_derived_nodes_from_result_v126")):
+            for d in _rrp_extract_derived_nodes_from_result_v126(result) or []:
+                n = _canonical_entity_name(d.get("node") or d.get("name") or d.get("target") or "")
+                if not n or n == src:
+                    continue
+                k = _canonical_entity_key(n)
+                if k in seen:
+                    continue
+                seen.add(k)
+                out.append({"name": n, "reason": str(d.get("reason") or d.get("type") or "nodo derivado"), "parent": src})
+    except Exception:
+        pass
+    for r in _rrp_v156_result_routes(result):
+        n = r.get("dst")
+        if not n or n == src:
+            continue
+        k = _canonical_entity_key(n)
+        if k not in seen:
+            seen.add(k)
+            out.append({"name": n, "reason": f"ruta detectada: {src} → {n}", "parent": src})
+    return out[:limit]
+
+
+def _rrp_v156_push_queue(result: Dict[str, Any]) -> None:
+    q = list(st.session_state.get("rrp_simple_queue", []) or [])
+    done = {_canonical_entity_key(x.get("institution")) for x in st.session_state.get("rrp_simple_flow", []) if isinstance(x, dict)}
+    qkeys = {_canonical_entity_key(x.get("name")) for x in q if isinstance(x, dict)}
+    for d in _rrp_v156_derived_nodes(result):
+        k = _canonical_entity_key(d.get("name"))
+        if not k or k in done or k in qkeys:
+            continue
+        q.append({"name": d.get("name"), "parent": d.get("parent"), "reason": d.get("reason"), "depth": 1})
+        qkeys.add(k)
+    st.session_state["rrp_simple_queue"] = q[:30]
+
+
+def _rrp_v156_record_result(result: Dict[str, Any], *, source: str, parent: str = "") -> None:
+    item = dict(result or {})
+    item["_simple_source"] = source
+    item["_simple_parent"] = parent
+    item["_simple_time"] = datetime.now(timezone.utc).isoformat()
+    flow = list(st.session_state.get("rrp_simple_flow", []) or [])
+    k = _canonical_entity_key(item.get("institution"))
+    # Sustituir resultado anterior de la misma entidad, no duplicar tarjetas.
+    flow = [x for x in flow if _canonical_entity_key(x.get("institution")) != k]
+    flow.append(item)
+    st.session_state["rrp_simple_flow"] = flow[-30:]
+    _rrp_v156_push_queue(item)
+
+
+def _rrp_v156_apply_to_map(conn: sqlite3.Connection, result: Dict[str, Any]) -> Dict[str, Any]:
+    info = {"added_node": False, "added_routes": 0, "reason": "not_applied"}
+    try:
+        info = apply_discovery_to_map(conn, result, auto=True) or info
+    except Exception as e:
+        info = {"added_node": False, "added_routes": 0, "reason": f"apply_error: {type(e).__name__}: {e}"}
+    try:
+        # Reconstruir rutas desde pruebas guardadas para que los 3 mapas vean dynamic_routes.
+        if callable(globals().get("_rrp_sync_routes_from_proofs")):
+            _rrp_sync_routes_from_proofs(conn)
+    except Exception:
+        pass
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    return info
+
+
+def _rrp_v156_render_result_clean(result: Dict[str, Any], conn: sqlite3.Connection, index: int = 0) -> None:
+    if not isinstance(result, dict):
+        return
+    name = _canonical_entity_name(result.get("institution") or "")
+    conf = float(result.get("confidence", 0) or 0)
+    connected = bool(result.get("connected"))
+    source = result.get("_simple_source") or "manual"
+    parent = result.get("_simple_parent") or ""
+    icon = str(result.get("icon") or (NODES.get(name, {}) or {}).get("icon") or "🔎")
+    badge = "✅ conexión/ruta posible" if connected or conf >= 0.45 or result.get("route_decisions") else "👁 sin conexión confirmada"
+    title_prefix = "🔍 Búsqueda" if source == "initial" else "🔗 Cascada"
+    parent_txt = f" · desde {parent}" if parent else ""
+    with st.container(border=True):
+        st.markdown(f"### {title_prefix} — {icon} {name} · {badge} · {conf:.0%}{parent_txt}")
+        st.write(str(result.get("summary") or "Sin resumen disponible."))
+        c1, c2, c3, c4 = st.columns(4)
+        ev = result.get("evidence_items") or []
+        pdf, primary = (0, 0)
+        try:
+            pdf, primary = _discovery_document_counts(result)
+        except Exception:
+            pass
+        routes = _rrp_v156_result_routes(result)
+        c1.metric("Pruebas", len(ev))
+        c2.metric("PDF/primarias", int(pdf or primary or 0))
+        c3.metric("Rutas detectadas", len(routes))
+        c4.metric("Estado mapa", "auto")
+        if routes:
+            st.markdown("**🧭 Rutas detectadas para validar/guardar en mapa**")
+            for i, r in enumerate(routes[:16]):
+                status_icon = "✅" if r.get("status") == "map" else "👁"
+                st.markdown(f"{status_icon} `{r.get('src')}` → `{r.get('dst')}` · **{r.get('kind')}** · {float(r.get('confidence') or 0):.0%}")
+                if r.get("claim"):
+                    st.caption(str(r.get("claim"))[:350])
+        else:
+            st.info("No hay rutas detectadas todavía. Esto no es prueba negativa: solo significa que esta búsqueda no ha generado una conexión validable.")
+        if ev:
+            with st.expander("🧾 Pruebas detectadas", expanded=False):
+                for e in ev[:12]:
+                    if isinstance(e, dict):
+                        title = str(e.get("title") or e.get("source") or "Prueba")
+                        typ = str(e.get("evidence_type") or e.get("type") or "evidence")
+                        claim = str(e.get("claim") or e.get("summary") or "")
+                        url = str(e.get("url") or "")
+                        st.markdown(f"- **{title}** · `{typ}` — {claim[:500]}")
+                        if url.startswith("http"):
+                            st.caption(url)
+        derived = _rrp_v156_derived_nodes(result)
+        if derived:
+            with st.expander("🧩 Siguientes nodos sugeridos", expanded=True):
+                for d in derived[:10]:
+                    n = d.get("name")
+                    cols = st.columns([3, 2])
+                    cols[0].markdown(f"**{n}**  \\n{d.get('reason','')}")
+                    if cols[1].button("🔎 Investigar", key=f"v156_inv_{index}_{_canonical_entity_key(n)}", use_container_width=True):
+                        st.session_state["rrp_simple_next_query"] = n
+                        st.session_state["rrp_simple_next_parent"] = name
+                        st.session_state["rrp_simple_force_online"] = False
+                        st.rerun()
+
+
+def _rrp_v156_run_and_store(conn: sqlite3.Connection, query: str, *, parent: str = "", force_online: bool = False, use_cache: bool = True, source: str = "initial") -> None:
+    result = _rrp_v156_search(query, conn, use_cache=use_cache, force_online=force_online)
+    _rrp_v156_apply_to_map(conn, result)
+    _rrp_v156_record_result(result, source=source, parent=parent)
+    st.session_state["rrp_simple_last_query"] = query
+
+
+def _rrp_v156_counts_summary(conn: sqlite3.Connection) -> str:
+    parts = []
+    for t in ["dynamic_routes", "connection_proofs", "institution_search_cache", "dynamic_nodes"]:
+        parts.append(f"{t}: {_rrp_v156_count_table(conn, t)}")
+    return " · ".join(parts)
+
+
+def _render_cache_first_status(conn: sqlite3.Connection, query: str, search_type: str = "discovery") -> Dict[str, Any]:
+    """v156: estado simple. Nada de 'nodo fijo pendiente'."""
+    if not query:
+        return {"cache": False, "can_skip_api": False}
+    cached = _rrp_v156_direct_cache_get(conn, query)
+    if cached:
+        st.success("💾 Hay caché útil para esta búsqueda. Puedes abrirla sin gastar API o forzar novedades.")
+        return {"cache": True, "can_skip_api": True}
+    st.info("🌐 Sin caché útil: si buscas ahora, hará búsqueda online normal y luego guardará resultado.")
+    return {"cache": False, "can_skip_api": False}
+
+
+def _render_discovery_investigation_flow(conn: sqlite3.Connection, root_result: Optional[Dict[str, Any]] = None) -> None:
+    """v156: árbol simple sin mensajes de nodo fijo pendiente."""
+    flow = list(st.session_state.get("rrp_simple_flow", []) or [])
+    if root_result and isinstance(root_result, dict):
+        # Evita duplicar si el render antiguo lo llama con root_result.
+        pass
+    if not flow:
+        st.caption("Todavía no hay investigaciones en este flujo limpio.")
+        return
+    st.markdown("### 🧪 Investigación limpia")
+    st.caption("Cada búsqueda genera rutas y nodos derivados. Si una ruta supera Proof‑First, se guarda automáticamente y aparece en los 3 mapas.")
+    for i, item in enumerate(flow):
+        _rrp_v156_render_result_clean(item, conn, i)
+    q = list(st.session_state.get("rrp_simple_queue", []) or [])
+    if q:
+        with st.container(border=True):
+            st.markdown("### 🔗 Siguiente hilo de cascada")
+            st.caption("Nada se marca como negativo por defecto. Cada nodo se investiga como búsqueda normal cuando le das a continuar.")
+            preview = " · ".join([f"{x.get('name')} ← {x.get('parent')}" for x in q[:8]])
+            st.write("Pendientes: " + preview)
+            c1, c2 = st.columns(2)
+            if c1.button("⚡ Investigar siguiente", key="v156_cascade_next", use_container_width=True):
+                item = q.pop(0)
+                st.session_state["rrp_simple_queue"] = q
+                st.session_state["rrp_simple_next_query"] = item.get("name")
+                st.session_state["rrp_simple_next_parent"] = item.get("parent") or ""
+                st.session_state["rrp_simple_force_online"] = False
+                st.rerun()
+            if c2.button("🗑️ Vaciar cola", key="v156_cascade_clear", use_container_width=True):
+                st.session_state["rrp_simple_queue"] = []
+                st.rerun()
+
+
+def render_discovery_engine(conn: sqlite3.Connection) -> None:
+    """Discovery limpio: una búsqueda normal, cascada normal, mapa normal."""
+    try:
+        _rrp_v156_clean_negative_fixed_artifacts(conn)
+    except Exception:
+        pass
+    st.subheader("Discovery Engine — modo limpio")
+    st.caption("Busca cualquier institución, nodo fijo o relación. El radar usa caché si existe, busca online si hace falta, valida rutas y las guarda automáticamente para los 3 mapas.")
+
+    try:
+        is_admin = bool(_is_admin_unlimited_ai(None))
+    except Exception:
+        is_admin = False
+    if is_admin:
+        with st.expander("🧨 Admin · borrar todo lo dinámico y empezar simple", expanded=True):
+            st.warning("Borra pruebas, rutas dinámicas, nodos dinámicos, cascadas y cachés. No borra el esqueleto fijo del mapa.")
+            st.caption(_rrp_v156_counts_summary(conn))
+            if st.button("🧨 BORRAR TODO Y EMPEZAR DE CERO", key="v156_full_clean_reset", use_container_width=True):
+                counts = _rrp_v156_full_reset(conn)
+                try:
+                    st.cache_data.clear()
+                except Exception:
+                    pass
+                st.success("Reset limpio realizado: " + ", ".join(f"{k}={v}" for k, v in counts.items() if v))
+                st.rerun()
+
+    # Procesar acción pendiente de botones de cascada.
+    pending_query = str(st.session_state.pop("rrp_simple_next_query", "") or "").strip()
+    if pending_query:
+        parent = str(st.session_state.pop("rrp_simple_next_parent", "") or "").strip()
+        force = bool(st.session_state.pop("rrp_simple_force_online", False))
+        with st.spinner(f"Investigando {pending_query}..."):
+            _rrp_v156_run_and_store(conn, pending_query, parent=parent, force_online=force, use_cache=not force, source="cascade" if parent else "initial")
+
+    q_default = str(st.session_state.get("rrp_simple_search_input", "") or "")
+    query = st.text_input("🔍 Buscar institución, nodo o relación", value=q_default, key="rrp_simple_search_input", placeholder="Ej: xrpledger, RLUSD, Banco Central Europeo, XRPL RLUSD, SWIFT Ripple Treasury")
+    _render_cache_first_status(conn, query, "discovery")
+    c1, c2, c3 = st.columns([1.2, 1.2, 1])
+    use_cache = c1.checkbox("💾 Usar caché si existe", value=True, key="v156_use_cache")
+    force_online = c2.checkbox("🌐 Forzar novedades online", value=False, key="v156_force_online")
+    clear_flow = c3.checkbox("🧹 Nuevo flujo", value=False, key="v156_new_flow")
+    b1, b2 = st.columns(2)
+    if b1.button("🔎 Buscar normal", key="v156_search_normal", use_container_width=True):
+        if not query.strip():
+            st.warning("Escribe algo para buscar.")
+        else:
+            if clear_flow:
+                st.session_state["rrp_simple_flow"] = []
+                st.session_state["rrp_simple_queue"] = []
+            with st.spinner(f"Investigando {query.strip()}..."):
+                _rrp_v156_run_and_store(conn, query.strip(), parent="", force_online=force_online, use_cache=use_cache, source="initial")
+            st.rerun()
+    if b2.button("🗺️ Reaplicar rutas del resultado actual", key="v156_reapply_last", use_container_width=True):
+        flow = st.session_state.get("rrp_simple_flow", []) or []
+        if not flow:
+            st.info("No hay resultado actual para reaplicar.")
+        else:
+            info = _rrp_v156_apply_to_map(conn, flow[-1])
+            st.success(f"Reaplicado: rutas añadidas/actualizadas={info.get('added_routes',0)} · motivo={info.get('reason','ok')}")
+            st.rerun()
+
+    _render_discovery_investigation_flow(conn)
+
+
+# Panel de nodo limpio: sin pendientes masivos ni 0% falsos. Solo botón para enviar a Discovery.
+def render_node_info_panel(*args, **kwargs) -> None:
+    if _RRP_V156_PARSE_NODE_PANEL_ARGS:
+        focus_node, row, conn, all_routes, all_nodes = _RRP_V156_PARSE_NODE_PANEL_ARGS(*args, **kwargs)
+    else:
+        focus_node = str(args[0] if args else kwargs.get("focus_node", ""))
+        row = args[1] if len(args) > 1 else pd.Series({})
+        conn = args[2] if len(args) > 2 else kwargs.get("conn")
+        all_routes = args[3] if len(args) > 3 else kwargs.get("all_routes", [])
+        all_nodes = args[4] if len(args) > 4 else kwargs.get("all_nodes", {})
+    try:
+        if _RRP_V156_BASE_NODE_PANEL:
+            _RRP_V156_BASE_NODE_PANEL(focus_node, row, conn, all_routes, all_nodes)
+    except Exception as e:
+        st.error(f"No pude renderizar la ficha base del nodo: {type(e).__name__}: {e}")
+    with st.container(border=True):
+        st.markdown("**🔎 Validación manual del nodo**")
+        st.caption("Esto abre una búsqueda normal en Discovery. No marca 0% por ser nodo fijo ni crea pendientes masivos.")
+        if st.button(f"Buscar `{focus_node}` en Discovery", key=f"v156_node_search_{_canonical_entity_key(focus_node)}", use_container_width=True):
+            st.session_state["rrp_simple_search_input"] = _canonical_entity_name(focus_node)
+            st.session_state["rrp_simple_next_query"] = _canonical_entity_name(focus_node)
+            st.session_state["rrp_simple_next_parent"] = ""
+            st.session_state["rrp_simple_force_online"] = False
+            st.success("Nodo enviado a Discovery. Abre la pestaña Descubrimientos.")
+
+
+try:
+    _rrp_v156_clean_negative_fixed_artifacts(get_conn())
+except Exception:
+    pass
+
+
 if __name__ == "__main__":
     main()
