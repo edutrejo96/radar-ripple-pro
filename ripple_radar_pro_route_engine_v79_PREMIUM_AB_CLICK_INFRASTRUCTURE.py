@@ -33928,6 +33928,875 @@ try:
 except Exception:
     pass
 
+
+# =============================================================================
+# v176 · PUBLIC ASSET CONNECTORS / STABLECOINS / FIAT / TOKENIZED ASSETS FIX
+# -----------------------------------------------------------------------------
+# Objetivo:
+# - No limitar la vigilancia pública a RLUSD.
+# - Cualquier stablecoin, fiat tokenizado o activo tokenizado puede convertirse en
+#   target si aparece con identificador público: issuer XRPL, wallet, currency code,
+#   trustline, orderbook o AMM.
+# - Si no hay identificador público, queda como "falta identificador" y se muestra
+#   exactamente qué falta para poder vigilarlo.
+# - Route A→B debe enseñar puntos de conexión: issuer, wallet, trustlines,
+#   DEX/orderbook, AMM, pagos, volumen XRP/asset cuando exista señal.
+# =============================================================================
+
+BUILD_ID = "v176_2026_05_13_PUBLIC_ASSET_CONNECTORS_FIX"
+BUILD_NOTE = "Puntos públicos de conexión para stablecoins, fiat tokenizado y activos tokenizados"
+
+_RRP_V176_STABLECOIN_ALIASES = {
+    "rlusd": "RLUSD", "ripple usd": "RLUSD", "ripple usd stablecoin": "RLUSD",
+    "usdc": "USDC", "usd coin": "USDC", "circle usd": "USDC",
+    "usdt": "USDT", "tether": "USDT",
+    "eurc": "EURC", "euro coin": "EURC", "euroc": "EURC",
+    "xsgd": "XSGD", "sgd stablecoin": "XSGD",
+    "stablecoin": "Stablecoin", "stablecoins": "Stablecoin",
+}
+_RRP_V176_FIAT_TERMS = {
+    "usd": "USD", "eur": "EUR", "gbp": "GBP", "jpy": "JPY", "cny": "CNY", "sgd": "SGD", "aud": "AUD",
+    "mxn": "MXN", "brl": "BRL", "cop": "COP", "tokenized deposit": "Tokenized Deposit",
+    "deposit token": "Tokenized Deposit", "fiat token": "Fiat Token", "fiat tokenizado": "Fiat Token",
+    "dinero tokenizado": "Tokenized Money", "programmable money": "Tokenized Money",
+}
+_RRP_V176_TOKENIZED_ASSET_TERMS = {
+    "tokenized asset": "Tokenized Asset", "tokenised asset": "Tokenized Asset", "activo tokenizado": "Tokenized Asset",
+    "rwa": "RWA", "real world asset": "RWA", "real-world asset": "RWA",
+    "tokenized fund": "Tokenized Fund", "tokenised fund": "Tokenized Fund", "fondo tokenizado": "Tokenized Fund",
+    "treasury bill": "Tokenized Treasury", "tokenized treasury": "Tokenized Treasury", "t-bill": "Tokenized Treasury",
+    "buidl": "BlackRock BUIDL", "vbill": "VBILL", "ousg": "OUSG",
+    "bond token": "Tokenized Bond", "bono tokenizado": "Tokenized Bond",
+}
+
+_RRP_V176_KNOWN_XRPL_ISSUERS = {
+    "RLUSD": {"issuer": RLUSD_ISSUER, "currency": RLUSD_CURRENCY, "hex": "524C555344000000000000000000000000000000"},
+}
+
+
+def _rrp_v176_norm(s: Any) -> str:
+    try:
+        return _norm_key(s)
+    except Exception:
+        return re.sub(r"\s+", " ", str(s or "").lower()).strip()
+
+
+def _rrp_v176_detect_asset_terms(*texts: Any) -> List[Dict[str, str]]:
+    """Detecta stablecoins, fiat tokenizado y activos tokenizados en texto/fuentes."""
+    blob = _rrp_v176_norm(" ".join(str(t or "") for t in texts))
+    out: List[Dict[str, str]] = []
+    seen: Set[str] = set()
+
+    def add(name: str, asset_type: str, trigger: str) -> None:
+        key = f"{asset_type}|{name}"
+        if key in seen:
+            return
+        seen.add(key)
+        out.append({"asset": name, "asset_type": asset_type, "trigger": trigger})
+
+    for k, v in _RRP_V176_STABLECOIN_ALIASES.items():
+        nk = _rrp_v176_norm(k)
+        if nk and (blob == nk or nk in blob):
+            add(v, "stablecoin", k)
+    for k, v in _RRP_V176_FIAT_TERMS.items():
+        nk = _rrp_v176_norm(k)
+        # Para códigos fiat cortos, exigir contexto tokenizado para evitar ruido.
+        if len(nk) <= 3 and nk in {"usd", "eur", "gbp", "jpy", "cny", "sgd", "aud", "mxn", "brl", "cop"}:
+            if nk in blob and any(t in blob for t in ["token", "tokenized", "tokenised", "issued currency", "stablecoin", "cbdc", "deposit"]):
+                add(v, "fiat_token", k)
+        elif nk and nk in blob:
+            add(v, "fiat_token", k)
+    for k, v in _RRP_V176_TOKENIZED_ASSET_TERMS.items():
+        nk = _rrp_v176_norm(k)
+        if nk and nk in blob:
+            add(v, "tokenized_asset", k)
+    return out[:12]
+
+
+def _rrp_v176_currency_codes_from_text(*texts: Any) -> List[str]:
+    blob = " ".join(str(t or "") for t in texts)
+    codes = []
+    # XRPL currency code normal y 160-bit hex.
+    for c in re.findall(r"\b[A-Z0-9]{3,12}\b", blob):
+        if c in {"XRPL", "XRP", "DEX", "AMM", "URL", "PDF", "API", "HTTP", "HTTPS"}:
+            continue
+        if c not in codes and any(x in c for x in ["USD", "EUR", "GBP", "JPY", "CNY", "RLUSD", "USDC", "USDT", "EURC"]):
+            codes.append(c)
+    for h in re.findall(r"\b[0-9A-Fa-f]{40}\b", blob):
+        if h not in codes:
+            codes.append(h)
+    return codes[:10]
+
+
+def _rrp_v176_public_connection_points(src: Any, dst: Any, kind: Any = "", evidence: Any = "", urls: Any = "") -> Dict[str, Any]:
+    """Describe por dónde se puede vigilar una ruta pública: issuer, trustline, DEX, AMM, wallet, etc."""
+    text = " ".join([str(src or ""), str(dst or ""), str(kind or ""), str(evidence or ""), str(urls or "")])
+    assets = _rrp_v176_detect_asset_terms(text)
+    addresses = []
+    try:
+        addresses = _rrp_v171_find_xrpl_addresses(text)
+    except Exception:
+        addresses = []
+    codes = _rrp_v176_currency_codes_from_text(text)
+    nodes = {_rrp_v171_node(src), _rrp_v171_node(dst)} if callable(globals().get("_rrp_v171_node")) else {str(src), str(dst)}
+    points: List[Dict[str, str]] = []
+
+    # Known asset issuers.
+    for a in assets:
+        asset = a.get("asset") or ""
+        if asset in _RRP_V176_KNOWN_XRPL_ISSUERS:
+            info = _RRP_V176_KNOWN_XRPL_ISSUERS[asset]
+            points.append({"kind": "issuer", "label": f"{asset} issuer", "value": info.get("issuer", ""), "asset": asset})
+            points.append({"kind": "currency", "label": f"{asset} currency", "value": info.get("currency", asset), "asset": asset})
+
+    for addr in addresses:
+        points.append({"kind": "wallet", "label": "XRPL wallet/issuer detectado", "value": addr, "asset": ""})
+    for code in codes:
+        points.append({"kind": "currency", "label": "Código/activo emitido detectado", "value": code, "asset": code})
+
+    # Conectores públicos técnicos. Son lugares de observación, no adopción institucional.
+    if "Trustlines" in nodes or any(a.get("asset_type") in {"stablecoin", "fiat_token", "tokenized_asset"} for a in assets):
+        points.append({"kind": "trustlines", "label": "Trustlines / RippleState", "value": "TrustSet + RippleState", "asset": ""})
+    if "DEX/AMM" in nodes or "Issued Currencies" in nodes or any(a.get("asset_type") in {"stablecoin", "fiat_token", "tokenized_asset"} for a in assets):
+        points.append({"kind": "dex_orderbook", "label": "DEX / orderbook", "value": "book_offers XRP↔asset", "asset": ""})
+        points.append({"kind": "amm_pool", "label": "AMM pools", "value": "ledger_data type=amm", "asset": ""})
+    if "XRPL" in nodes or assets or addresses:
+        points.append({"kind": "payments", "label": "Pagos / transferencias", "value": "account_tx + Payment", "asset": ""})
+        points.append({"kind": "large_transfers", "label": "Grandes transferencias", "value": "Payment + delivered_amount", "asset": ""})
+
+    # Dedup conservar orden.
+    dedup = []
+    seen = set()
+    for p in points:
+        key = (p.get("kind"), p.get("value"), p.get("asset"))
+        if key in seen:
+            continue
+        seen.add(key)
+        dedup.append(p)
+    missing = []
+    if assets and not addresses and not any((p.get("kind") == "issuer" and p.get("value")) for p in dedup):
+        missing.append("issuer XRPL / wallet pública del activo")
+    if assets and not codes and not any((p.get("kind") == "currency" and p.get("value")) for p in dedup):
+        missing.append("currency code del activo emitido")
+    return {"assets": assets, "addresses": addresses, "currency_codes": codes, "points": dedup[:20], "missing": missing}
+
+
+_ORIG_RRP_V171_WATCH_KIND_FOR_ROUTE_V176 = globals().get("_rrp_v171_watch_kind_for_route")
+def _rrp_v171_watch_kind_for_route(src: Any, dst: Any, kind: Any, evidence: Any = "", urls: Any = "") -> Tuple[str, str, str]:
+    # Primero conservar reglas existentes cuando sean precisas.
+    if callable(_ORIG_RRP_V171_WATCH_KIND_FOR_ROUTE_V176):
+        try:
+            wt, subject, status = _ORIG_RRP_V171_WATCH_KIND_FOR_ROUTE_V176(src, dst, kind, evidence, urls)
+            if wt and status != "ignore":
+                return wt, subject, status
+        except Exception:
+            pass
+    conninfo = _rrp_v176_public_connection_points(src, dst, kind, evidence, urls)
+    assets = conninfo.get("assets") or []
+    addrs = conninfo.get("addresses") or []
+    if addrs:
+        return "asset_issuer", addrs[0], "active"
+    # RLUSD conocido aunque no venga explícita la address.
+    for a in assets:
+        if a.get("asset") == "RLUSD":
+            return "rlusd_issuer", RLUSD_ISSUER, "active"
+    if assets:
+        label = ", ".join(sorted({a.get("asset") or a.get("asset_type") for a in assets if a.get("asset") or a.get("asset_type")}))
+        return "asset_public_connector", label or "Activo tokenizado", "needs_identifier"
+    return "", "", "ignore"
+
+
+_ORIG_RRP_V171_UPSERT_WATCH_TARGET_V176 = globals().get("_rrp_v171_upsert_watch_target")
+def _rrp_v171_upsert_watch_target(conn: sqlite3.Connection, src: Any, dst: Any, kind: Any, conf: Any = 0.0,
+                                  evidence: Any = "", source_urls: Any = "", route_id: str = "") -> bool:
+    """Añade detalle de puntos públicos en reason/evidence para cualquier activo observable."""
+    if callable(_ORIG_RRP_V171_UPSERT_WATCH_TARGET_V176):
+        changed = bool(_ORIG_RRP_V171_UPSERT_WATCH_TARGET_V176(conn, src, dst, kind, conf, evidence, source_urls, route_id))
+    else:
+        changed = False
+    try:
+        conninfo = _rrp_v176_public_connection_points(src, dst, kind, evidence, source_urls)
+        if not conninfo.get("points") and not conninfo.get("missing"):
+            return changed
+        pair = _rrp_v171_pair_key(src, dst)
+        # Actualizar todos los targets de ese par con explicación más útil.
+        bits = []
+        for p in conninfo.get("points", [])[:10]:
+            val = p.get("value") or ""
+            bits.append(f"{p.get('label')}: {val}".strip())
+        if conninfo.get("missing"):
+            bits.append("Falta para vigilancia precisa: " + ", ".join(conninfo.get("missing") or []))
+        note = "Puntos públicos de conexión: " + " · ".join(bits)
+        conn.execute("""
+            UPDATE onchain_watch_targets
+            SET reason = CASE WHEN reason IS NULL OR reason='' THEN ? ELSE reason || ' ' || ? END,
+                updated_at=?
+            WHERE pair_key=?
+        """, (note[:1200], note[:1200], _rrp_v171_now(), pair))
+        conn.commit()
+    except Exception:
+        pass
+    return changed
+
+
+def _rrp_v176_parse_issued_amount(tx: Dict[str, Any], currency: str = "", issuer: str = "") -> float:
+    """Parsea cantidad de un activo emitido genérico, si se conoce currency/issuer."""
+    total = 0.0
+    cur = str(currency or "").strip()
+    iss = str(issuer or "").strip()
+    candidates = [tx.get("Amount"), tx.get("DeliverMax"), tx.get("SendMax"), tx.get("delivered_amount")]
+    meta = tx.get("meta") or tx.get("metaData") or {}
+    if isinstance(meta, dict):
+        candidates.append(meta.get("delivered_amount"))
+    for amt in candidates:
+        if isinstance(amt, dict):
+            if (not cur or str(amt.get("currency") or "") == cur) and (not iss or str(amt.get("issuer") or "") == iss):
+                try:
+                    total += abs(float(amt.get("value", 0)))
+                except Exception:
+                    pass
+        elif isinstance(amt, str) and (not cur or cur == "XRP"):
+            try:
+                total += abs(float(amt)) / 1e6
+            except Exception:
+                pass
+    if isinstance(meta, dict):
+        for node in meta.get("AffectedNodes", []) or []:
+            if not isinstance(node, dict):
+                continue
+            for k in ("ModifiedNode", "CreatedNode", "DeletedNode"):
+                obj = node.get(k) or {}
+                if not isinstance(obj, dict):
+                    continue
+                for fk in ("FinalFields", "PreviousFields", "NewFields"):
+                    fields = obj.get(fk) or {}
+                    if not isinstance(fields, dict):
+                        continue
+                    bal = fields.get("Balance")
+                    if isinstance(bal, dict):
+                        if (not cur or str(bal.get("currency") or "") == cur) and (not iss or str(bal.get("issuer") or "") == iss):
+                            try:
+                                total += abs(float(bal.get("value", 0)))
+                            except Exception:
+                                pass
+    return float(total)
+
+
+def _rrp_v176_fetch_account_asset_metrics(account: str, currency: str = "", pages: int = 1, per_page: int = 80) -> Dict[str, Any]:
+    """Métricas ligeras para cualquier issuer/wallet XRPL público."""
+    m = {
+        "asset_tx_count": 0, "asset_volume": 0.0, "xrp_volume": 0.0, "asset_unique_accounts": 0,
+        "asset_large_count": 0, "asset_trustline_events": 0, "asset_offer_events": 0, "asset_amm_events": 0,
+        "account": account, "currency": currency,
+    }
+    if not account or not str(account).startswith("r"):
+        return m
+    marker = None
+    txs = []
+    for _ in range(max(1, min(int(pages or 1), 3))):
+        params = {"account": account, "ledger_index_min": -1, "ledger_index_max": -1, "binary": False,
+                  "limit": int(per_page or 80), "forward": False, "api_version": 2}
+        if marker:
+            params["marker"] = marker
+        try:
+            data = xrpl_rpc({"method": "account_tx", "params": [params]}, timeout=15)
+            result = data.get("result", {})
+            for row in result.get("transactions", []):
+                tx = row.get("tx_json") or row.get("tx") or {}
+                meta = row.get("meta") or row.get("metaData") or {}
+                if isinstance(meta, dict):
+                    tx["meta"] = meta
+                txs.append(tx)
+            marker = result.get("marker")
+            if not marker:
+                break
+        except Exception as exc:
+            m["asset_error"] = str(exc)
+            break
+    accounts = set()
+    for tx in txs:
+        try:
+            accounts.add(str(tx.get("Account") or "")); accounts.add(str(tx.get("Destination") or ""))
+            amt = _rrp_v176_parse_issued_amount(tx, currency=currency, issuer=account)
+            m["asset_volume"] += float(amt or 0.0)
+            if float(amt or 0.0) >= 100_000:
+                m["asset_large_count"] += 1
+            xrp = _rrp_v176_parse_issued_amount(tx, currency="XRP", issuer="")
+            m["xrp_volume"] += float(xrp or 0.0)
+            cls = classify_tx(tx) if callable(globals().get("classify_tx")) else {}
+            m["asset_trustline_events"] += int(cls.get("trustline", 0) or 0)
+            m["asset_offer_events"] += int(cls.get("offer", 0) or 0)
+            m["asset_amm_events"] += int(cls.get("amm", 0) or 0)
+        except Exception:
+            continue
+    accounts.discard("")
+    m["asset_tx_count"] = len(txs)
+    m["asset_unique_accounts"] = len(accounts)
+    return m
+
+
+_ORIG_RRP_V171_SIGNAL_SCORE_FROM_COUNTS_V176 = globals().get("_rrp_v171_signal_score_from_counts")
+def _rrp_v171_signal_score_from_counts(kind: str, metrics: Dict[str, Any]) -> float:
+    k = str(kind or "")
+    if k in {"asset_issuer", "fiat_issuer", "tokenized_asset_issuer"}:
+        try:
+            return clamp(
+                normalize(float(metrics.get("asset_tx_count", 0)), 1, 120) * 0.25 +
+                normalize(float(metrics.get("asset_volume", 0)), 1_000, 5_000_000) * 0.30 +
+                normalize(float(metrics.get("xrp_volume", 0)), 100, 1_000_000) * 0.18 +
+                normalize(float(metrics.get("asset_unique_accounts", 0)), 2, 80) * 0.17 +
+                normalize(float(metrics.get("asset_large_count", 0)), 1, 10) * 0.10
+            )
+        except Exception:
+            return 0.0
+    if k == "asset_public_connector":
+        return 0.0
+    if callable(_ORIG_RRP_V171_SIGNAL_SCORE_FROM_COUNTS_V176):
+        return _ORIG_RRP_V171_SIGNAL_SCORE_FROM_COUNTS_V176(kind, metrics)
+    return 0.0
+
+
+_ORIG_RRP_V171_RUN_WATCH_CYCLE_V176 = globals().get("_rrp_v171_run_watch_cycle")
+def _rrp_v171_run_watch_cycle(conn: sqlite3.Connection, *, force: bool = False) -> Dict[str, Any]:
+    """Mantiene vigilancia existente y añade métricas por issuer/wallet genérico."""
+    if callable(_ORIG_RRP_V171_RUN_WATCH_CYCLE_V176):
+        out = _ORIG_RRP_V171_RUN_WATCH_CYCLE_V176(conn, force=force) or {}
+    else:
+        out = {"checked": 0, "signals": 0, "max_signal": 0.0}
+    try:
+        _rrp_v171_ensure_watch_tables(conn)
+        rows = conn.execute("""
+            SELECT target_id, src, dst, pair_key, watch_type, subject, status, confidence, last_checked, evidence_json
+            FROM onchain_watch_targets
+            WHERE status='active' AND watch_type IN ('asset_issuer','fiat_issuer','tokenized_asset_issuer')
+            ORDER BY updated_at DESC LIMIT 40
+        """).fetchall()
+        now = _rrp_v171_now()
+        for tid, src, dst, pair_key, wt, subject, status, conf, last_checked, evidence_json in rows:
+            subj = str(subject or "")
+            if not subj.startswith("r"):
+                continue
+            # intentar deducir currency de evidencia/ruta.
+            codes = _rrp_v176_currency_codes_from_text(src, dst, evidence_json)
+            currency = ""
+            for c in codes:
+                if c != "XRP":
+                    currency = c; break
+            metrics = _rrp_v176_fetch_account_asset_metrics(subj, currency=currency, pages=1, per_page=80)
+            score = _rrp_v171_signal_score_from_counts(str(wt), metrics)
+            summary = (
+                f"Issuer/wallet XRPL observado: account={subj}, currency={currency or 'desconocida'}, "
+                f"tx={metrics.get('asset_tx_count',0)}, volumen_asset≈{float(metrics.get('asset_volume',0.0)):.2f}, "
+                f"volumen_XRP≈{float(metrics.get('xrp_volume',0.0)):.2f}, cuentas={metrics.get('asset_unique_accounts',0)}, "
+                f"trustlines/offers/AMM={metrics.get('asset_trustline_events',0)}/{metrics.get('asset_offer_events',0)}/{metrics.get('asset_amm_events',0)}."
+            )
+            payload = {"src": src, "dst": dst, "watch_type": wt, "subject": subject, "summary": summary, "metrics": metrics, "observed_at": now, "connection_points": _rrp_v176_public_connection_points(src, dst, wt, evidence_json, evidence_json)}
+            _rrp_v171_insert_signal(conn, tid, pair_key, str(wt), score, payload)
+            out["checked"] = int(out.get("checked", 0) or 0) + 1
+            out["signals"] = int(out.get("signals", 0) or 0) + 1
+            out["max_signal"] = max(float(out.get("max_signal", 0.0) or 0.0), float(score or 0.0))
+        conn.commit()
+    except Exception as exc:
+        out["asset_watch_error"] = str(exc)
+    try:
+        out["route_ab_synced"] = _rrp_v175_persist_watch_paths(conn) if callable(globals().get("_rrp_v175_persist_watch_paths")) else out.get("route_ab_synced", 0)
+    except Exception:
+        pass
+    return out
+
+
+_ORIG_RRP_V175_ROUTE_PATH_ROWS_FROM_WATCH_V176 = globals().get("_rrp_v175_route_path_rows_from_watch")
+def _rrp_v175_route_path_rows_from_watch(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    rows = _ORIG_RRP_V175_ROUTE_PATH_ROWS_FROM_WATCH_V176(conn) if callable(_ORIG_RRP_V175_ROUTE_PATH_ROWS_FROM_WATCH_V176) else []
+    out = []
+    for r in rows:
+        try:
+            conninfo = _rrp_v176_public_connection_points(r.get("origin"), r.get("destination"), r.get("path_type"), r.get("evidence"), r.get("source_urls"))
+            points = conninfo.get("points") or []
+            missing = conninfo.get("missing") or []
+            bits = []
+            for p in points[:8]:
+                val = p.get("value") or ""
+                label = p.get("label") or p.get("kind") or "punto"
+                if val.startswith("r"):
+                    bits.append(f"{label}: {val} (XRPSCAN/Bithomp)")
+                else:
+                    bits.append(f"{label}: {val}")
+            if missing:
+                bits.append("Falta: " + ", ".join(missing))
+            if bits:
+                extra = "\n\nPuntos públicos de conexión para vigilar esta línea: " + " · ".join(bits)
+                r["evidence"] = (str(r.get("evidence") or "") + extra)[:1400]
+                r["explanation"] = (str(r.get("explanation") or "") + extra)[:1900]
+                # añadir links de explorador si hay address.
+                urls = str(r.get("source_urls") or "")
+                for p in points:
+                    val = p.get("value") or ""
+                    if val.startswith("r"):
+                        for u in [f"https://xrpscan.com/account/{val}", f"https://bithomp.com/explorer/{val}"]:
+                            if u not in urls:
+                                urls += ("\n" if urls else "") + u
+                r["source_urls"] = urls
+        except Exception:
+            pass
+        out.append(r)
+    return out
+
+
+_ORIG_RRP_V171_RENDER_REAL_WATCH_PANEL_V176 = globals().get("_rrp_v171_render_real_watch_panel")
+def _rrp_v171_render_real_watch_panel(conn: sqlite3.Connection) -> None:
+    st.caption("📡 Vigilancia ampliada: no solo RLUSD. Stablecoins, fiat tokenizado y activos tokenizados se vigilan si aparece issuer/wallet/currency code; si no, quedan como falta identificador público.")
+    if callable(_ORIG_RRP_V171_RENDER_REAL_WATCH_PANEL_V176):
+        _ORIG_RRP_V171_RENDER_REAL_WATCH_PANEL_V176(conn)
+    try:
+        rows = _rrp_v171_latest_watch_rows(conn, limit=300)
+        asset_like = [r for r in rows if str(r.get("watch_type") or "") in {"rlusd_issuer", "asset_issuer", "asset_public_connector", "fiat_issuer", "tokenized_asset_issuer"}]
+        if asset_like:
+            with st.expander("🧭 Puntos públicos de conexión detectados", expanded=False):
+                for r in asset_like[:30]:
+                    conninfo = _rrp_v176_public_connection_points(r.get("src"), r.get("dst"), r.get("watch_type"), r.get("last_summary"), r.get("subject"))
+                    st.markdown(f"**{r.get('src')} ↔ {r.get('dst')}** · `{r.get('watch_type')}` · señal {float(r.get('last_signal') or 0):.0%}")
+                    if conninfo.get("points"):
+                        for p in conninfo.get("points")[:8]:
+                            st.caption(f"• {p.get('label')}: {p.get('value')}")
+                    if conninfo.get("missing"):
+                        st.caption("Falta para vigilancia precisa: " + ", ".join(conninfo.get("missing") or []))
+                    if r.get("last_summary"):
+                        st.caption(str(r.get("last_summary"))[:500])
+    except Exception:
+        pass
+
+try:
+    _rrp_v171_ensure_watch_tables(get_conn())
+    _rrp_v171_seed_watch_targets_from_routes(get_conn())
+    if callable(globals().get("_rrp_v175_persist_watch_paths")):
+        _rrp_v175_persist_watch_paths(get_conn())
+except Exception:
+    pass
+
+
+# =============================================================================
+# v177 · SEARCHER ASSET CONNECTOR INTEGRATION FIX
+# =============================================================================
+# Objetivo:
+# - La vigilancia de stablecoins/fiat tokenizado/RWA no debe depender solo del
+#   mapa o de rutas ya creadas. Debe nacer EN EL BUSCADOR/Discovery.
+# - Cada fuente detectada se analiza para extraer:
+#     * activos/códigos: RLUSD, USDC, USDT, EURC, PYUSD, GYEN, XSGD, etc.
+#     * categorías: stablecoin, fiat tokenizado, issued currency, tokenized asset/RWA.
+#     * direcciones XRPL/issuer/wallet si aparecen.
+#     * puntos públicos: XRPL, trustlines, issued currencies, DEX/AMM, AMM, Ethereum.
+# - Si hay relación clara con XRPL, se generan rutas documentales técnicas.
+# - Si hay issuer/wallet, se crea target on-chain activo.
+# - Si no hay identificador público, queda en needs_identifier, no se inventa señal.
+# =============================================================================
+
+BUILD_ID = "v177_2026_05_13_SEARCHER_ASSET_CONNECTOR_INTEGRATION"
+BUILD_NOTE = "buscador extrae activos/issuers/wallets y crea rutas + vigilancia desde fuentes"
+VERSION = "Route Path Intelligence v6.2.3 PRO — XRPL Core · Searcher Asset Connectors v177"
+
+_RRP_V177_STABLE_ASSETS: Dict[str, Dict[str, str]] = {
+    "RLUSD": {"name": "RLUSD", "kind": "stablecoin", "issuer_hint": RLUSD_ISSUER if 'RLUSD_ISSUER' in globals() else ""},
+    "USDC": {"name": "USDC", "kind": "stablecoin", "issuer_hint": ""},
+    "USDT": {"name": "USDT", "kind": "stablecoin", "issuer_hint": ""},
+    "EURC": {"name": "EURC", "kind": "fiat_tokenized", "issuer_hint": ""},
+    "PYUSD": {"name": "PYUSD", "kind": "stablecoin", "issuer_hint": ""},
+    "GUSD": {"name": "GUSD", "kind": "stablecoin", "issuer_hint": ""},
+    "TUSD": {"name": "TUSD", "kind": "stablecoin", "issuer_hint": ""},
+    "XSGD": {"name": "XSGD", "kind": "fiat_tokenized", "issuer_hint": ""},
+    "GYEN": {"name": "GYEN", "kind": "fiat_tokenized", "issuer_hint": ""},
+    "EURS": {"name": "EURS", "kind": "fiat_tokenized", "issuer_hint": ""},
+    "EURT": {"name": "EURT", "kind": "fiat_tokenized", "issuer_hint": ""},
+}
+
+_RRP_V177_FIAT_WORDS = {
+    "usd": "USD", "dollar": "USD", "dólar": "USD", "eur": "EUR", "euro": "EUR",
+    "gbp": "GBP", "pound": "GBP", "sterling": "GBP", "jpy": "JPY", "yen": "JPY",
+    "sgd": "SGD", "mxn": "MXN", "brl": "BRL", "cop": "COP", "cny": "CNY", "rmb": "CNY",
+}
+
+_RRP_V177_RWA_TERMS = [
+    "tokenized asset", "tokenised asset", "tokenized assets", "tokenised assets", "tokenized fund",
+    "tokenised fund", "tokenized money market", "tokenized treasury", "tokenised treasury",
+    "rwa", "real world asset", "real-world asset", "real world assets", "real-world assets",
+    "buidl", "vbill", "tokenized bond", "tokenised bond", "security token", "fund token",
+]
+
+_RRP_V177_SOURCE_DOMAINS_STRONG = [
+    "xrpl.org", "docs.xrpl.org", "ripple.com", "docs.ripple.com", "developers.ripple.com",
+    "engineering.ripple.com", "opensource.ripple.com", "github.com/ripple", "github.com/XRPLF",
+]
+
+
+def _rrp_v177_doc_blob(d: Dict[str, Any]) -> str:
+    try:
+        return "\n".join(str(d.get(k) or "") for k in (
+            "title", "claim", "summary", "description", "snippet", "text", "url", "source_url", "doc_type", "type"
+        ))
+    except Exception:
+        return str(d or "")
+
+
+def _rrp_v177_doc_url(d: Dict[str, Any]) -> str:
+    try:
+        return _rrp_v164_doc_url(d)
+    except Exception:
+        return str((d or {}).get("url") or (d or {}).get("source_url") or "")
+
+
+def _rrp_v177_strong_source(url: str) -> bool:
+    u = str(url or "").lower()
+    return any(x.lower() in u for x in _RRP_V177_SOURCE_DOMAINS_STRONG)
+
+
+def _rrp_v177_has_xrpl_context(blob: str, url: str = "") -> bool:
+    b = _norm_key(str(blob or "") + " " + str(url or ""))
+    return any(x in b for x in [
+        "xrpl", "xrp ledger", "xrp-ledger", "xrp ledger network", "issued currencies",
+        "trust line", "trust lines", "trustline", "trustlines", "xrpl token", "xrpl tokens",
+        "ripple state", "account lines", "amm", "automated market maker", "decentralized exchange",
+    ])
+
+
+def _rrp_v177_has_asset_context(blob: str) -> bool:
+    b = _norm_key(blob)
+    return any(x in b for x in [
+        "stablecoin", "stablecoins", "fiat token", "fiat-backed", "tokenized fiat", "tokenised fiat",
+        "issued currency", "issued currencies", "fungible token", "tokenized asset", "real world asset",
+        "rwa", "tokenized fund", "tokenized treasury", "tokenised treasury",
+    ])
+
+
+def _rrp_v177_detect_assets_from_doc(d: Dict[str, Any]) -> List[Dict[str, Any]]:
+    blob = _rrp_v177_doc_blob(d)
+    b_norm = _norm_key(blob)
+    url = _rrp_v177_doc_url(d)
+    assets: Dict[str, Dict[str, Any]] = {}
+
+    # Stablecoins/códigos explícitos. Usamos límites para evitar falsos positivos con palabras corrientes.
+    for code, meta in _RRP_V177_STABLE_ASSETS.items():
+        if re.search(rf"(?<![A-Z0-9]){re.escape(code)}(?![A-Z0-9])", blob, flags=re.IGNORECASE):
+            assets[code] = {"name": meta["name"], "code": code, "kind": meta["kind"], "confidence": 0.82, "issuer_hint": meta.get("issuer_hint", ""), "reason": f"Activo detectado por código {code}"}
+
+    # Ripple USD por nombre.
+    if "ripple usd" in b_norm or "ripple stablecoin" in b_norm:
+        assets["RLUSD"] = {"name": "RLUSD", "code": "RLUSD", "kind": "stablecoin", "confidence": 0.88, "issuer_hint": RLUSD_ISSUER if 'RLUSD_ISSUER' in globals() else "", "reason": "Ripple USD/RLUSD detectado por nombre"}
+
+    # Fiat genérico solo si el documento habla de token/issued currency/stablecoin.
+    if _rrp_v177_has_asset_context(blob):
+        for word, code in _RRP_V177_FIAT_WORDS.items():
+            if re.search(rf"\b{re.escape(word)}\b", b_norm, flags=0):
+                node = f"{code} tokenizado"
+                # No convertir USD/EUR genéricos en ruta si no hay contexto XRPL o source fuerte.
+                assets[node] = {"name": node, "code": code, "kind": "fiat_tokenized", "confidence": 0.62, "issuer_hint": "", "reason": f"Fiat/token detectado: {code}"}
+
+    # RWA/tokenized assets.
+    if any(t in b_norm for t in [_norm_key(x) for x in _RRP_V177_RWA_TERMS]):
+        # Si hay BUIDL, preservar el nombre específico.
+        if "buidl" in b_norm:
+            name = "BlackRock BUIDL"
+        elif "vbill" in b_norm:
+            name = "VBILL / tokenized treasury"
+        else:
+            name = "Tokenized Assets / RWA"
+        assets[name] = {"name": name, "code": "RWA", "kind": "tokenized_asset", "confidence": 0.64, "issuer_hint": "", "reason": "Activo tokenizado/RWA detectado"}
+
+    # Direcciones XRPL: se guardan como issuer/wallet potenciales, no como nueva moneda.
+    addrs = []
+    try:
+        addrs = _rrp_v171_find_xrpl_addresses(blob, url)
+    except Exception:
+        addrs = re.findall(r"\br[1-9A-HJ-NP-Za-km-z]{24,34}\b", blob)
+    for i, addr in enumerate(addrs[:10], 1):
+        key = f"XRPL Wallet {addr[:8]}…{addr[-5:]}"
+        assets[key] = {"name": key, "code": "", "kind": "wallet", "confidence": 0.74, "issuer_hint": addr, "reason": "Dirección XRPL detectada en fuente"}
+
+    return list(assets.values())
+
+
+def _rrp_v177_route_kind_for_asset(kind: str) -> str:
+    k = str(kind or "").lower()
+    if k == "stablecoin":
+        return "official_asset_on_xrpl"
+    if k == "fiat_tokenized":
+        return "fiat_tokenized_on_xrpl"
+    if k == "tokenized_asset":
+        return "tokenized_asset_watch"
+    if k == "wallet":
+        return "xrpl_wallet_connector"
+    return "asset_public_connector"
+
+
+def _rrp_v177_add_asset_route(routes_by_key: Dict[str, Dict[str, Any]], *, src: str, dst: str, kind: str, confidence: float, claim: str, url: str, source_title: str) -> None:
+    # Reutiliza merge de v167 si existe, porque agrupa URLs/fuentes por ruta.
+    if callable(globals().get("_rrp_v167_add_or_merge")):
+        _rrp_v167_add_or_merge(routes_by_key, src=src, dst=dst, kind=kind, confidence=confidence, claim=claim, url=url, source_title=source_title)
+        return
+    k = _norm_key(f"{src}|{dst}|{kind}")
+    if k not in routes_by_key:
+        routes_by_key[k] = {"src": src, "dst": dst, "kind": kind, "confidence": confidence, "claim": claim, "source_urls": [url] if url else [], "source_title": source_title}
+
+
+def _rrp_v177_infer_asset_connector_routes_from_docs(docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Extrae rutas técnicas de activos directamente desde las fuentes del buscador.
+
+    Regla: no basta detectar USDC/EURC/RWA. Debe existir contexto XRPL/issued currency/trustlines/DEX
+    o fuente oficial fuerte para convertirlo en ruta. Si no, queda para contexto y/o needs_identifier.
+    """
+    routes_by_key: Dict[str, Dict[str, Any]] = {}
+    for d in docs or []:
+        if not isinstance(d, dict):
+            continue
+        url = _rrp_v177_doc_url(d)
+        blob = _rrp_v177_doc_blob(d)
+        b_norm = _norm_key(blob + " " + url)
+        title = str(d.get("title") or d.get("name") or "")
+        assets = _rrp_v177_detect_assets_from_doc(d)
+        if not assets:
+            continue
+        has_xrpl = _rrp_v177_has_xrpl_context(blob, url)
+        strong = _rrp_v177_strong_source(url)
+        mentions_eth = "ethereum" in b_norm or "erc 20" in b_norm or "erc-20" in b_norm
+        mentions_dex = "dex" in b_norm or "amm" in b_norm or "decentralized exchange" in b_norm or "automated market maker" in b_norm
+        mentions_trust = "trust line" in b_norm or "trustlines" in b_norm or "issued currencies" in b_norm or "issued currency" in b_norm or "fungible token" in b_norm
+
+        # Sin contexto XRPL, no se crea ruta a XRPL. Pero si hay dirección XRPL, sí hay conector público.
+        has_xrpl_addr = any(a.get("issuer_hint", "").startswith("r") for a in assets)
+        if not (has_xrpl or has_xrpl_addr):
+            continue
+
+        for a in assets:
+            name = str(a.get("name") or "").strip()
+            akind = str(a.get("kind") or "asset")
+            if not name:
+                continue
+            if akind == "wallet":
+                addr = str(a.get("issuer_hint") or "")
+                claim = f"La fuente detecta una dirección XRPL pública {addr}. Se crea punto de conexión vigilable; no implica por sí solo adopción institucional."
+                _rrp_v177_add_asset_route(routes_by_key, src=name, dst="XRPL", kind="xrpl_wallet_connector", confidence=0.74, claim=claim, url=url, source_title=title)
+                continue
+
+            kind = _rrp_v177_route_kind_for_asset(akind)
+            base_conf = float(a.get("confidence") or 0.62)
+            if strong:
+                base_conf = max(base_conf, 0.78)
+            if has_xrpl:
+                claim = f"{name} aparece en una fuente con contexto XRPL/issued-currency/trustline. Ruta técnica vigilable; no prueba uso institucional. {a.get('reason','')}"
+                _rrp_v177_add_asset_route(routes_by_key, src=name, dst="XRPL", kind=kind, confidence=min(0.90, base_conf), claim=claim, url=url, source_title=title)
+                # Activos sobre XRPL suelen pasar por issued currencies/trustlines si la fuente lo menciona o es official docs.
+                if mentions_trust or strong:
+                    _rrp_v177_add_asset_route(routes_by_key, src=name, dst="Issued Currencies", kind="asset_issued_currency_dependency", confidence=min(0.84, base_conf), claim=f"{name} queda relacionado con el modelo issued currencies/tokens del XRPL según la fuente analizada. Ruta técnica, no adopción institucional.", url=url, source_title=title)
+                    _rrp_v177_add_asset_route(routes_by_key, src=name, dst="Trustlines", kind="asset_trustline_dependency", confidence=min(0.82, base_conf), claim=f"{name} debe vigilarse a través de trustlines si opera como issued currency/token en XRPL. Ruta técnica de vigilancia.", url=url, source_title=title)
+                if mentions_dex:
+                    _rrp_v177_add_asset_route(routes_by_key, src=name, dst="DEX/AMM", kind="asset_liquidity_watch", confidence=min(0.78, base_conf), claim=f"{name} aparece en contexto DEX/AMM/XRPL. Ruta de vigilancia de liquidez, no prueba de volumen real.", url=url, source_title=title)
+            if mentions_eth and akind in {"stablecoin", "fiat_tokenized", "tokenized_asset"}:
+                _rrp_v177_add_asset_route(routes_by_key, src=name, dst="Ethereum", kind="asset_multichain_context", confidence=0.66, claim=f"La fuente menciona Ethereum para {name}. Contexto multired; no sustituye la vigilancia XRPL.", url=url, source_title=title)
+    return list(routes_by_key.values())
+
+
+# Ampliar tipos fuertes/documentales y tipos visibles en vigilancia.
+try:
+    _RRP_V165_ROUTE_TYPES_STRONG.update({
+        "official_asset_on_xrpl", "fiat_tokenized_on_xrpl", "tokenized_asset_watch",
+        "xrpl_wallet_connector", "asset_public_connector", "asset_issued_currency_dependency",
+        "asset_trustline_dependency", "asset_liquidity_watch", "asset_multichain_context",
+    })
+except Exception:
+    pass
+try:
+    _RRP_V170_TECHNICAL_WATCH_KINDS.update({
+        "official_asset_on_xrpl", "fiat_tokenized_on_xrpl", "tokenized_asset_watch",
+        "xrpl_wallet_connector", "asset_public_connector", "asset_issued_currency_dependency",
+        "asset_trustline_dependency", "asset_liquidity_watch", "asset_multichain_context",
+    })
+    RRP_DOCUMENTED_ROUTE_KINDS_V143.update(_RRP_V170_TECHNICAL_WATCH_KINDS)
+    RRP_WATCH_ROUTE_KINDS_V143.update(_RRP_V170_TECHNICAL_WATCH_KINDS)
+except Exception:
+    pass
+try:
+    EVIDENCE_SCORES.update({
+        "official_asset_on_xrpl": 0.86,
+        "fiat_tokenized_on_xrpl": 0.78,
+        "tokenized_asset_watch": 0.72,
+        "xrpl_wallet_connector": 0.74,
+        "asset_public_connector": 0.64,
+        "asset_issued_currency_dependency": 0.80,
+        "asset_trustline_dependency": 0.78,
+        "asset_liquidity_watch": 0.70,
+        "asset_multichain_context": 0.62,
+    })
+    EVIDENCE_LABELS.update({
+        "official_asset_on_xrpl": "Activo oficial en XRPL",
+        "fiat_tokenized_on_xrpl": "Fiat tokenizado en XRPL",
+        "tokenized_asset_watch": "Activo tokenizado/RWA a vigilar",
+        "xrpl_wallet_connector": "Wallet/issuer XRPL detectado",
+        "asset_public_connector": "Conector público de activo",
+        "asset_issued_currency_dependency": "Dependencia issued currency",
+        "asset_trustline_dependency": "Dependencia trustline",
+        "asset_liquidity_watch": "Vigilancia DEX/AMM",
+        "asset_multichain_context": "Contexto multired",
+    })
+except Exception:
+    pass
+
+
+_ORIG_RRP_V165_INFER_ROUTES_FROM_DOCS_V177 = globals().get("_rrp_v165_infer_routes_from_docs")
+def _rrp_v165_infer_routes_from_docs(docs: List[Dict[str, Any]], flow: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    base = _ORIG_RRP_V165_INFER_ROUTES_FROM_DOCS_V177(docs, flow) if callable(_ORIG_RRP_V165_INFER_ROUTES_FROM_DOCS_V177) else []
+    extra = _rrp_v177_infer_asset_connector_routes_from_docs(docs or [])
+    if callable(globals().get("_rrp_v165_merge_routes")):
+        return _rrp_v165_merge_routes(base, extra)
+    return list(base or []) + list(extra or [])
+
+
+# Crear targets de vigilancia directamente desde fuentes, incluso antes de que el mapa se renderice.
+def _rrp_v177_seed_watch_targets_from_docs(conn: sqlite3.Connection, docs: List[Dict[str, Any]]) -> Dict[str, int]:
+    stats = {"docs": 0, "active": 0, "needs_identifier": 0, "created": 0}
+    try:
+        _rrp_v171_ensure_watch_tables(conn)
+    except Exception:
+        return stats
+    now = _rrp_v171_now() if callable(globals().get("_rrp_v171_now")) else datetime.now(timezone.utc).isoformat()
+    for d in docs or []:
+        if not isinstance(d, dict):
+            continue
+        stats["docs"] += 1
+        url = _rrp_v177_doc_url(d)
+        blob = _rrp_v177_doc_blob(d)
+        assets = _rrp_v177_detect_assets_from_doc(d)
+        if not assets:
+            continue
+        has_xrpl = _rrp_v177_has_xrpl_context(blob, url)
+        for a in assets:
+            name = str(a.get("name") or "").strip()
+            kind = str(a.get("kind") or "asset")
+            subject = str(a.get("issuer_hint") or "").strip()
+            if not name:
+                continue
+            # Solo activo si tenemos cuenta XRPL o si es zona observable conocida tipo RLUSD.
+            if subject.startswith("r"):
+                wt = "asset_issuer" if kind in {"stablecoin", "fiat_tokenized", "tokenized_asset"} else "wallet"
+                status = "active"
+            elif name == "RLUSD":
+                wt = "rlusd_issuer"
+                subject = "RLUSD issuer"
+                status = "active"
+            elif has_xrpl:
+                wt = "asset_public_connector"
+                subject = name
+                status = "needs_identifier"
+            else:
+                continue
+            src = name
+            dst = "XRPL"
+            pair = _rrp_v171_pair_key(src, dst) if callable(globals().get("_rrp_v171_pair_key")) else _norm_key(f"{src}|{dst}")
+            tid = hashlib.sha256(f"v177|{pair}|{wt}|{subject or 'pending'}".encode()).hexdigest()[:16]
+            reason = f"Detectado por el buscador desde fuente/documento. {a.get('reason','')}"
+            ev = [url] if str(url).startswith("http") else []
+            try:
+                conn.execute("""
+                    INSERT INTO onchain_watch_targets
+                    (target_id, route_id, src, dst, pair_key, watch_type, subject, status, reason, source_kind,
+                     confidence, created_at, updated_at, last_checked, last_signal, last_summary, evidence_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0.0, '', ?)
+                    ON CONFLICT(target_id) DO UPDATE SET
+                        status=excluded.status,
+                        reason=excluded.reason,
+                        confidence=MAX(onchain_watch_targets.confidence, excluded.confidence),
+                        updated_at=excluded.updated_at,
+                        evidence_json=excluded.evidence_json
+                """, (tid, "v177_searcher_doc", src, dst, pair, wt, subject, status, reason, kind, float(a.get("confidence") or 0.6), now, now, json.dumps(ev, ensure_ascii=False)))
+                stats["created"] += 1
+                stats["active" if status == "active" else "needs_identifier"] += 1
+            except Exception:
+                pass
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    return stats
+
+
+_ORIG_RRP_V164_COLLECT_FLOW_V177 = globals().get("_rrp_v164_collect_flow")
+def _rrp_v164_collect_flow(conn: sqlite3.Connection) -> Dict[str, Any]:
+    data = _ORIG_RRP_V164_COLLECT_FLOW_V177(conn) if callable(_ORIG_RRP_V164_COLLECT_FLOW_V177) else {"flow": [], "queue": [], "docs": [], "routes": [], "protocol_features": [], "candidates": []}
+    docs = list(data.get("docs") or [])
+    # Integración directa en buscador: extraer rutas/targets desde TODAS las fuentes ya detectadas.
+    try:
+        asset_routes = _rrp_v177_infer_asset_connector_routes_from_docs(docs)
+        if asset_routes:
+            if callable(globals().get("_rrp_v165_merge_routes")):
+                data["routes"] = _rrp_v165_merge_routes(list(data.get("routes") or []), asset_routes)
+            else:
+                data["routes"] = list(data.get("routes") or []) + asset_routes
+    except Exception as exc:
+        data["asset_connector_error"] = str(exc)
+    try:
+        data["asset_watch_seed"] = _rrp_v177_seed_watch_targets_from_docs(conn, docs)
+    except Exception as exc:
+        data["asset_watch_seed_error"] = str(exc)
+    return data
+
+
+# Cuando se persisten rutas, volver a seedear vigilancia con los nuevos tipos.
+_ORIG_RRP_V165_PERSIST_ROUTES_V177 = globals().get("_rrp_v165_persist_routes_from_flow")
+def _rrp_v165_persist_routes_from_flow(conn: sqlite3.Connection, routes: List[Dict[str, Any]]) -> int:
+    n = _ORIG_RRP_V165_PERSIST_ROUTES_V177(conn, routes) if callable(_ORIG_RRP_V165_PERSIST_ROUTES_V177) else 0
+    try:
+        if callable(globals().get("_rrp_v171_seed_watch_targets_from_routes")):
+            _rrp_v171_seed_watch_targets_from_routes(conn)
+        if callable(globals().get("_rrp_v175_persist_watch_paths")):
+            _rrp_v175_persist_watch_paths(conn)
+    except Exception:
+        pass
+    return int(n or 0)
+
+
+# Panel de diagnóstico claro en Discovery/Vigilancia: qué ha extraído el buscador.
+def _rrp_v177_asset_connector_diagnostics(conn: sqlite3.Connection) -> Dict[str, int]:
+    out = {"targets": 0, "active": 0, "needs_identifier": 0, "asset_routes": 0}
+    try:
+        _rrp_v171_ensure_watch_tables(conn)
+        rows = conn.execute("SELECT status, COUNT(*) FROM onchain_watch_targets GROUP BY status").fetchall()
+        for stt, cnt in rows:
+            out["targets"] += int(cnt or 0)
+            if str(stt) == "active":
+                out["active"] = int(cnt or 0)
+            if str(stt) == "needs_identifier":
+                out["needs_identifier"] = int(cnt or 0)
+    except Exception:
+        pass
+    try:
+        kinds = tuple(sorted({
+            "official_asset_on_xrpl", "fiat_tokenized_on_xrpl", "tokenized_asset_watch", "xrpl_wallet_connector",
+            "asset_public_connector", "asset_issued_currency_dependency", "asset_trustline_dependency", "asset_liquidity_watch",
+        }))
+        placeholders = ",".join("?" for _ in kinds)
+        out["asset_routes"] = int(conn.execute(f"SELECT COUNT(*) FROM dynamic_routes WHERE kind IN ({placeholders}) OR route_type IN ({placeholders})", kinds + kinds).fetchone()[0] or 0)
+    except Exception:
+        pass
+    return out
+
+
+_ORIG_RRP_V171_RENDER_REAL_WATCH_PANEL_V177 = globals().get("_rrp_v171_render_real_watch_panel")
+def _rrp_v171_render_real_watch_panel(conn: sqlite3.Connection) -> None:
+    try:
+        diag = _rrp_v177_asset_connector_diagnostics(conn)
+        st.info(f"🔎 Buscador integrado: {diag.get('asset_routes',0)} rutas de activos extraídas · {diag.get('active',0)} targets activos · {diag.get('needs_identifier',0)} esperando issuer/wallet/currency code público.")
+    except Exception:
+        pass
+    if callable(_ORIG_RRP_V171_RENDER_REAL_WATCH_PANEL_V177):
+        return _ORIG_RRP_V171_RENDER_REAL_WATCH_PANEL_V177(conn)
+
+try:
+    c = get_conn()
+    if callable(globals().get("_rrp_v171_seed_watch_targets_from_routes")):
+        _rrp_v171_seed_watch_targets_from_routes(c)
+    if callable(globals().get("_rrp_v175_persist_watch_paths")):
+        _rrp_v175_persist_watch_paths(c)
+except Exception:
+    pass
+
 if __name__ == "__main__":
     _rrp_v158_prune_static_map_to_xrpl()
     main()
