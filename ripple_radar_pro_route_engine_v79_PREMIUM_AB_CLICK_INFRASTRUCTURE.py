@@ -30487,6 +30487,517 @@ def _render_discovery_investigation_flow(conn: sqlite3.Connection, root_result: 
     _rrp_v164_render_unified_flow(conn)
 
 
+
+# =============================================================================
+# v165 · AUTO MAP + SOURCE-TO-ROUTE + CURRENT DEDUCTIVE PROTOCOL FIX
+# =============================================================================
+# Objetivo:
+# - Si la vista dice "rutas guardadas", se persisten automáticamente en dynamic_routes.
+# - Las rutas deductivas ya no leen basura vieja de route_paths; se calculan solo con
+#   las rutas directas del flujo actual.
+# - Las fuentes oficiales detectadas pueden proponer rutas adicionales claras
+#   (ej. docs.ripple.com RLUSD on XRPL => RLUSD -> XRPL).
+# - La cascada no vuelve a pedir investigar lo ya procesado; solo muestra "Continuar"
+#   si hay nodos reales nuevos.
+# =============================================================================
+
+BUILD_ID = "v165_2026_05_13_AUTO_MAP_DEDUCTIVE_SOURCE_PROTOCOL"
+BUILD_NOTE = "persistencia automática · fuentes a rutas · deductivo limpio por flujo"
+VERSION = "Route Path Intelligence v6.2.3 PRO — XRPL Core · Auto Map & Deductive Protocol v165"
+
+_RRP_V165_ROUTE_TYPES_STRONG = {
+    "official_protocol_feature", "official_docs", "official_document", "developer_documentation",
+    "technical_documentation", "official_stablecoin_on_xrpl", "official_issuer_documentation",
+    "official_whitepaper", "official_product_documentation", "technology_basis",
+    "official_announcement", "primary_source", "partner_page", "case_study", "official_partner",
+}
+
+
+def _rrp_v165_text(x: Any) -> str:
+    if isinstance(x, dict):
+        return "\n".join(str(v or "") for v in x.values())
+    return str(x or "")
+
+
+def _rrp_v165_doc_blob(d: Dict[str, Any]) -> str:
+    return "\n".join([
+        str(d.get("title") or ""), str(d.get("claim") or ""), str(d.get("summary") or ""),
+        str(d.get("description") or ""), str(d.get("url") or ""), str(d.get("doc_type") or ""),
+    ])
+
+
+def _rrp_v165_url(d: Dict[str, Any]) -> str:
+    try:
+        return _rrp_v164_doc_url(d)
+    except Exception:
+        return str((d or {}).get("url") or (d or {}).get("source_url") or "")
+
+
+def _rrp_v165_route_key(src: Any, dst: Any, kind: Any = "") -> str:
+    return _norm_key(f"{_rrp_v164_norm_node(src)}|{_rrp_v164_norm_node(dst)}|{kind or ''}")
+
+
+def _rrp_v165_add_route(routes: List[Dict[str, Any]], seen: Set[str], *, src: str, dst: str, kind: str, confidence: float, claim: str, url: str = "", source_title: str = "") -> None:
+    src = _rrp_v164_norm_node(src)
+    dst = _rrp_v164_norm_node(dst)
+    if not src or not dst or src == dst:
+        return
+    # Motores internos reales nunca se convierten en rutas de mapa documental.
+    try:
+        if _rrp_v161_is_internal_node(src) or _rrp_v161_is_internal_node(dst):
+            return
+    except Exception:
+        pass
+    k = _rrp_v165_route_key(src, dst, kind)
+    if k in seen:
+        return
+    seen.add(k)
+    routes.append({
+        "src": src,
+        "dst": dst,
+        "kind": kind,
+        "confidence": float(confidence or 0),
+        "claim": str(claim or "")[:1500],
+        "url": url,
+        "source_url": url,
+        "source_title": source_title,
+        "status": "documented",
+    })
+
+
+def _rrp_v165_infer_routes_from_docs(docs: List[Dict[str, Any]], flow: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    """Convierte fuentes oficiales muy claras en rutas directas.
+
+    No usa fuentes genéricas para inventar relaciones. Solo transforma documentos
+    donde el dominio/path/título identifica explícitamente una relación protocolo.
+    """
+    routes: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for d in docs or []:
+        if not isinstance(d, dict):
+            continue
+        url = _rrp_v165_url(d)
+        blob = _rrp_v165_doc_blob(d)
+        b = blob.lower()
+        u = url.lower()
+        title = str(d.get("title") or "")
+        # XRPL official protocol docs.
+        if "xrpl.org" in u:
+            if "decentralized-exchange" in u or "decentralised-exchange" in u or "automated-market-makers" in u or "amm" in b:
+                _rrp_v165_add_route(
+                    routes, seen, src="XRPL", dst="DEX/AMM", kind="official_protocol_feature", confidence=0.86,
+                    claim="La documentación oficial de XRP Ledger describe DEX/AMM como funcionalidad nativa del ledger. Es ruta técnica de protocolo, no prueba de uso institucional.",
+                    url=url, source_title=title,
+                )
+            if "fungible-tokens" in u or "issued" in b or "trust line" in b or "trustline" in b:
+                _rrp_v165_add_route(
+                    routes, seen, src="XRPL", dst="Issued Currencies", kind="official_protocol_feature", confidence=0.84,
+                    claim="La documentación oficial de XRP Ledger describe issued currencies/fungible tokens como funcionalidad del ledger.",
+                    url=url, source_title=title,
+                )
+                _rrp_v165_add_route(
+                    routes, seen, src="XRPL", dst="Trustlines", kind="official_protocol_feature", confidence=0.84,
+                    claim="La documentación oficial de XRP Ledger vincula issued currencies/fungible tokens con trust lines. Es feature de protocolo, no prueba institucional.",
+                    url=url, source_title=title,
+                )
+        # RLUSD on XRPL: solo con fuentes oficiales/Ripple/docs/whitepaper claramente sobre RLUSD + XRPL.
+        official_ripple_rlusd = ("ripple.com" in u or "docs.ripple.com" in u) and ("rlusd" in b or "ripple usd" in b) and ("xrpl" in b or "xrp ledger" in b or "on the xrpl" in b)
+        if official_ripple_rlusd:
+            _rrp_v165_add_route(
+                routes, seen, src="RLUSD", dst="XRPL", kind="official_stablecoin_on_xrpl", confidence=0.86,
+                claim="Fuente oficial de Ripple/docs indica RLUSD/Ripple USD en XRP Ledger/XRPL. Esto valida relación técnica RLUSD→XRPL; no prueba adopción bancaria concreta.",
+                url=url, source_title=title,
+            )
+            # Si el texto habla de issued currencies/trust lines, añadir la ruta técnica intermedia.
+            if "trust" in b or "issued" in b or "fungible" in b:
+                _rrp_v165_add_route(
+                    routes, seen, src="RLUSD", dst="Issued Currencies", kind="official_issuer_documentation", confidence=0.78,
+                    claim="La fuente oficial relaciona RLUSD con el modelo de tokens/issued currencies del XRPL. Ruta técnica, no señal operativa institucional.",
+                    url=url, source_title=title,
+                )
+                _rrp_v165_add_route(
+                    routes, seen, src="RLUSD", dst="Trustlines", kind="official_issuer_documentation", confidence=0.76,
+                    claim="La fuente oficial permite investigar RLUSD a través de trustlines del XRPL. Ruta técnica de vigilancia on-chain, no prueba bancaria.",
+                    url=url, source_title=title,
+                )
+    return routes
+
+
+def _rrp_v165_is_good_route(r: Dict[str, Any]) -> bool:
+    src = _rrp_v164_norm_node(r.get("src"))
+    dst = _rrp_v164_norm_node(r.get("dst"))
+    if not src or not dst or src == dst:
+        return False
+    try:
+        if _rrp_v161_is_internal_node(src) or _rrp_v161_is_internal_node(dst):
+            return False
+    except Exception:
+        pass
+    kind = str(r.get("kind") or r.get("route_type") or "").strip()
+    if kind in _RRP_V165_ROUTE_TYPES_STRONG:
+        return True
+    # Permitir route_decisions ya filtradas por v157/v161 si llevan confianza y claim.
+    return float(r.get("confidence") or 0) >= 0.60 and bool(str(r.get("claim") or "").strip())
+
+
+def _rrp_v165_merge_routes(base_routes: List[Dict[str, Any]], extra_routes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for r in list(base_routes or []) + list(extra_routes or []):
+        if not isinstance(r, dict):
+            continue
+        src = _rrp_v164_norm_node(r.get("src") or r.get("source") or r.get("from_node"))
+        dst = _rrp_v164_norm_node(r.get("dst") or r.get("target") or r.get("to_node"))
+        kind = str(r.get("kind") or r.get("route_type") or r.get("evidence_type") or "documented")
+        if not src or not dst or src == dst:
+            continue
+        rr = dict(r)
+        rr["src"], rr["dst"], rr["kind"] = src, dst, kind
+        if not _rrp_v165_is_good_route(rr):
+            continue
+        k = _rrp_v165_route_key(src, dst, kind)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(rr)
+    return out
+
+
+_ORIG_RRP_V164_COLLECT_FLOW_V165 = globals().get("_rrp_v164_collect_flow")
+def _rrp_v164_collect_flow(conn: sqlite3.Connection) -> Dict[str, Any]:
+    data = _ORIG_RRP_V164_COLLECT_FLOW_V165(conn) if callable(_ORIG_RRP_V164_COLLECT_FLOW_V165) else {"flow": [], "queue": [], "docs": [], "routes": [], "protocol_features": [], "candidates": []}
+    docs = list(data.get("docs") or [])
+    direct = list(data.get("routes") or [])
+    inferred = _rrp_v165_infer_routes_from_docs(docs, data.get("flow") or [])
+    routes = _rrp_v165_merge_routes(direct, inferred)
+    data["routes"] = routes
+    # Features técnicas desde rutas XRPL.
+    pf = list(data.get("protocol_features") or [])
+    pf_seen = {_rrp_v164_node_key(x.get("name")) for x in pf if isinstance(x, dict)}
+    for r in routes:
+        if _rrp_v164_norm_node(r.get("src")) == "XRPL" and _rrp_v164_is_protocol_feature(r.get("dst")):
+            k = _rrp_v164_node_key(r.get("dst"))
+            if k not in pf_seen:
+                pf_seen.add(k)
+                pf.append({"name": _rrp_v164_norm_node(r.get("dst")), "reason": r.get("claim") or "Feature XRPL documentada."})
+    data["protocol_features"] = pf
+    # Quitar candidatos ya investigados, en cola o features técnicas. Solo entidades reales.
+    done = _rrp_v161_get_done_keys() if callable(globals().get("_rrp_v161_get_done_keys")) else set()
+    queued = {_rrp_v164_node_key(x.get("name")) for x in data.get("queue", []) if isinstance(x, dict)}
+    clean_cands, seen = [], set()
+    for c in data.get("candidates") or []:
+        n = _rrp_v164_norm_node(c.get("name")) if isinstance(c, dict) else ""
+        k = _rrp_v164_node_key(n)
+        if not n or k in done or k in queued or k in seen:
+            continue
+        if not _rrp_v164_is_cascade_entity(n):
+            continue
+        seen.add(k)
+        clean_cands.append(c)
+    data["candidates"] = clean_cands
+    return data
+
+
+def _rrp_v165_persist_routes_from_flow(conn: sqlite3.Connection, routes: List[Dict[str, Any]]) -> int:
+    """Persiste automáticamente las rutas directas mostradas en la vista unificada."""
+    if not routes:
+        return 0
+    try:
+        ensure_discovery_tables(conn)
+    except Exception:
+        pass
+    added = 0
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        route_cols = {str(x[1]) for x in conn.execute("PRAGMA table_info(dynamic_routes)").fetchall()}
+    except Exception:
+        route_cols = set()
+    try:
+        node_cols = {str(x[1]) for x in conn.execute("PRAGMA table_info(dynamic_nodes)").fetchall()}
+    except Exception:
+        node_cols = set()
+
+    # Asegurar nodos dinámicos salvo XRPL.
+    for n in sorted({_rrp_v164_norm_node(x) for r in routes for x in (r.get("src"), r.get("dst")) if x}):
+        if not n or n == "XRPL":
+            continue
+        try:
+            if _rrp_v161_is_internal_node(n):
+                continue
+        except Exception:
+            pass
+        try:
+            layer, icon = "Descubierto", "🔎"
+            if callable(globals().get("_infer_layer_icon_from_name")):
+                layer, icon = _infer_layer_icon_from_name(n)
+            elif callable(globals().get("_classify_entity")):
+                layer = _classify_entity(n)
+            data = {
+                "node_id": _canonical_entity_key(n), "node": n, "name": n, "node_name": n, "label": n,
+                "layer": layer or "Descubierto", "icon": icon or "🔎", "confidence": 0.70,
+                "summary": "Nodo creado automáticamente por ruta documental del protocolo v165.",
+                "source_url": "", "added_at": now, "created_at": now, "updated_at": now,
+                "source": "v165_document_route", "status": "documented",
+            }
+            use = [c for c in data if c in node_cols]
+            if use:
+                placeholders = ",".join("?" for _ in use)
+                conn.execute(f"INSERT OR REPLACE INTO dynamic_nodes ({','.join(use)}) VALUES ({placeholders})", tuple(data[c] for c in use))
+        except Exception:
+            pass
+
+    if route_cols:
+        for r in routes:
+            try:
+                src = _rrp_v164_norm_node(r.get("src"))
+                dst = _rrp_v164_norm_node(r.get("dst"))
+                if not src or not dst or src == dst:
+                    continue
+                try:
+                    if _rrp_v161_is_internal_node(src) or _rrp_v161_is_internal_node(dst):
+                        continue
+                except Exception:
+                    pass
+                kind = str(r.get("kind") or "documented")
+                url = str(r.get("url") or r.get("source_url") or "")
+                claim = str(r.get("claim") or "")[:1500]
+                route_id = hashlib.sha256(f"v165|{src}|{dst}|{kind}|{url}".encode("utf-8")).hexdigest()[:24]
+                label = f"{src} → {dst}"
+                data = {
+                    "route_id": route_id, "src": src, "dst": dst, "source": src, "target": dst,
+                    "from_node": src, "to_node": dst, "kind": kind, "route_type": kind, "type": kind,
+                    "signal_col": "documental_score", "label": label,
+                    "confidence": float(r.get("confidence") or 0.0), "evidence": claim,
+                    "claim": claim, "summary": claim, "source_urls": json.dumps([url] if url else [], ensure_ascii=False),
+                    "source_url": url, "status": "documented", "added_at": now, "created_at": now, "updated_at": now,
+                }
+                use = [c for c in data if c in route_cols]
+                if use:
+                    placeholders = ",".join("?" for _ in use)
+                    conn.execute(f"INSERT OR REPLACE INTO dynamic_routes ({','.join(use)}) VALUES ({placeholders})", tuple(data[c] for c in use))
+                    added += 1
+            except Exception:
+                pass
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    return added
+
+
+def _rrp_v165_compute_current_deductive_paths(routes: List[Dict[str, Any]], max_depth: int = 5) -> List[Dict[str, Any]]:
+    """Calcula caminos hacia XRPL solo desde las rutas del flujo actual.
+
+    Usa el grafo como no dirigido para lectura de alcance técnico: si XRPL→DEX/AMM está
+    documentado, DEX/AMM tiene camino hacia XRPL, pero NO se convierte en línea directa inversa.
+    """
+    edges: Dict[str, Set[str]] = defaultdict(set)
+    labels: Dict[Tuple[str, str], str] = {}
+    for r in routes or []:
+        src = _rrp_v164_norm_node(r.get("src")); dst = _rrp_v164_norm_node(r.get("dst"))
+        if not src or not dst or src == dst:
+            continue
+        edges[src].add(dst); edges[dst].add(src)
+        kind = str(r.get("kind") or "documented")
+        labels[(src, dst)] = kind; labels[(dst, src)] = kind
+    if "XRPL" not in edges:
+        return []
+    out: List[Dict[str, Any]] = []
+    for start in sorted(edges.keys()):
+        if start == "XRPL":
+            continue
+        q = deque([[start]])
+        visited = {start}
+        found = None
+        while q:
+            path = q.popleft()
+            if len(path) > max_depth + 1:
+                continue
+            last = path[-1]
+            if last == "XRPL":
+                found = path; break
+            for nb in sorted(edges.get(last, [])):
+                if nb in visited:
+                    continue
+                visited.add(nb)
+                q.append(path + [nb])
+        if found and len(found) >= 2:
+            kinds = [labels.get((found[i], found[i+1]), "documented") for i in range(len(found)-1)]
+            out.append({
+                "path": found,
+                "label": " → ".join(found),
+                "confidence": max(0.50, min(0.86, 0.90 - 0.07 * (len(found)-2))),
+                "explanation": "Ruta deductiva del flujo actual: cada tramo está respaldado por una ruta documental directa. No crea una línea directa nueva.",
+                "kinds": kinds,
+            })
+    # Evitar rutas triviales si hay demasiadas: priorizar institucionales y RLUSD.
+    return out[:80]
+
+
+def _rrp_v165_store_current_paths(conn: sqlite3.Connection, paths: List[Dict[str, Any]]) -> int:
+    if not paths:
+        return 0
+    try:
+        ensure_route_paths_table(conn)
+    except Exception:
+        return 0
+    today = _date.today().isoformat()
+    added = 0
+    for p in paths:
+        try:
+            label = str(p.get("label") or "")
+            if not label:
+                continue
+            origin = (p.get("path") or [""])[0]
+            pid = hashlib.sha256(f"v165|{today}|{label}".encode("utf-8")).hexdigest()[:24]
+            conn.execute(
+                "INSERT OR REPLACE INTO route_paths(day,path_id,origin,public_hop,destination,confidence,path_type,evidence,explanation) VALUES (?,?,?,?,?,?,?,?,?)",
+                (today, pid, origin, " → ".join((p.get("path") or [])[1:-1]) or "directo", "XRPL", float(p.get("confidence") or 0.0), "deductive_current_flow_v165", label, str(p.get("explanation") or ""))
+            )
+            added += 1
+        except Exception:
+            pass
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    return added
+
+
+def _rrp_v164_render_unified_flow(conn: sqlite3.Connection) -> None:
+    flow = list(st.session_state.get("rrp_simple_flow", []) or [])
+    if not flow:
+        st.caption("Todavía no hay investigaciones en este flujo limpio.")
+        return
+    data = _rrp_v164_collect_flow(conn)
+    queue = _rrp_v164_clean_queue()
+    candidates = data.get("candidates") or []
+    docs = data.get("docs") or []
+    routes = data.get("routes") or []
+    protocol_features = data.get("protocol_features") or []
+
+    persisted = _rrp_v165_persist_routes_from_flow(conn, routes)
+    deductive_paths = _rrp_v165_compute_current_deductive_paths(routes)
+    try:
+        _rrp_v165_store_current_paths(conn, deductive_paths)
+    except Exception:
+        pass
+
+    st.markdown("### 🧪 Investigación unificada")
+    st.caption("Una sola cascada: documentos → rutas directas → rutas deductivas → continuar solo si quedan entidades reales nuevas.")
+    _rrp_v164_render_protocol_box()
+
+    with st.container(border=True):
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Búsquedas", len(flow))
+        c2.metric("Fuentes", len(docs))
+        c3.metric("Rutas directas", len(routes))
+        c4.metric("Rutas deductivas", len(deductive_paths))
+        c5.metric("Pendientes", len(queue) + len(candidates))
+        if routes:
+            st.success(f"🧭 Autoguardado en mapa activo: {len(routes)} rutas directas detectadas · {persisted} inserciones/actualizaciones en dynamic_routes.")
+        else:
+            st.info("Hay documentos, pero todavía no hay rutas directas suficientemente claras para dibujar en el mapa.")
+
+        if candidates or queue:
+            st.markdown("#### 🔗 Continuar investigación")
+            merged = []
+            for x in queue:
+                if isinstance(x, dict):
+                    merged.append({"name": _rrp_v164_norm_node(x.get("name")), "parent": x.get("parent", "")})
+            for x in candidates:
+                if isinstance(x, dict):
+                    merged.append({"name": _rrp_v164_norm_node(x.get("name")), "parent": x.get("parent", "")})
+            vis, seen = [], set()
+            for x in merged:
+                n = x.get("name")
+                if not n:
+                    continue
+                k = _rrp_v164_node_key(n)
+                if k in seen:
+                    continue
+                seen.add(k)
+                vis.append(f"{n} ← {x.get('parent','')}")
+            if vis:
+                st.write("Nodos nuevos reales: " + " · ".join(vis[:18]))
+                cA, cB, cC = st.columns([1.6, 0.8, 0.8])
+                max_steps = cB.number_input("Pasos", min_value=1, max_value=80, value=min(30, max(1, len(vis))), step=1, key="v165_auto_steps")
+                if cA.button("🚀 Continuar cascada", key="v165_continue_cascade", use_container_width=True):
+                    with st.spinner("Procesando cascada documental/deductiva..."):
+                        n = _rrp_v164_run_continue(conn, int(max_steps))
+                    st.success(f"Cascada procesada: {n} búsquedas. Si aparecen entidades nuevas, vuelve a pulsar Continuar.")
+                    st.rerun()
+                if cC.button("🗑️ Vaciar cola", key="v165_clear_queue", use_container_width=True):
+                    st.session_state["rrp_simple_queue"] = []
+                    st.rerun()
+            else:
+                st.success("✅ Todo lo detectado ya está investigado, en cola descartada o es feature técnica; no hay nada nuevo que repetir.")
+        else:
+            st.success("✅ Cascada agotada: no quedan entidades reales nuevas que investigar en este flujo.")
+
+    if routes:
+        with st.container(border=True):
+            st.markdown("#### 🧭 Rutas directas guardadas en el mapa")
+            st.caption("Estas líneas sí se dibujan/persisten. Las features XRPL son rutas técnicas, no adopción institucional.")
+            for r in routes[:120]:
+                src = _rrp_v164_norm_node(r.get("src")); dst = _rrp_v164_norm_node(r.get("dst"))
+                kind = str(r.get("kind") or "documented")
+                conf = float(r.get("confidence") or 0)
+                st.markdown(f"✅ `{src}` → `{dst}` · **{kind}** · {conf:.0%}")
+                claim = str(r.get("claim") or "")
+                if claim:
+                    st.caption(claim[:650])
+                url = str(r.get("url") or r.get("source_url") or "")
+                if url.startswith("http"):
+                    st.markdown(f"[Fuente de la ruta]({url})")
+
+    if deductive_paths:
+        with st.container(border=True):
+            st.markdown("#### 🧠 Rutas deductivas del flujo actual hacia XRPL")
+            st.caption("No son líneas directas nuevas. Son caminos calculados SOLO con las rutas directas actuales, no con memoria vieja del motor.")
+            for p in deductive_paths[:80]:
+                st.markdown(f"🧭 `{p.get('label')}` · {float(p.get('confidence') or 0):.0%}")
+                st.caption(str(p.get("explanation") or "")[:500])
+
+    # Fuentes que sugieren posibles rutas futuras, pero no pasan autoguardado.
+    if docs:
+        with st.expander(f"📄 Documentos y fuentes guardadas ({len(docs)})", expanded=False):
+            st.caption("Las fuentes oficiales pueden crear rutas automáticamente si la relación es clara. Fuentes secundarias quedan como contexto/revisión.")
+            for i, d in enumerate(docs[:160], 1):
+                badge = "📄 PDF" if int(d.get("is_pdf", 0) or 0) else "🔗 Fuente"
+                title = html.escape(str(d.get("title") or "Documento/fuente"))
+                typ = html.escape(str(d.get("doc_type") or "source"))
+                st.markdown(f"**{i}. {badge} · {title}** · `{typ}`")
+                if d.get("claim"):
+                    st.caption(str(d.get("claim"))[:800])
+                url = _rrp_v164_doc_url(d)
+                if url:
+                    st.markdown(f"[Abrir documento/fuente]({url})")
+
+    if protocol_features:
+        with st.expander(f"💧 Features/zonas XRPL documentadas ({len(protocol_features)})", expanded=False):
+            st.caption("Son funcionalidades técnicas del ledger. Pueden formar camino deductivo, pero no prueban uso institucional por sí solas.")
+            for f in protocol_features[:80]:
+                st.markdown(f"- **{f.get('name')}** — {str(f.get('reason') or '')[:500]}")
+
+    with st.expander("🔎 Detalle técnico por búsqueda", expanded=False):
+        for i, item in enumerate(flow, 1):
+            if not isinstance(item, dict):
+                continue
+            name = _rrp_v164_norm_node(item.get("institution") or item.get("query") or "")
+            source = item.get("_simple_source") or "manual"
+            parent = item.get("_simple_parent") or ""
+            routes_i = _rrp_v164_routes_for_result(item)
+            docs_i = _rrp_v164_docs_for_result(conn, item)
+            st.markdown(f"**{i}. {name}** · {source}{' · desde '+str(parent) if parent else ''} · rutas: {len(routes_i)} · fuentes: {len(docs_i)}")
+            summary = str(item.get("summary") or "")
+            if summary:
+                st.caption(summary[:700])
+
+
+def _render_discovery_investigation_flow(conn: sqlite3.Connection, root_result: Optional[Dict[str, Any]] = None) -> None:
+    _rrp_v164_render_unified_flow(conn)
+
 if __name__ == "__main__":
     _rrp_v158_prune_static_map_to_xrpl()
     main()
