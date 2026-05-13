@@ -35208,6 +35208,1180 @@ try:
 except Exception:
     pass
 
+
+
+# =============================================================================
+# v182 · ROUTE CARD / ON-CHAIN CONNECTOR CLEAN FIX
+# -----------------------------------------------------------------------------
+# Objetivo:
+# - Evitar fichas A→B confusas tipo "XRPL → XRPL DEX/AMM → Issued Currencies".
+# - No mostrar "Señal vivo 93%" si el target todavía no fue escaneado on-chain.
+# - Separar prioridad/confianza documental de señal viva real.
+# - Limpiar textos repetidos de "Puntos públicos de conexión".
+# - Arreglar URLs concatenadas XRPSCAN+Bithomp y hacerlas clicables por separado.
+# - Clasificar vigilancia por nodo destino/origen antes que por palabras sueltas del texto.
+# =============================================================================
+
+BUILD_ID = "v182_2026_05_13_ROUTE_CARD_ONCHAIN_CLEAN_FIX"
+BUILD_NOTE = "Fichas A→B limpias: conectores públicos, señal real, URLs separadas y sin rutas fantasma"
+VERSION = "Route Path Intelligence v6.2.3 PRO — XRPL Core · Clean A→B Connector Cards v182"
+
+
+def _rrp_v182_split_url_blob(value: Any, limit: int = 12) -> List[str]:
+    """Extrae URLs incluso si quedaron pegadas: ...Dehttps:/bithomp..."""
+    raw = str(value or "")
+    raw = raw.replace("https:/bithomp.com", "https://bithomp.com")
+    raw = raw.replace("http:/", "http://").replace("https:/", "https://")
+    # separar URLs pegadas sin espacio
+    raw = re.sub(r"(?<!^)(https?://)", r"\n\1", raw)
+    found = re.findall(r"https?://[^\s,;<>'\"\)\]]+", raw)
+    out, seen = [], set()
+    for u in found:
+        u = _canonical_source_url(u)
+        # recorte defensivo si aun llega una URL pegada
+        m = re.search(r"(https?://.+?)(?=https?://|$)", u)
+        if m:
+            u = _canonical_source_url(m.group(1))
+        if u and u not in seen:
+            seen.add(u); out.append(u)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _rrp_v182_clean_repeated_connection_points(text: Any, max_chars: int = 1600) -> str:
+    """Deduplica frases repetidas de puntos públicos dentro de evidencia/explicación."""
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    # Normalizar repeticiones exactas de la frase larga.
+    marker_variants = [
+        "Puntos públicos de conexión para vigilar esta línea:",
+        "Puntos públicos de conexión:",
+    ]
+    base = raw
+    collected: List[str] = []
+    for marker in marker_variants:
+        if marker in base:
+            parts = base.split(marker)
+            base = parts[0].strip()
+            for tail in parts[1:]:
+                # cortar antes de la siguiente sección conocida, si existe
+                cut = re.split(r"\n\n|Explicación|Capa deductiva|Fuentes verificables|Nodos reales", tail, maxsplit=1)[0]
+                for item in re.split(r"\s*·\s*", cut):
+                    item = item.strip(" .\n\t")
+                    if item and item not in collected:
+                        collected.append(item)
+    if collected:
+        # compactar y eliminar duplicados semánticos simples
+        clean_items, seen = [], set()
+        for it in collected:
+            k = _norm_key(it)[:160]
+            if k and k not in seen:
+                seen.add(k); clean_items.append(it)
+        base = (base + "\n\nPuntos públicos de conexión para vigilar esta línea: " + " · ".join(clean_items[:10])).strip()
+    # eliminar espacios repetidos y URLs pegadas visualmente
+    base = re.sub(r"[ \t]{2,}", " ", base)
+    base = re.sub(r"\n{3,}", "\n\n", base)
+    return base[:max_chars]
+
+
+def _rrp_v182_public_hop_label(watch_type: Any, subject: Any, src: Any = "", dst: Any = "") -> str:
+    wt = str(watch_type or "").lower().strip()
+    subj = str(subject or "").strip()
+    if wt == "dex_amm":
+        return "DEX/AMM monitor"
+    if wt == "trustlines":
+        return "Trustline layer"
+    if wt == "issued_currencies":
+        return "Issued-currency layer"
+    if wt in {"rlusd_issuer", "asset_issuer", "fiat_issuer", "tokenized_asset_issuer"}:
+        return subj if subj and subj.startswith("r") else (subj or "Issuer / wallet")
+    if wt == "asset_public_connector":
+        return subj or "Asset public connector"
+    if wt == "wallet":
+        return subj or "XRPL wallet"
+    if wt == "large_transfers":
+        return "Large-transfer monitor"
+    if wt == "clusters":
+        return "Cluster monitor"
+    return subj or "Public observation point"
+
+
+# URL extractor global usado por fichas premium.
+def _rrp_route_urls_list(value: Any, limit: int = 8) -> List[str]:
+    return _rrp_v182_split_url_blob(value, limit=limit)
+
+
+# Clasificación de vigilancia: primero por nodos concretos, después por texto.
+_ORIG_RRP_V171_WATCH_KIND_FOR_ROUTE_V182 = globals().get("_rrp_v171_watch_kind_for_route")
+def _rrp_v171_watch_kind_for_route(src: Any, dst: Any, kind: Any, evidence: Any = "", urls: Any = "") -> Tuple[str, str, str]:
+    s = _rrp_v171_node(src) if callable(globals().get("_rrp_v171_node")) else str(src or "")
+    d = _rrp_v171_node(dst) if callable(globals().get("_rrp_v171_node")) else str(dst or "")
+    nodes = {s, d}
+    blob = " ".join([str(src or ""), str(dst or ""), str(kind or ""), str(evidence or ""), str(urls or "")])
+    nb = _norm_key(blob)
+
+    # Nodo explícito manda más que palabras sueltas dentro de una explicación larga.
+    if "RLUSD" in nodes or re.search(r"\brlusd\b|ripple usd", nb):
+        issuer = globals().get("RLUSD_ISSUER", "") or "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De"
+        return "rlusd_issuer", issuer, "active"
+    if "Trustlines" in nodes:
+        return "trustlines", "Trustline layer", "active"
+    if "Issued Currencies" in nodes:
+        return "issued_currencies", "Issued-currency layer", "active"
+    if "DEX/AMM" in nodes:
+        return "dex_amm", "DEX/AMM monitor", "active"
+    if "Large Transfers" in nodes:
+        return "large_transfers", "Large-transfer monitor", "active"
+    if "Clusters" in nodes:
+        return "clusters", "Cluster monitor", "active"
+
+    # Wallet/issuer explícito.
+    try:
+        addrs = _rrp_v171_find_xrpl_addresses(evidence, urls, src, dst)
+    except Exception:
+        addrs = []
+    if addrs:
+        return "wallet", addrs[0], "active"
+
+    # Fallback textual solo si no hay nodo concreto.
+    if "trustline" in nb or "trust line" in nb or "ripplestate" in nb:
+        return "trustlines", "Trustline layer", "active"
+    if "issued currencies" in nb or "fungible tokens" in nb or "issued currency" in nb:
+        return "issued_currencies", "Issued-currency layer", "active"
+    if "dex" in nb or "amm" in nb or "decentralized exchange" in nb:
+        return "dex_amm", "DEX/AMM monitor", "active"
+
+    # Activos tokenizados genéricos de v176/v177.
+    if callable(globals().get("_rrp_v176_public_connection_points")):
+        try:
+            info = _rrp_v176_public_connection_points(src, dst, kind, evidence, urls)
+            addrs = info.get("addresses") or []
+            assets = info.get("assets") or []
+            if addrs:
+                return "asset_issuer", addrs[0], "active"
+            if assets:
+                label = ", ".join(sorted({str(a.get("asset") or a.get("asset_type") or "Activo tokenizado") for a in assets}))
+                return "asset_public_connector", label, "needs_identifier"
+        except Exception:
+            pass
+
+    if "XRPL" in nodes or "Public Gateway" in nodes:
+        return "wallet", "", "needs_identifier"
+    if callable(_ORIG_RRP_V171_WATCH_KIND_FOR_ROUTE_V182):
+        try:
+            return _ORIG_RRP_V171_WATCH_KIND_FOR_ROUTE_V182(src, dst, kind, evidence, urls)
+        except Exception:
+            pass
+    return "", "", "ignore"
+
+
+# Puntos públicos más limpios y por tipo; evita meter DEX en todas las rutas.
+_ORIG_RRP_V176_PUBLIC_CONNECTION_POINTS_V182 = globals().get("_rrp_v176_public_connection_points")
+def _rrp_v176_public_connection_points(src: Any, dst: Any, kind: Any = "", evidence: Any = "", urls: Any = "") -> Dict[str, Any]:
+    wt = str(kind or "").lower()
+    text = " ".join([str(src or ""), str(dst or ""), str(kind or ""), str(evidence or ""), str(urls or "")])
+    nodes = {_rrp_v171_node(src), _rrp_v171_node(dst)} if callable(globals().get("_rrp_v171_node")) else {str(src), str(dst)}
+    points: List[Dict[str, str]] = []
+    missing: List[str] = []
+    assets: List[Dict[str, str]] = []
+    addresses: List[str] = []
+    codes: List[str] = []
+    try:
+        assets = _rrp_v176_detect_asset_terms(text) if callable(globals().get("_rrp_v176_detect_asset_terms")) else []
+    except Exception:
+        assets = []
+    try:
+        addresses = _rrp_v171_find_xrpl_addresses(text) if callable(globals().get("_rrp_v171_find_xrpl_addresses")) else []
+    except Exception:
+        addresses = []
+    try:
+        codes = _rrp_v176_currency_codes_from_text(text) if callable(globals().get("_rrp_v176_currency_codes_from_text")) else []
+    except Exception:
+        codes = []
+
+    # RLUSD conocido: issuer fijo.
+    if "RLUSD" in nodes or "rlusd" in _norm_key(text):
+        issuer = globals().get("RLUSD_ISSUER", "") or "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De"
+        points.append({"kind": "issuer", "label": "RLUSD issuer", "value": issuer, "asset": "RLUSD"})
+        points.append({"kind": "currency", "label": "RLUSD currency", "value": "RLUSD", "asset": "RLUSD"})
+
+    for addr in addresses:
+        points.append({"kind": "wallet", "label": "XRPL wallet/issuer detectado", "value": addr, "asset": ""})
+    for code in codes:
+        if code != "XRP":
+            points.append({"kind": "currency", "label": "Código/activo emitido detectado", "value": code, "asset": code})
+
+    needs_asset_layer = bool(assets or "RLUSD" in nodes or any(x in nodes for x in ["Issued Currencies", "Trustlines"]))
+    if wt in {"trustlines", "rlusd_issuer", "asset_issuer", "fiat_issuer", "tokenized_asset_issuer"} or "Trustlines" in nodes or needs_asset_layer:
+        points.append({"kind": "trustlines", "label": "Trustlines / RippleState", "value": "TrustSet + RippleState", "asset": ""})
+    if wt in {"dex_amm", "rlusd_issuer", "asset_issuer", "fiat_issuer", "tokenized_asset_issuer"} or "DEX/AMM" in nodes:
+        points.append({"kind": "dex_orderbook", "label": "DEX / orderbook", "value": "book_offers XRP↔asset", "asset": ""})
+        points.append({"kind": "amm_pool", "label": "AMM pools", "value": "ledger_data type=amm", "asset": ""})
+    if "XRPL" in nodes or wt in {"rlusd_issuer", "asset_issuer", "wallet", "trustlines", "issued_currencies", "dex_amm"}:
+        points.append({"kind": "payments", "label": "Pagos / transferencias", "value": "account_tx + Payment", "asset": ""})
+        points.append({"kind": "large_transfers", "label": "Grandes transferencias", "value": "Payment + delivered_amount", "asset": ""})
+
+    # Si hay activo genérico pero no identificador público, explicar qué falta.
+    if assets and not addresses and not any(p.get("kind") == "issuer" and p.get("value") for p in points):
+        missing.append("issuer XRPL / wallet pública del activo")
+    if assets and not codes and not any(p.get("kind") == "currency" and p.get("value") for p in points):
+        missing.append("currency code del activo emitido")
+
+    dedup, seen = [], set()
+    for p in points:
+        if not p.get("value"):
+            continue
+        key = (p.get("kind"), p.get("value"), p.get("asset"))
+        if key in seen:
+            continue
+        seen.add(key); dedup.append(p)
+    return {"assets": assets, "addresses": addresses, "currency_codes": codes, "points": dedup[:14], "missing": missing}
+
+
+# Limpieza de targets antiguos mal tipados generados por versiones previas.
+def _rrp_v182_repair_watch_targets(conn: sqlite3.Connection) -> None:
+    try:
+        _rrp_v171_ensure_watch_tables(conn)
+        now = _rrp_v171_now()
+        fixes = [
+            ("issued_currencies", "Issued-currency layer", "%Issued Currencies%"),
+            ("trustlines", "Trustline layer", "%Trustlines%"),
+            ("dex_amm", "DEX/AMM monitor", "%DEX/AMM%"),
+        ]
+        for wt, subj, pattern in fixes:
+            conn.execute("""
+                UPDATE onchain_watch_targets
+                SET watch_type=?, subject=?, updated_at=?
+                WHERE (src LIKE ? OR dst LIKE ?)
+                  AND status='active'
+                  AND watch_type NOT IN ('rlusd_issuer','asset_issuer','wallet')
+            """, (wt, subj, now, pattern, pattern))
+        # Arreglar etiquetas subject viejas "XRPL DEX/AMM" sin tocar el tipo correcto.
+        conn.execute("UPDATE onchain_watch_targets SET subject='DEX/AMM monitor', updated_at=? WHERE subject='XRPL DEX/AMM'", (now,))
+        conn.execute("UPDATE onchain_watch_targets SET subject='Trustline layer', updated_at=? WHERE subject='XRPL Trustlines'", (now,))
+        conn.execute("UPDATE onchain_watch_targets SET subject='Issued-currency layer', updated_at=? WHERE subject='XRPL Issued Currencies'", (now,))
+        conn.commit()
+    except Exception:
+        pass
+
+
+# Watch rows: limpiar hop, textos y URLs, y conservar señal real si existe.
+_ORIG_RRP_V175_ROUTE_PATH_ROWS_FROM_WATCH_V182 = globals().get("_rrp_v175_route_path_rows_from_watch")
+def _rrp_v175_route_path_rows_from_watch(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    try:
+        _rrp_v182_repair_watch_targets(conn)
+    except Exception:
+        pass
+    rows = _ORIG_RRP_V175_ROUTE_PATH_ROWS_FROM_WATCH_V182(conn) if callable(_ORIG_RRP_V175_ROUTE_PATH_ROWS_FROM_WATCH_V182) else []
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        rr = dict(r)
+        wt = str(rr.get("path_type") or rr.get("watch_type") or "").lower()
+        hop = str(rr.get("public_hop") or "")
+        src = str(rr.get("origin") or "")
+        dst = str(rr.get("destination") or "")
+        subj = str(rr.get("subject") or hop)
+        # Normalizar hops heredados.
+        if hop in {"XRPL DEX/AMM", "DEX/AMM"} and dst == "DEX/AMM":
+            hop = "DEX/AMM monitor"
+        elif hop in {"XRPL Trustlines", "Trustlines"} and dst == "Trustlines":
+            hop = "Trustline layer"
+        elif hop in {"XRPL Issued Currencies", "Issued Currencies"} and dst == "Issued Currencies":
+            hop = "Issued-currency layer"
+        elif hop.startswith("XRPL "):
+            hop = hop.replace("XRPL ", "").strip() or hop
+        # Si el tipo es target vivo, el hop debe ser el punto observable, no una frase técnica duplicada.
+        if "rlusd_issuer" in wt:
+            hop = globals().get("RLUSD_ISSUER", "") or subj or "RLUSD issuer"
+        elif "dex_amm" in wt:
+            hop = "DEX/AMM monitor"
+        elif "trustlines" in wt:
+            hop = "Trustline layer"
+        elif "issued_currencies" in wt:
+            hop = "Issued-currency layer"
+        rr["public_hop"] = hop
+        rr["evidence"] = _rrp_v182_clean_repeated_connection_points(rr.get("evidence"), max_chars=1400)
+        rr["explanation"] = _rrp_v182_clean_repeated_connection_points(rr.get("explanation"), max_chars=1800)
+        rr["source_urls"] = "\n".join(_rrp_v182_split_url_blob(rr.get("source_urls"), limit=12))
+        # Asegurar columna live_signal para payload premium.
+        if "live_signal" not in rr:
+            txt = str(rr.get("explanation") or "") + " " + str(rr.get("evidence") or "")
+            m = re.search(r"Señal:\s*([0-9]+(?:\.[0-9]+)?)%", txt)
+            rr["live_signal"] = float(m.group(1))/100.0 if m else 0.0
+        out.append(rr)
+    return out
+
+
+# Hops directos: no usar External Gateway para dependencias XRPL explícitas.
+_ORIG_ROUTE_PUBLIC_HOP_FOR_PAIR_V182 = globals().get("_route_public_hop_for_pair")
+def _route_public_hop_for_pair(src: str, dst: str, evidence: str = "", proof_type: str = "", source_urls: str = "") -> str:
+    s = _rrp_v171_node(src) if callable(globals().get("_rrp_v171_node")) else str(src or "")
+    d = _rrp_v171_node(dst) if callable(globals().get("_rrp_v171_node")) else str(dst or "")
+    txt = _norm_key(" ".join([str(src), str(dst), str(evidence), str(proof_type), str(source_urls)]))
+    if {s, d} & {"RLUSD"}:
+        return globals().get("RLUSD_ISSUER", "") or "RLUSD issuer"
+    if {s, d} & {"DEX/AMM"}:
+        return "DEX/AMM monitor" if "XRPL" in {s, d} else "DEX/AMM"
+    if {s, d} & {"Trustlines"}:
+        return "Trustline layer" if "XRPL" in {s, d} or "issued" in txt else "Trustlines"
+    if {s, d} & {"Issued Currencies"}:
+        return "Issued-currency layer" if "XRPL" in {s, d} or "trustline" in txt else "Issued Currencies"
+    if callable(_ORIG_ROUTE_PUBLIC_HOP_FOR_PAIR_V182):
+        hop = _ORIG_ROUTE_PUBLIC_HOP_FOR_PAIR_V182(src, dst, evidence, proof_type, source_urls)
+        if hop == "External Gateway / Interoperability Layer" and _has_explicit_xrpl_signal(txt):
+            return "XRPL protocol layer"
+        return hop
+    return "XRPL protocol layer" if _has_explicit_xrpl_signal(txt) else "External Gateway / Interoperability Layer"
+
+
+# Preparación de chart: limpiar etiquetas y textos tras la agregación.
+_ORIG_ROUTE_PREPARE_CHART_DF_V182 = globals().get("_route_prepare_chart_df")
+def _route_prepare_chart_df(paths: pd.DataFrame, max_paths: int = 50) -> pd.DataFrame:
+    df = _ORIG_ROUTE_PREPARE_CHART_DF_V182(paths, max_paths=max_paths) if callable(_ORIG_ROUTE_PREPARE_CHART_DF_V182) else pd.DataFrame()
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return df
+    for col in ["evidence", "explanation", "deduction_note"]:
+        if col in df.columns:
+            df[col] = df[col].apply(lambda x: _rrp_v182_clean_repeated_connection_points(x, max_chars=1400 if col == "evidence" else 1800))
+    if "source_urls" in df.columns:
+        df["source_urls"] = df["source_urls"].apply(lambda x: "\n".join(_rrp_v182_split_url_blob(x, limit=12)))
+    if "hop_clean" in df.columns:
+        df["hop_clean"] = df["hop_clean"].replace({
+            "XRPL DEX/AMM": "DEX/AMM monitor",
+            "XRPL Trustlines": "Trustline layer",
+            "XRPL Issued Currencies": "Issued-currency layer",
+            "DEX/AMM": "DEX/AMM monitor",
+            "Trustlines": "Trustline layer",
+            "Issued Currencies": "Issued-currency layer",
+        })
+    if "public_hop" in df.columns:
+        df["public_hop"] = df["public_hop"].replace({
+            "XRPL DEX/AMM": "DEX/AMM monitor",
+            "XRPL Trustlines": "Trustline layer",
+            "XRPL Issued Currencies": "Issued-currency layer",
+        })
+    if all(c in df.columns for c in ["origin_clean", "hop_clean", "destination_clean"]):
+        df["route_label"] = df["origin_clean"].astype(str) + " → " + df["hop_clean"].astype(str) + " → " + df["destination_clean"].astype(str)
+    return df
+
+
+# Payload premium: "señal viva" solo si hay escaneo real; no calcularla desde confianza documental.
+def _rrp_v182_extract_live_signal(row: pd.Series) -> Tuple[float, str]:
+    for col in ["live_signal", "last_signal", "signal_score"]:
+        if col in row.index:
+            try:
+                val = float(row.get(col) or 0.0)
+                if val > 0:
+                    return max(0.0, min(1.0, val)), "observed"
+            except Exception:
+                pass
+    txt = " ".join([str(row.get("evidence", "")), str(row.get("explanation", "")), str(row.get("deduction_note", ""))])
+    m = re.search(r"Señal(?: de vigilancia)?:\s*([0-9]+(?:\.[0-9]+)?)%", txt)
+    if m:
+        try:
+            return max(0.0, min(float(m.group(1))/100.0, 1.0)), "observed" if float(m.group(1)) > 0 else "pending"
+        except Exception:
+            pass
+    if "pendiente de escaneo" in txt.lower() or "aún no tiene rastreo" in txt.lower() or "target creado" in txt.lower():
+        return 0.0, "pending"
+    return 0.0, "not_scanned"
+
+
+def _rrp_v182_live_label(score: float, state: str) -> str:
+    if state in {"pending", "not_scanned"}:
+        return "⏳ target pendiente de escaneo"
+    if score >= 0.78:
+        return "🔥 señal on-chain alta"
+    if score >= 0.60:
+        return "🟢 señal on-chain activa"
+    if score >= 0.40:
+        return "🟡 señal on-chain media"
+    if score > 0:
+        return "🟠 señal on-chain baja"
+    return "⚪ sin señal on-chain"
+
+
+def _rrp_build_premium_route_payload(chart: pd.DataFrame) -> List[Dict[str, Any]]:
+    payload: List[Dict[str, Any]] = []
+    if not isinstance(chart, pd.DataFrame) or chart.empty:
+        return payload
+    for _, row in chart.iterrows():
+        status, color, css = _rrp_route_status_from_row(row)
+        conf = float(row.get("confidence", 0) or 0)
+        source_list = _rrp_v182_split_url_blob(row.get("source_urls"), limit=12)
+        count = int(row.get("count", 1) or 1)
+        evidence_clean = _rrp_v182_clean_repeated_connection_points(row.get("evidence"), max_chars=1600)
+        explanation_clean = _rrp_v182_clean_repeated_connection_points(row.get("explanation"), max_chars=1800)
+        evidence_count = _rrp_count_evidence_fragments(evidence_clean)
+        source_count = len(source_list)
+        live_signal, live_state = _rrp_v182_extract_live_signal(row)
+        mean_conf = float(row.get("confidence_mean", conf) or conf)
+        visual_weight = float(row.get("value", conf) or conf)
+        payload.append({
+            "id": str(row.get("route_key") or row.get("path_id") or hashlib.sha256(str(row.to_dict()).encode()).hexdigest()[:12]),
+            "origin": str(row.get("origin_clean") or row.get("origin") or ""),
+            "hop": str(row.get("hop_clean") or row.get("public_hop") or ""),
+            "destination": str(row.get("destination_clean") or row.get("destination") or ""),
+            "route_label": str(row.get("route_label") or "Ruta A-B"),
+            "confidence": round(conf * 100, 1),
+            "confidence_mean": round(mean_conf * 100, 1),
+            "count": count,
+            "path_type": str(row.get("path_type") or "Ruta"),
+            "status": status,
+            "status_color": color,
+            "status_css": css,
+            "evidence": evidence_clean or "sin evidencia resumida",
+            "explanation": explanation_clean or "sin explicación",
+            "deduction_mode": str(row.get("deduction_mode") or "generic"),
+            "deduction_note": _rrp_v182_clean_repeated_connection_points(row.get("deduction_note"), max_chars=900),
+            "source_urls": source_list,
+            "source_count": source_count,
+            "evidence_count": evidence_count,
+            "live_score": round(live_signal * 100, 1),
+            "live_label": _rrp_v182_live_label(live_signal, live_state),
+            "visual_weight": round(visual_weight, 3),
+            "dedup_note": f"{count} observación(es) fusionadas en una sola línea canónica; las pruebas fijadas no se vuelven a contar como rutas nuevas.",
+            "raw_nodes": str(row.get("raw_nodes") or ""),
+            "raw_path_ids": str(row.get("raw_path_ids") or ""),
+            "day": str(row.get("day") or ""),
+        })
+    return payload
+
+
+# Reparación al arrancar: limpiar targets heredados y regenerar A→B.
+try:
+    _c182 = get_conn()
+    _rrp_v182_repair_watch_targets(_c182)
+    if callable(globals().get("_rrp_v171_seed_watch_targets_from_routes")):
+        _rrp_v171_seed_watch_targets_from_routes(_c182)
+    if callable(globals().get("_rrp_v175_persist_watch_paths")):
+        _rrp_v175_persist_watch_paths(_c182)
+except Exception:
+    pass
+
+
+# =============================================================================
+# v183 · DISCOVERY + ON-CHAIN + CHAINED RIPPLENET→XRPL PROTOCOL FIX
+# -----------------------------------------------------------------------------
+# Objetivo:
+# - Discovery no solo guarda documentos: extrae identificadores públicos y crea
+#   targets on-chain cuando la línea es observable.
+# - Verificar/Vigilar no vuelve a empezar desde cero: usa rutas, pruebas y targets
+#   ya detectados por Discovery.
+# - Si A está conectado documentalmente a RippleNet/Ripple Payments, y RippleNet
+#   tiene camino documental hacia XRPL, se muestra A → RippleNet/Ripple Payments
+#   → XRPL como camino deductivo, NO como conexión directa inventada A → XRPL.
+# - La señal on-chain viva queda separada de la confianza documental.
+# =============================================================================
+
+BUILD_ID = "v183_2026_05_14_DISCOVERY_ONCHAIN_CHAIN_PROTOCOL_FIX"
+BUILD_NOTE = "Discovery extrae puntos públicos, vigila on-chain y encadena RippleNet→XRPL sin inventar conexiones directas"
+VERSION = "Route Path Intelligence v6.2.3 PRO — XRPL Core · Discovery→On-chain→A/B v183"
+
+
+def _rrp_v183_node(name: Any) -> str:
+    """Normaliza nodos para cadena deductiva sin crear duplicados visuales."""
+    raw = str(name or "").strip()
+    if not raw:
+        return ""
+    try:
+        n = _rrp_v164_norm_node(raw) if callable(globals().get("_rrp_v164_norm_node")) else _canonical_entity_name(raw)
+    except Exception:
+        n = raw
+    k = _norm_key(n)
+    aliases = {
+        "ripplenet": "Ripple Payments",
+        "ripple net": "Ripple Payments",
+        "ripple payments": "Ripple Payments",
+        "ripple payment": "Ripple Payments",
+        "odl": "Ripple Payments",
+        "on demand liquidity": "Ripple Payments",
+        "xrp ledger": "XRPL",
+        "xrpledger": "XRPL",
+        "xrpl": "XRPL",
+        "ripple usd": "RLUSD",
+        "rlusd": "RLUSD",
+    }
+    if k in aliases:
+        return aliases[k]
+    return n
+
+
+def _rrp_v183_route_is_evidence_grade(kind: Any, conf: Any = 0.0) -> bool:
+    """Qué puede entrar al grafo deductivo. No exige adopción operativa; exige tramo documentado/técnico."""
+    k = str(kind or "").strip().lower()
+    try:
+        c = float(conf or 0.0)
+    except Exception:
+        c = 0.0
+    allowed = {
+        "official_protocol_feature", "official_stablecoin_on_xrpl", "official_dependency",
+        "technical_protocol_dependency", "technical_protocol_feature", "official_issuer_documentation",
+        "documented", "documented_route", "dynamic_route_evidence", "source_route_expansion",
+        "official_partner", "official_announcement", "primary_source", "partner_page",
+        "technology_basis", "documented_product_platform", "documented_pilot",
+    }
+    return (k in allowed) or (c >= 0.62 and not any(x in k for x in ["rumor", "weak", "review", "context"]))
+
+
+def _rrp_v183_json_urls(value: Any) -> List[str]:
+    try:
+        return _rrp_v182_split_url_blob(value, limit=16) if callable(globals().get("_rrp_v182_split_url_blob")) else []
+    except Exception:
+        pass
+    try:
+        v = json.loads(value) if isinstance(value, str) else value
+        if isinstance(v, list):
+            return [str(x) for x in v if str(x).startswith("http")][:16]
+    except Exception:
+        pass
+    return []
+
+
+def _rrp_v183_db_routes(conn: Optional[sqlite3.Connection] = None) -> List[Dict[str, Any]]:
+    """Rutas documentales verificables ya guardadas, para cadenas A→...→XRPL."""
+    out: List[Dict[str, Any]] = []
+    if conn is None:
+        try:
+            conn = get_conn()
+        except Exception:
+            return out
+    # dynamic_routes
+    try:
+        cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dynamic_routes)").fetchall()}
+        if cols:
+            src_col = "src" if "src" in cols else ("source" if "source" in cols else "from_node")
+            dst_col = "dst" if "dst" in cols else ("target" if "target" in cols else "to_node")
+            kind_col = "kind" if "kind" in cols else ("route_type" if "route_type" in cols else "type")
+            conf_col = "confidence" if "confidence" in cols else "0"
+            ev_col = "evidence" if "evidence" in cols else ("summary" if "summary" in cols else "''")
+            urls_col = "source_urls" if "source_urls" in cols else ("source_url" if "source_url" in cols else "''")
+            rid_col = "route_id" if "route_id" in cols else "''"
+            q = f"SELECT {rid_col},{src_col},{dst_col},{kind_col},{conf_col},{ev_col},{urls_col} FROM dynamic_routes"
+            for rid, a, b, kind, conf, ev, urls in conn.execute(q).fetchall():
+                s = _rrp_v183_node(a); d = _rrp_v183_node(b)
+                if not s or not d or s == d:
+                    continue
+                if not _rrp_v183_route_is_evidence_grade(kind, conf):
+                    continue
+                out.append({"route_id": str(rid or ""), "src": s, "dst": d, "kind": str(kind or "documented"), "confidence": float(conf or 0.0), "claim": str(ev or ""), "urls": _rrp_v183_json_urls(urls)})
+    except Exception:
+        pass
+    # connection_proofs: sirve para que una prueba verificada en un nodo alimente el otro extremo.
+    try:
+        cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(connection_proofs)").fetchall()}
+        if {"node_a", "node_b", "proof_type", "confidence"}.issubset(cols):
+            q = "SELECT proof_id,node_a,node_b,proof_type,confidence,proof_data FROM connection_proofs"
+            for pid, a, b, kind, conf, pdata in conn.execute(q).fetchall():
+                s = _rrp_v183_node(a); d = _rrp_v183_node(b)
+                if not s or not d or s == d:
+                    continue
+                if not _rrp_v183_route_is_evidence_grade(kind, conf):
+                    continue
+                urls = []
+                claim = ""
+                try:
+                    pdct = json.loads(pdata or "{}") if isinstance(pdata, str) else (pdata or {})
+                    if isinstance(pdct, dict):
+                        claim = str(pdct.get("claim") or pdct.get("summary") or pdct.get("evidence") or "")
+                        urls = _rrp_v183_json_urls(json.dumps(pdct.get("sources") or pdct.get("urls") or pdct, ensure_ascii=False))
+                except Exception:
+                    pass
+                out.append({"route_id": str(pid or ""), "src": s, "dst": d, "kind": str(kind or "proof"), "confidence": float(conf or 0.0), "claim": claim, "urls": urls})
+    except Exception:
+        pass
+    # Deduplicar por par+tipo conservando confianza/fuentes.
+    merged: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    for r in out:
+        key = (r["src"], r["dst"], r["kind"])
+        prev = merged.get(key)
+        if not prev or float(r.get("confidence") or 0) > float(prev.get("confidence") or 0):
+            merged[key] = r
+        elif prev:
+            u = list(dict.fromkeys((prev.get("urls") or []) + (r.get("urls") or [])))
+            prev["urls"] = u[:16]
+    return list(merged.values())
+
+
+def _rrp_v183_compute_chain_paths(routes: List[Dict[str, Any]], *, conn: Optional[sqlite3.Connection] = None, max_depth: int = 6) -> List[Dict[str, Any]]:
+    """Calcula caminos documentales/deductivos hacia XRPL usando flujo actual + DB.
+
+    Regla: si A→Ripple Payments y Ripple Payments→XRPL están documentados, se muestra
+    A→Ripple Payments→XRPL. No se crea A→XRPL directo.
+    """
+    all_routes: List[Dict[str, Any]] = []
+    for r in routes or []:
+        s = _rrp_v183_node(r.get("src")); d = _rrp_v183_node(r.get("dst"))
+        if not s or not d or s == d:
+            continue
+        kind = str(r.get("kind") or "documented")
+        conf = float(r.get("confidence") or 0.0)
+        if _rrp_v183_route_is_evidence_grade(kind, conf):
+            all_routes.append({"src": s, "dst": d, "kind": kind, "confidence": conf, "claim": str(r.get("claim") or ""), "urls": _rrp_v183_json_urls(r.get("url") or r.get("source_url") or r.get("source_urls"))})
+    all_routes.extend(_rrp_v183_db_routes(conn))
+
+    edges: Dict[str, Set[str]] = defaultdict(set)
+    edge_info: Dict[Tuple[str, str], List[Dict[str, Any]]] = defaultdict(list)
+    for r in all_routes:
+        s, d = r["src"], r["dst"]
+        if not s or not d or s == d:
+            continue
+        edges[s].add(d); edges[d].add(s)
+        edge_info[(s, d)].append(r); edge_info[(d, s)].append(r)
+    if "XRPL" not in edges:
+        return []
+
+    # Nodos que no aportan lectura deductiva como origen de camino.
+    skip_start = {"XRPL", "DEX/AMM monitor", "Trustline layer", "Issued-currency layer"}
+    out: List[Dict[str, Any]] = []
+    for start in sorted(edges.keys()):
+        if start in skip_start or start == "XRPL":
+            continue
+        q = deque([[start]])
+        seen = {start}
+        found = None
+        while q:
+            path = q.popleft()
+            if len(path) > max_depth + 1:
+                continue
+            last = path[-1]
+            if last == "XRPL":
+                found = path
+                break
+            # Priorizar pasar por Ripple Payments/RippleNet si existe.
+            nbs = sorted(edges.get(last, []), key=lambda x: (0 if x == "Ripple Payments" else 1, x))
+            for nb in nbs:
+                if nb in seen:
+                    continue
+                seen.add(nb); q.append(path + [nb])
+        if not found or len(found) < 2:
+            continue
+        segs = []
+        confs = []
+        urls = []
+        for i in range(len(found)-1):
+            infos = edge_info.get((found[i], found[i+1]), [])
+            best = sorted(infos, key=lambda x: float(x.get("confidence") or 0), reverse=True)[0] if infos else {}
+            segs.append(str(best.get("kind") or "documented"))
+            confs.append(float(best.get("confidence") or 0.5))
+            urls += list(best.get("urls") or [])
+        min_conf = min(confs) if confs else 0.5
+        length_penalty = max(0.0, 0.04 * max(0, len(found)-2))
+        conf = max(0.45, min(0.88, min_conf - length_penalty))
+        expl = "Camino deductivo hacia XRPL: cada tramo del camino tiene una ruta documental/técnica guardada. No crea una conexión directa nueva del origen a XRPL."
+        if "Ripple Payments" in found and found[0] != "Ripple Payments":
+            expl += " El tramo pasa por RippleNet/Ripple Payments: si la entidad está conectada a RippleNet y RippleNet tiene camino a XRPL, aparece como cadena indirecta."
+        out.append({"path": found, "label": " → ".join(found), "confidence": conf, "explanation": expl, "kinds": segs, "source_urls": list(dict.fromkeys(urls))[:12]})
+    # Quitar rutas triviales duplicadas; priorizar RLUSD/instituciones/caminos por Ripple Payments.
+    def score(p: Dict[str, Any]) -> Tuple[int, float]:
+        path = p.get("path") or []
+        priority = 0
+        if "Ripple Payments" in path:
+            priority += 3
+        if path and path[0] in {"RLUSD", "Ripple CBDC Platform", "Banco de la República", "Treasury", "SWIFT"}:
+            priority += 2
+        if len(path) > 2:
+            priority += 1
+        return (priority, float(p.get("confidence") or 0))
+    out = sorted(out, key=score, reverse=True)
+    seen_labels, clean = set(), []
+    for p in out:
+        lab = p.get("label")
+        if lab in seen_labels:
+            continue
+        seen_labels.add(lab); clean.append(p)
+    return clean[:120]
+
+
+# Override: caminos deductivos usan flujo actual + rutas/pruebas ya guardadas.
+_ORIG_RRP_V165_COMPUTE_CURRENT_DEDUCTIVE_PATHS_V183 = globals().get("_rrp_v165_compute_current_deductive_paths")
+def _rrp_v165_compute_current_deductive_paths(routes: List[Dict[str, Any]], max_depth: int = 6) -> List[Dict[str, Any]]:
+    try:
+        conn = get_conn()
+    except Exception:
+        conn = None
+    return _rrp_v183_compute_chain_paths(routes or [], conn=conn, max_depth=max_depth)
+
+
+# Override store para conservar URLs en explicación cuando existan.
+_ORIG_RRP_V165_STORE_CURRENT_PATHS_V183 = globals().get("_rrp_v165_store_current_paths")
+def _rrp_v165_store_current_paths(conn: sqlite3.Connection, paths: List[Dict[str, Any]]) -> int:
+    if not paths:
+        return 0
+    try:
+        ensure_route_paths_table(conn)
+    except Exception:
+        return 0
+    today = _date.today().isoformat()
+    added = 0
+    for p in paths:
+        try:
+            path = list(p.get("path") or [])
+            if len(path) < 2:
+                continue
+            origin = path[0]
+            public_hop = " → ".join(path[1:-1]) or "directo"
+            destination = path[-1]
+            label = " → ".join(path)
+            urls = p.get("source_urls") or []
+            explanation = str(p.get("explanation") or "")
+            if urls:
+                explanation += "\nFuentes del camino: " + " · ".join(list(dict.fromkeys(urls))[:8])
+            pid = hashlib.sha256(f"v183|{today}|{label}".encode("utf-8")).hexdigest()[:24]
+            conn.execute(
+                "INSERT OR REPLACE INTO route_paths(day,path_id,origin,public_hop,destination,confidence,path_type,evidence,explanation) VALUES (?,?,?,?,?,?,?,?,?)",
+                (today, pid, origin, public_hop, destination, float(p.get("confidence") or 0.0), "deductive_chain_to_xrpl_v183", label, explanation[:1500])
+            )
+            added += 1
+        except Exception:
+            pass
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    return added
+
+
+def _rrp_v183_sync_research_outputs(conn: sqlite3.Connection, *, run_scan: bool = False) -> Dict[str, Any]:
+    """Sincroniza capas después de búsqueda/verificación: rutas→targets→scan opcional→A/B."""
+    out = {"targets": 0, "paths": 0, "scan_checked": 0}
+    try:
+        if callable(globals().get("_rrp_v171_seed_watch_targets_from_routes")):
+            stt = _rrp_v171_seed_watch_targets_from_routes(conn) or {}
+            out["targets"] = int(stt.get("created") or 0) if isinstance(stt, dict) else 0
+    except Exception:
+        pass
+    if run_scan:
+        try:
+            if callable(globals().get("_rrp_v171_run_watch_cycle")):
+                res = _rrp_v171_run_watch_cycle(conn, force=False) or {}
+                out["scan_checked"] = int(res.get("checked") or 0) if isinstance(res, dict) else 0
+        except Exception:
+            pass
+    try:
+        if callable(globals().get("_rrp_v175_persist_watch_paths")):
+            out["paths"] = int(_rrp_v175_persist_watch_paths(conn) or 0)
+    except Exception:
+        pass
+    try:
+        data = _rrp_v164_collect_flow(conn) if callable(globals().get("_rrp_v164_collect_flow")) else {"routes": []}
+        routes = data.get("routes") or []
+        _rrp_v165_store_current_paths(conn, _rrp_v165_compute_current_deductive_paths(routes))
+    except Exception:
+        pass
+    return out
+
+
+# Cada cascada completa termina sincronizando targets, scan ligero y rutas A→B.
+_ORIG_RRP_V173_RUN_UNTIL_EXHAUSTED_V183 = globals().get("_rrp_v173_run_until_exhausted")
+def _rrp_v173_run_until_exhausted(conn: sqlite3.Connection, max_total: int = 120) -> Dict[str, Any]:
+    res = _ORIG_RRP_V173_RUN_UNTIL_EXHAUSTED_V183(conn, max_total=max_total) if callable(_ORIG_RRP_V173_RUN_UNTIL_EXHAUSTED_V183) else {"processed": 0}
+    try:
+        sync = _rrp_v183_sync_research_outputs(conn, run_scan=True)
+        if isinstance(res, dict):
+            res["watch_sync"] = sync
+    except Exception:
+        pass
+    return res
+
+
+# Cada ruta nueva detectada por Discovery crea target y refresca A→B; escaneo real queda
+# para Verificar/Vigilar/Continuar cascada, evitando bombardear XRPL por cada insert.
+_ORIG_REGISTER_DYNAMIC_ROUTE_V183 = globals().get("_register_dynamic_route")
+def _register_dynamic_route(conn: sqlite3.Connection, src: str, dst: str, kind: str,
+                            signal_col: str, label: str, confidence: float,
+                            evidence: str, source_urls: str, now: str) -> bool:
+    changed = False
+    if callable(_ORIG_REGISTER_DYNAMIC_ROUTE_V183):
+        try:
+            changed = bool(_ORIG_REGISTER_DYNAMIC_ROUTE_V183(conn, src, dst, kind, signal_col, label, confidence, evidence, source_urls, now))
+        except Exception:
+            changed = False
+    try:
+        _rrp_v171_upsert_watch_target(conn, src, dst, kind, confidence, evidence, source_urls)
+        _rrp_v183_sync_research_outputs(conn, run_scan=False)
+    except Exception:
+        pass
+    return changed
+
+
+# Panel de vigilancia: añadir aclaración de protocolo para no confundir target/documento/señal.
+_ORIG_RRP_V171_RENDER_REAL_WATCH_PANEL_V183 = globals().get("_rrp_v171_render_real_watch_panel")
+def _rrp_v171_render_real_watch_panel(conn: sqlite3.Connection) -> None:
+    try:
+        st.info("📡 Protocolo: Discovery detecta documentos + identificadores públicos; Verificar/Vigilar ejecuta el escaneo on-chain. Si una entidad conecta con RippleNet/Ripple Payments y esa rama tiene camino a XRPL, aparece como ruta deductiva A→RippleNet→XRPL, no como conexión directa inventada.")
+    except Exception:
+        pass
+    if callable(_ORIG_RRP_V171_RENDER_REAL_WATCH_PANEL_V183):
+        return _ORIG_RRP_V171_RENDER_REAL_WATCH_PANEL_V183(conn)
+
+
+# Ajuste final del payload A→B: las rutas deductivas por RippleNet quedan claras en ficha.
+_ORIG_RRP_BUILD_PREMIUM_ROUTE_PAYLOAD_V183 = globals().get("_rrp_build_premium_route_payload")
+def _rrp_build_premium_route_payload(chart: pd.DataFrame) -> List[Dict[str, Any]]:
+    payload = _ORIG_RRP_BUILD_PREMIUM_ROUTE_PAYLOAD_V183(chart) if callable(_ORIG_RRP_BUILD_PREMIUM_ROUTE_PAYLOAD_V183) else []
+    for r in payload:
+        try:
+            lab = f"{r.get('origin','')} → {r.get('hop','')} → {r.get('destination','')}"
+            if "Ripple Payments" in lab and "XRPL" in lab and str(r.get("path_type", "")).startswith("deductive_chain"):
+                r["path_type"] = "Camino deductivo vía RippleNet/Ripple Payments"
+                r["explanation"] = (str(r.get("explanation") or "") + "\nLectura correcta: la entidad no queda marcada como conectada directamente a XRPL; el radar muestra el camino documentado por RippleNet/Ripple Payments hasta XRPL.").strip()
+        except Exception:
+            pass
+    return payload
+
+
+# Sincronización al arrancar, sin forzar escaneo si Cloud acaba de iniciar.
+try:
+    _c183 = get_conn()
+    _rrp_v183_sync_research_outputs(_c183, run_scan=False)
+except Exception:
+    pass
+
+
+
+
+# =============================================================================
+# v184 · LIVE PATH WATCH PROTOCOL
+# =============================================================================
+# Objetivo:
+# Si una ruta documental/deductiva pasa por un punto público de XRPL y ese punto
+# puede observarse con datos públicos, queda en vigilancia viva automáticamente.
+# La parte privada no se atribuye on-chain salvo que haya wallet/issuer/currency.
+# =============================================================================
+
+RRP_V184_PUBLIC_HOPS = {
+    "xrpl", "xrp ledger", "dex amm", "dex/amm", "trustlines", "trustline", "issued currencies",
+    "issued currency", "rlusd", "rlusd issuer", "public gateway", "large transfers", "clusters",
+    "amm", "decentralized exchange", "wallet", "issuer"
+}
+
+
+def _rrp_v184_blob(*xs: Any) -> str:
+    return _norm_key(" ".join(str(x or "") for x in xs))
+
+
+def _rrp_v184_urls_from_text(*xs: Any) -> List[str]:
+    out: List[str] = []
+    for x in xs:
+        if isinstance(x, (list, tuple, set)):
+            vals = x
+        else:
+            vals = re.split(r"[\s,]+", str(x or ""))
+        for v in vals:
+            u = str(v or "").strip().strip("'\"()[]{}<>")
+            if u.startswith("http") and u not in out:
+                out.append(u)
+    return out[:24]
+
+
+def _rrp_v184_public_points_for_path(origin: Any, hop: Any, destination: Any, evidence: Any = "", explanation: Any = "", urls: Any = "") -> Dict[str, Any]:
+    """Devuelve puntos públicos y si el camino puede vigilarse en vivo.
+
+    Regla:
+    - Si aparece wallet/issuer/currency/DEX/trustline/RLUSD/XRPL, hay borde público.
+    - Si solo aparece entidad privada -> necesita identificador.
+    - Si hay X -> RippleNet/Ripple Payments -> XRPL, se vigila el borde público XRPL,
+      pero X no queda atribuido on-chain sin identificador.
+    """
+    blob = _rrp_v184_blob(origin, hop, destination, evidence, explanation, urls)
+    raw = " ".join(str(x or "") for x in [origin, hop, destination, evidence, explanation, urls])
+    addrs = _rrp_v171_find_xrpl_addresses(raw) if callable(globals().get("_rrp_v171_find_xrpl_addresses")) else []
+    points: List[Dict[str, str]] = []
+    if callable(globals().get("_rrp_v176_public_connection_points")):
+        try:
+            ci = _rrp_v176_public_connection_points(origin, destination, "live_path_watch", evidence, urls)
+            points.extend(ci.get("points") or [])
+        except Exception:
+            pass
+    for a in addrs:
+        points.append({"kind": "issuer", "label": "XRPL wallet/issuer", "value": a})
+    if "rlusd" in blob:
+        points.append({"kind": "issuer", "label": "RLUSD issuer", "value": globals().get("RLUSD_ISSUER", "")})
+        points.append({"kind": "currency", "label": "RLUSD currency", "value": "RLUSD"})
+    if any(k in blob for k in ["dex amm", "dex/amm", "decentralized exchange", "amm", "book offers"]):
+        points.append({"kind": "dex_amm", "label": "DEX / AMM", "value": "book_offers + ledger_data type=amm"})
+    if any(k in blob for k in ["trustline", "trustlines", "trust set", "ripplestate", "ripple state"]):
+        points.append({"kind": "trustlines", "label": "Trustlines / RippleState", "value": "TrustSet + RippleState"})
+    if any(k in blob for k in ["issued currencies", "issued currency", "fungible tokens", "token issued"]):
+        points.append({"kind": "issued_currencies", "label": "Issued currencies", "value": "issued currency ledger objects"})
+    if any(k in blob for k in ["xrpl", "xrp ledger", "xrp"]):
+        points.append({"kind": "payments", "label": "Pagos / transferencias", "value": "account_tx + Payment + delivered_amount"})
+    # Dedup.
+    clean: List[Dict[str, str]] = []
+    seen = set()
+    for p in points:
+        key = (str(p.get("kind") or ""), str(p.get("label") or ""), str(p.get("value") or ""))
+        if not p.get("value") or key in seen:
+            continue
+        seen.add(key); clean.append(p)
+    has_public_edge = bool(clean) or any(k in blob for k in RRP_V184_PUBLIC_HOPS)
+    private_terms = ["ripplenet", "ripple payments", "swift", "fednow", "sepa", "treasury", "bank", "banco", "custody", "metaco", "prime"]
+    has_private = any(k in blob for k in private_terms)
+    missing = []
+    if has_private and not addrs and not any(p.get("kind") in {"issuer", "wallet"} for p in clean):
+        missing.append("wallet/issuer/cuenta pública para atribuir la señal on-chain al tramo privado")
+    return {"points": clean[:24], "has_public_edge": has_public_edge, "has_private": has_private, "missing": missing, "addresses": addrs}
+
+
+def _rrp_v184_watch_type_subject(origin: Any, hop: Any, destination: Any, evidence: Any = "", explanation: Any = "", urls: Any = "") -> Tuple[str, str, str, Dict[str, Any]]:
+    info = _rrp_v184_public_points_for_path(origin, hop, destination, evidence, explanation, urls)
+    blob = _rrp_v184_blob(origin, hop, destination, evidence, explanation, urls)
+    addrs = info.get("addresses") or []
+    if addrs:
+        return "asset_issuer", str(addrs[0]), "active", info
+    if "rlusd" in blob:
+        return "rlusd_issuer", "RLUSD issuer", "active", info
+    if any(k in blob for k in ["dex amm", "dex/amm", "decentralized exchange", "amm", "book offers"]):
+        return "dex_amm", "DEX/AMM monitor", "active", info
+    if any(k in blob for k in ["trustline", "trustlines", "trust set", "ripplestate", "ripple state"]):
+        return "trustlines", "Trustline layer", "active", info
+    if any(k in blob for k in ["issued currencies", "issued currency", "fungible tokens"]):
+        return "issued_currencies", "Issued-currency layer", "active", info
+    if any(k in blob for k in ["xrpl", "xrp ledger", "public gateway", "large transfers", "clusters"]):
+        return "xrpl_public_edge", "XRPL public edge", "active", info
+    if info.get("has_private"):
+        return "wallet", "", "needs_identifier", info
+    return "", "", "ignore", info
+
+
+_ORIG_RRP_V171_SIGNAL_SCORE_FROM_COUNTS_V184 = globals().get("_rrp_v171_signal_score_from_counts")
+def _rrp_v171_signal_score_from_counts(kind: str, metrics: Dict[str, Any]) -> float:
+    k = str(kind or "")
+    if k == "xrpl_public_edge":
+        try:
+            return clamp(
+                normalize(float(metrics.get("payment_count", 0)), 1, 150) * 0.25 +
+                normalize(float(metrics.get("trustline_count", 0)), 1, 60) * 0.20 +
+                normalize(float(metrics.get("dex_offer_count", 0)), 10, 250) * 0.20 +
+                normalize(float(metrics.get("amm_pool_count", 0)), 1, 80) * 0.15 +
+                normalize(float(metrics.get("rlusd_tx_count", 0)), 1, 150) * 0.20
+            )
+        except Exception:
+            return 0.0
+    if callable(_ORIG_RRP_V171_SIGNAL_SCORE_FROM_COUNTS_V184):
+        return _ORIG_RRP_V171_SIGNAL_SCORE_FROM_COUNTS_V184(kind, metrics)
+    return 0.0
+
+
+def _rrp_v184_upsert_live_path_target(conn: sqlite3.Connection, origin: Any, public_hop: Any, destination: Any,
+                                      confidence: Any = 0.0, evidence: Any = "", explanation: Any = "",
+                                      source_urls: Any = "", route_id: str = "") -> bool:
+    """Crea target vivo para una ruta/camino completo que toca XRPL públicamente."""
+    try:
+        _rrp_v171_ensure_watch_tables(conn)
+    except Exception:
+        return False
+    o = _rrp_v171_node(origin) if callable(globals().get("_rrp_v171_node")) else str(origin or "").strip()
+    d = _rrp_v171_node(destination) if callable(globals().get("_rrp_v171_node")) else str(destination or "").strip()
+    hop = str(public_hop or "").strip()
+    if not o or not d or o == d:
+        return False
+    wt, subject, status, info = _rrp_v184_watch_type_subject(o, hop, d, evidence, explanation, source_urls)
+    if not wt or status == "ignore":
+        return False
+    pair = _rrp_v171_pair_key(o, d) if callable(globals().get("_rrp_v171_pair_key")) else _norm_key(f"{o}|{d}")
+    tid = hashlib.sha256(f"v184_path|{pair}|{wt}|{subject or hop or 'pending'}".encode()).hexdigest()[:16]
+    now = _rrp_v171_now() if callable(globals().get("_rrp_v171_now")) else datetime.now(timezone.utc).isoformat()
+    points_txt = []
+    for p in info.get("points", [])[:10]:
+        points_txt.append(f"{p.get('label')}: {p.get('value')}")
+    reason = (
+        "Camino documentado con borde público XRPL. "
+        "Se vigila en vivo el punto público observable; la parte privada solo se atribuye si aparece identificador público."
+    )
+    if points_txt:
+        reason += " Puntos vigilados: " + " · ".join(points_txt)
+    if info.get("missing"):
+        reason += " Falta: " + "; ".join(info.get("missing") or [])
+    urls = _rrp_v184_urls_from_text(source_urls, evidence, explanation)
+    try:
+        conn.execute("""
+            INSERT INTO onchain_watch_targets
+            (target_id, route_id, src, dst, pair_key, watch_type, subject, status, reason, source_kind,
+             confidence, created_at, updated_at, last_checked, last_signal, last_summary, evidence_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0.0, '', ?)
+            ON CONFLICT(target_id) DO UPDATE SET
+                route_id=excluded.route_id,
+                src=excluded.src,
+                dst=excluded.dst,
+                pair_key=excluded.pair_key,
+                watch_type=excluded.watch_type,
+                subject=excluded.subject,
+                status=excluded.status,
+                reason=excluded.reason,
+                source_kind=excluded.source_kind,
+                confidence=MAX(onchain_watch_targets.confidence, excluded.confidence),
+                updated_at=excluded.updated_at,
+                evidence_json=excluded.evidence_json
+        """, (tid, route_id or "v184_live_path", o, d, pair, wt, subject or hop or "XRPL public edge", status,
+              reason[:1800], "live_path_watch", float(confidence or 0.0), now, now, json.dumps(urls, ensure_ascii=False)))
+        conn.commit()
+        return True
+    except Exception:
+        return False
+
+
+def _rrp_v184_seed_live_path_targets(conn: sqlite3.Connection) -> Dict[str, int]:
+    """Crea vigilancia viva desde route_paths + dynamic_routes.
+
+    Esto convierte rutas como X→Ripple Payments→XRPL o X→XRPL→Y en targets vivos:
+    - activo si hay borde público observable;
+    - needs_identifier si la parte privada carece de wallet/issuer.
+    """
+    stats = {"route_paths": 0, "dynamic_routes": 0, "created": 0, "active": 0, "needs_identifier": 0}
+    try:
+        _rrp_v171_ensure_watch_tables(conn)
+    except Exception:
+        return stats
+    # 1) Caminos A→B ya calculados.
+    try:
+        ensure_route_paths_table(conn)
+        rows = conn.execute("""
+            SELECT path_id, origin, public_hop, destination, confidence, path_type, evidence, explanation
+            FROM route_paths
+            WHERE COALESCE(origin,'')!='' AND COALESCE(destination,'')!=''
+            ORDER BY day DESC
+            LIMIT 1500
+        """).fetchall()
+        for pid, o, hop, d, conf, ptype, ev, exp in rows:
+            stats["route_paths"] += 1
+            wt, subj, status, info = _rrp_v184_watch_type_subject(o, hop, d, ev, exp, "")
+            if status == "ignore" or not wt:
+                continue
+            if _rrp_v184_upsert_live_path_target(conn, o, hop, d, conf, ev, exp, "", str(pid or "")):
+                stats["created"] += 1
+                stats["active" if status == "active" else "needs_identifier"] += 1
+    except Exception as exc:
+        stats["route_paths_error"] = 1
+    # 2) Rutas directas documentales; si tocan un borde público también quedan vigiladas.
+    try:
+        cols = _rrp_v171_table_cols(conn, "dynamic_routes") if callable(globals().get("_rrp_v171_table_cols")) else set()
+        if cols:
+            rid = "route_id" if "route_id" in cols else "''"
+            src = "src" if "src" in cols else ("source" if "source" in cols else "''")
+            dst = "dst" if "dst" in cols else ("target" if "target" in cols else "''")
+            kind = "kind" if "kind" in cols else "route_type" if "route_type" in cols else "''"
+            conf = "confidence" if "confidence" in cols else "0"
+            evid = "evidence" if "evidence" in cols else "''"
+            urls = "source_urls" if "source_urls" in cols else "''"
+            q = f"SELECT {rid},{src},{dst},{kind},{conf},{evid},{urls} FROM dynamic_routes WHERE COALESCE(sanitizer_status,'active')!='quarantined' LIMIT 2500"
+            for ridv, a, b, k, c, ev, su in conn.execute(q).fetchall():
+                stats["dynamic_routes"] += 1
+                wt, subj, status, info = _rrp_v184_watch_type_subject(a, b, b, ev, k, su)
+                if status == "ignore" or not wt:
+                    continue
+                if _rrp_v184_upsert_live_path_target(conn, a, b, b, c, ev, str(k or ""), su, str(ridv or "")):
+                    stats["created"] += 1
+                    stats["active" if status == "active" else "needs_identifier"] += 1
+    except Exception:
+        stats["dynamic_routes_error"] = 1
+    return stats
+
+
+# El ciclo on-chain no debe saltarse targets nuevos sin last_checked por antispam.
+_ORIG_RRP_V171_RUN_WATCH_CYCLE_V184 = globals().get("_rrp_v171_run_watch_cycle")
+def _rrp_v171_run_watch_cycle(conn: sqlite3.Connection, *, force: bool = False) -> Dict[str, Any]:
+    try:
+        seeded_paths = _rrp_v184_seed_live_path_targets(conn)
+    except Exception:
+        seeded_paths = {}
+    # Si hay targets activos sin escanear, forzar una primera captura aunque antispam esté activo.
+    force_effective = bool(force)
+    try:
+        rows = conn.execute("""
+            SELECT COUNT(*) FROM onchain_watch_targets
+            WHERE status='active' AND (last_checked IS NULL OR last_checked='')
+        """).fetchone()
+        if int(rows[0] or 0) > 0:
+            force_effective = True
+    except Exception:
+        pass
+    if callable(_ORIG_RRP_V171_RUN_WATCH_CYCLE_V184):
+        out = _ORIG_RRP_V171_RUN_WATCH_CYCLE_V184(conn, force=force_effective) or {}
+    else:
+        out = {"checked": 0, "signals": 0, "max_signal": 0.0}
+    if isinstance(out, dict):
+        out["live_path_seed"] = seeded_paths
+    try:
+        if callable(globals().get("_rrp_v175_persist_watch_paths")):
+            out["route_ab_synced"] = _rrp_v175_persist_watch_paths(conn)
+    except Exception:
+        pass
+    return out
+
+
+# La sincronización general debe crear vigilancia viva desde caminos, no solo desde pares.
+_ORIG_RRP_V183_SYNC_RESEARCH_OUTPUTS_V184 = globals().get("_rrp_v183_sync_research_outputs")
+def _rrp_v183_sync_research_outputs(conn: sqlite3.Connection, *, run_scan: bool = False) -> Dict[str, Any]:
+    base = _ORIG_RRP_V183_SYNC_RESEARCH_OUTPUTS_V184(conn, run_scan=False) if callable(_ORIG_RRP_V183_SYNC_RESEARCH_OUTPUTS_V184) else {}
+    try:
+        base["live_path_watch"] = _rrp_v184_seed_live_path_targets(conn)
+    except Exception as exc:
+        base["live_path_watch_error"] = str(exc)
+    if run_scan:
+        try:
+            base["live_scan"] = _rrp_v171_run_watch_cycle(conn, force=False)
+        except Exception as exc:
+            base["live_scan_error"] = str(exc)
+    try:
+        if callable(globals().get("_rrp_v175_persist_watch_paths")):
+            base["route_ab_synced"] = _rrp_v175_persist_watch_paths(conn)
+    except Exception:
+        pass
+    return base
+
+
+# Mejorar filas de A→B: si es live_path_watch, explicar que permanece vigilado.
+_ORIG_RRP_V175_ROUTE_PATH_ROWS_FROM_WATCH_V184 = globals().get("_rrp_v175_route_path_rows_from_watch")
+def _rrp_v175_route_path_rows_from_watch(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    rows = _ORIG_RRP_V175_ROUTE_PATH_ROWS_FROM_WATCH_V184(conn) if callable(_ORIG_RRP_V175_ROUTE_PATH_ROWS_FROM_WATCH_V184) else []
+    for r in rows:
+        try:
+            mode = str(r.get("deduction_mode") or "")
+            if mode == "live_onchain_watch" or "live" in str(r.get("path_type") or "").lower():
+                note = (
+                    "\nLectura v184: este camino queda bajo vigilancia viva mientras exista un punto público observable. "
+                    "La señal on-chain mide el borde público; no atribuye actividad a la parte privada sin wallet/issuer/cuenta pública."
+                )
+                r["explanation"] = (str(r.get("explanation") or "") + note)[:1800]
+        except Exception:
+            pass
+    return rows
+
+
+# Panel de vigilancia: protocolo claro.
+_ORIG_RRP_V171_RENDER_REAL_WATCH_PANEL_V184 = globals().get("_rrp_v171_render_real_watch_panel")
+def _rrp_v171_render_real_watch_panel(conn: sqlite3.Connection) -> None:
+    try:
+        st.info(
+            "📡 Protocolo v184: si una ruta X→…→XRPL→…→Y tiene un borde público observable, "
+            "queda vigilada en vivo. El radar escanea el borde público XRPL/issuer/DEX/trustlines; "
+            "la atribución a X o Y solo se confirma si aparece wallet, issuer, currency code o transacción verificable."
+        )
+        seeded = _rrp_v184_seed_live_path_targets(conn)
+        cols = st.columns(4)
+        cols[0].metric("Caminos revisados", int(seeded.get("route_paths", 0) or 0))
+        cols[1].metric("Targets vivos", int(seeded.get("active", 0) or 0))
+        cols[2].metric("Falta identificador", int(seeded.get("needs_identifier", 0) or 0))
+        cols[3].metric("Sincronizados", int(seeded.get("created", 0) or 0))
+    except Exception:
+        pass
+    if callable(_ORIG_RRP_V171_RENDER_REAL_WATCH_PANEL_V184):
+        return _ORIG_RRP_V171_RENDER_REAL_WATCH_PANEL_V184(conn)
+
+
+# Sincronizar v184 al arrancar antes de main.
+try:
+    _c184 = get_conn()
+    _rrp_v184_seed_live_path_targets(_c184)
+    if callable(globals().get("_rrp_v175_persist_watch_paths")):
+        _rrp_v175_persist_watch_paths(_c184)
+except Exception:
+    pass
+
 if __name__ == "__main__":
     _rrp_v158_prune_static_map_to_xrpl()
     main()
