@@ -5109,12 +5109,24 @@ def make_map(row: pd.Series,
         "documented", "verified_documentary", "case_study", "partner_case_study",
         "product_platform", "cbdc_pilot", "pilot", "ripple_infra", "payment_rail",
         "system_rail", "documented_infra", "infrastructure", "infrastructure_partner",
+        # v170 — rutas técnicas nacidas de fuentes oficiales XRPL/Ripple.
+        # Deben verse también en el mapa confirmado/documental porque están respaldadas por documentación.
+        "official_protocol_feature", "protocol_feature", "official_stablecoin_on_xrpl",
+        "official_issuer_documentation", "technical_protocol_dependency", "technical_protocol_feature",
+        "official_dependency", "technical_dependency", "developer_documentation", "technical_documentation",
+        "dynamic_route_evidence", "documented_route", "source_route_expansion",
     }
     _SURVEILLANCE_KINDS = {
         "watch", "watch_only", "monitoring_link", "ecosystem_watch", "discovered", "model", "future", "future_watch",
         "deductive_watch", "infra_deduction", "transitive_watch", "onchain_watch", "stablecoin_watch",
         "public_trace_watch", "public_watchpoint", "indirect_watch", "review", "candidate", "inferred",
         "speculative", "public_gateway_watch", "needs_review", "pending_verification",
+        # v170 — estas rutas no son adopción institucional, pero sí son zonas/deducciones técnicas
+        # que deben aparecer en Vigilancia e inferencias para XRPL, DEX/AMM, Trustlines, Issued Currencies y RLUSD.
+        "official_protocol_feature", "protocol_feature", "official_stablecoin_on_xrpl",
+        "official_issuer_documentation", "technical_protocol_dependency", "technical_protocol_feature",
+        "official_dependency", "technical_dependency", "developer_documentation", "technical_documentation",
+        "dynamic_route_evidence", "documented_route", "source_route_expansion",
     }
     if route_filter == "confirmed":
         _all_routes = [r for r in _all_routes if r[2] in _CONFIRMED_KINDS]
@@ -21978,7 +21990,7 @@ def main() -> None:
             )
 
         with tab_surv:
-            st.caption("Rutas fijas/base, vigilancia, contexto ecosistema y enlaces internos de observabilidad. Los motores pueden vigilar XRPL/RLUSD, pero esas líneas no prueban adopción externa.")
+            st.caption("Vigilancia e inferencias: rutas técnicas, dependencias del protocolo y caminos observables. No prueban adopción institucional; muestran dónde debe mirar el radar.")
             sel_surv = st.plotly_chart(
                 make_map(row, title="Vigilancia e inferencias", route_filter="surveillance", **_map_kwargs),
                 width="stretch", on_select="rerun", selection_mode="points", key=f"radar_map_surv_{_map_rev}_{focused or 'all'}",
@@ -31914,9 +31926,9 @@ def render_node_info_panel(*args, **kwargs) -> None:
 #   usando pair_key canónico.
 # =============================================================================
 
-BUILD_ID = "v169_2026_05_13_EVIDENCE_CROSSCHECK_STATUS_FIX"
-BUILD_NOTE = "cruce correcto de pruebas · dependencias técnicas con peso · sin falsos 'no evidencia'"
-VERSION = "Route Path Intelligence v6.2.3 PRO — XRPL Core · Evidence Crosscheck v169"
+BUILD_ID = "v170_2026_05_13_WATCHMAP_INTEGRATION_AUDIT_FIX"
+BUILD_NOTE = "mapa vigilancia integrado · rutas técnicas visibles · auditoría búsqueda/mapa/pruebas"
+VERSION = "Route Path Intelligence v6.2.3 PRO — XRPL Core · Watchmap Integration v170"
 
 # Tipos nuevos que venían de la expansión de fuentes pero no estaban puntuando.
 _RRP_V169_TECHNICAL_TYPES = {
@@ -32182,6 +32194,1028 @@ except Exception:
     pass
 
 
+# =============================================================================
+# v170 · WATCHMAP INTEGRATION + SEARCH/MAP/PROOF AUDIT FIX
+# =============================================================================
+# Problema detectado por prueba real:
+# - Las rutas técnicas estaban guardadas y verificadas en dynamic_routes/connection_proofs,
+#   pero el mapa "Vigilancia e inferencias" las filtraba fuera porque solo aceptaba
+#   kinds antiguos: watch, inferred, model, etc.
+# - Resultado: XRPL → DEX/AMM, XRPL → Trustlines, XRPL → Issued Currencies,
+#   RLUSD → XRPL y dependencias técnicas podían existir en datos, pero no aparecer en vigilancia.
+#
+# Protocolo v170:
+# - Confirmadas/documentales: muestran documentación oficial/técnica.
+# - Vigilancia/inferida: también muestra rutas técnicas observables porque son las zonas
+#   donde el radar debe mirar on-chain o con pruebas posteriores.
+# - Completo: superpone ambas capas.
+# =============================================================================
+
+BUILD_ID = "v170_2026_05_13_WATCHMAP_INTEGRATION_AUDIT_FIX"
+BUILD_NOTE = "rutas técnicas visibles en vigilancia · filtros 3 mapas auditados"
+VERSION = "Route Path Intelligence v6.2.3 PRO — XRPL Core · Watchmap Integration v170"
+
+_RRP_V170_TECHNICAL_WATCH_KINDS = {
+    "official_protocol_feature", "protocol_feature", "official_stablecoin_on_xrpl",
+    "official_issuer_documentation", "technical_protocol_dependency", "technical_protocol_feature",
+    "official_dependency", "technical_dependency", "developer_documentation", "technical_documentation",
+    "dynamic_route_evidence", "documented_route", "source_route_expansion",
+}
+
+try:
+    RRP_DOCUMENTED_ROUTE_KINDS_V143.update(_RRP_V170_TECHNICAL_WATCH_KINDS)
+    RRP_WATCH_ROUTE_KINDS_V143.update(_RRP_V170_TECHNICAL_WATCH_KINDS)
+except Exception:
+    pass
+
+# Clasificación visual para rutas técnicas: no venderlas como adopción bancaria.
+_ORIG_ROUTE_COLOR_V170 = globals().get("route_color")
+def route_color(row: pd.Series, route: Tuple[str, str, str, str, str]) -> str:
+    kind = str(route[2] if len(route) > 2 else "")
+    if kind in _RRP_V170_TECHNICAL_WATCH_KINDS:
+        # Verde-azulado/cian técnico: prueba documental de feature o dependencia observable.
+        if kind in {"official_protocol_feature", "official_stablecoin_on_xrpl"}:
+            return "#22D3EE"
+        return "#A78BFA"
+    if callable(_ORIG_ROUTE_COLOR_V170):
+        return _ORIG_ROUTE_COLOR_V170(row, route)
+    return "#F59E0B"
+
+_ORIG_ROUTE_DASH_V170 = globals().get("route_dash")
+def route_dash(route: Tuple[str, str, str, str, str]) -> str:
+    kind = str(route[2] if len(route) > 2 else "")
+    if kind in {"official_protocol_feature", "official_stablecoin_on_xrpl"}:
+        return "dashdot"   # técnica documentada, no operación institucional.
+    if kind in _RRP_V170_TECHNICAL_WATCH_KINDS:
+        return "dash"
+    if callable(_ORIG_ROUTE_DASH_V170):
+        return _ORIG_ROUTE_DASH_V170(route)
+    return "dash"
+
+_ORIG_ROUTE_SIGNAL_V170 = globals().get("route_signal")
+def route_signal(row: pd.Series, route: Tuple[str, str, str, str, str]) -> float:
+    kind = str(route[2] if len(route) > 2 else "")
+    if kind in _RRP_V170_TECHNICAL_WATCH_KINDS:
+        # Deben verse aunque documental_score diario venga bajo.
+        base = 0.62 if kind in {"official_protocol_feature", "official_stablecoin_on_xrpl"} else 0.48
+        try:
+            return clamp(max(float(row.get(route[3], 0.0)), base))
+        except Exception:
+            return base
+    if callable(_ORIG_ROUTE_SIGNAL_V170):
+        return _ORIG_ROUTE_SIGNAL_V170(row, route)
+    return 0.50
+
+
+def _rrp_v170_audit_saved_routes(conn: Optional[sqlite3.Connection]) -> Dict[str, Any]:
+    """Diagnóstico rápido de integración: qué rutas técnicas existen y si deberían verse en vigilancia."""
+    out = {"dynamic_routes": 0, "technical_routes": 0, "proofs": 0, "pairs": []}
+    if conn is None:
+        return out
+    try:
+        out["dynamic_routes"] = int(conn.execute("SELECT COUNT(*) FROM dynamic_routes WHERE COALESCE(sanitizer_status,'active')!='quarantined'").fetchone()[0] or 0)
+    except Exception:
+        pass
+    try:
+        out["proofs"] = int(conn.execute("SELECT COUNT(*) FROM connection_proofs WHERE COALESCE(sanitizer_status,'active')!='quarantined'").fetchone()[0] or 0)
+    except Exception:
+        pass
+    try:
+        rows = conn.execute(
+            "SELECT src,dst,kind,confidence FROM dynamic_routes WHERE COALESCE(sanitizer_status,'active')!='quarantined' ORDER BY confidence DESC LIMIT 200"
+        ).fetchall()
+        for src, dst, kind, conf in rows:
+            if str(kind or "") in _RRP_V170_TECHNICAL_WATCH_KINDS:
+                out["technical_routes"] += 1
+                out["pairs"].append({"src": src, "dst": dst, "kind": kind, "confidence": float(conf or 0)})
+    except Exception:
+        pass
+    return out
+
+# Botón de diagnóstico no invasivo dentro de Descubrimientos si existe Streamlit context.
+def _rrp_v170_render_watchmap_audit(conn: sqlite3.Connection) -> None:
+    try:
+        data = _rrp_v170_audit_saved_routes(conn)
+        st.caption(
+            f"🧪 Auditoría v170: rutas guardadas {data['dynamic_routes']} · rutas técnicas visibles en vigilancia {data['technical_routes']} · pruebas {data['proofs']}"
+        )
+        if data.get("pairs"):
+            with st.expander("🧭 Rutas técnicas que deben verse en Vigilancia e inferencias", expanded=False):
+                for p in data["pairs"][:40]:
+                    st.markdown(f"- **{p['src']} → {p['dst']}** · `{p['kind']}` · {p['confidence']:.0%}")
+    except Exception:
+        pass
+
+# Inyectar auditoría compacta al final del flujo unificado, sin romper la UI si no existe.
+_ORIG_RRP_V164_RENDER_UNIFIED_FLOW_V170 = globals().get("_rrp_v164_render_unified_flow")
+def _rrp_v164_render_unified_flow(conn: sqlite3.Connection) -> None:
+    if callable(_ORIG_RRP_V164_RENDER_UNIFIED_FLOW_V170):
+        _ORIG_RRP_V164_RENDER_UNIFIED_FLOW_V170(conn)
+    _rrp_v170_render_watchmap_audit(conn)
+
+
+# =============================================================================
+# v171 · REAL ON-CHAIN WATCH PROTOCOL + GARBAGE FILTER
+# =============================================================================
+# Objetivo:
+# - El mapa de vigilancia no debe limitarse a dibujar rutas técnicas; debe crear
+#   objetivos de vigilancia real cuando una ruta documentada toca zonas observables
+#   del XRPL: RLUSD, DEX/AMM, Trustlines, Issued Currencies, Large Transfers, Clusters.
+# - Los nodos institucionales NO se vigilan on-chain si no traen wallet/issuer/token.
+#   Quedan como "necesita identificador público", para evitar basura y falsos positivos.
+# - Cada ciclo XRPL actualiza señales reales: account_tx del issuer RLUSD, book_offers,
+#   AMM ledger_data, trustline/offer/AMM/large-transfer counters.
+# - A medida que se añaden rutas nuevas, se crean targets automáticamente.
+# =============================================================================
+
+BUILD_ID = "v171_2026_05_13_REAL_ONCHAIN_WATCH_PROTOCOL_FIX"
+BUILD_NOTE = "vigilancia real on-chain para rutas técnicas · targets automáticos · filtro anti-basura"
+VERSION = "Route Path Intelligence v6.2.3 PRO — XRPL Core · Real Watch v171"
+
+_RRP_V171_OBSERVABLE_NODES = {
+    "XRPL", "RLUSD", "DEX/AMM", "Trustlines", "Issued Currencies",
+    "Large Transfers", "Clusters", "Public Gateway"
+}
+_RRP_V171_ACTIVE_WATCH_TYPES = {
+    "rlusd_issuer", "dex_amm", "trustlines", "issued_currencies",
+    "large_transfers", "clusters", "wallet"
+}
+_RRP_V171_ROUTE_KINDS_FOR_WATCH = set(globals().get("_RRP_V170_TECHNICAL_WATCH_KINDS", set())) | {
+    "onchain_watch_observed", "onchain_watch_target", "official_protocol_feature",
+    "official_stablecoin_on_xrpl", "technical_protocol_dependency",
+    "official_issuer_documentation", "source_route_expansion"
+}
+
+try:
+    RRP_WATCH_ROUTE_KINDS_V143.update({"onchain_watch_observed", "onchain_watch_target"})
+    RRP_DOCUMENTED_ROUTE_KINDS_V143.update({"onchain_watch_observed"})
+except Exception:
+    pass
+try:
+    EVIDENCE_SCORES.update({
+        "onchain_observation": 0.70,
+        "onchain_watch_observed": 0.70,
+        "onchain_watch_target": 0.58,
+        "live_xrpl_signal": 0.72,
+    })
+    EVIDENCE_LABELS.update({
+        "onchain_observation": "Observación on-chain",
+        "onchain_watch_observed": "Vigilancia on-chain observada",
+        "onchain_watch_target": "Objetivo de vigilancia on-chain",
+        "live_xrpl_signal": "Señal XRPL en vivo",
+    })
+except Exception:
+    pass
+
+
+def _rrp_v171_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _rrp_v171_node(name: Any) -> str:
+    try:
+        return _canonical_entity_name(name)
+    except Exception:
+        return str(name or "").strip()
+
+
+def _rrp_v171_node_key(name: Any) -> str:
+    try:
+        return _canonical_entity_key(name)
+    except Exception:
+        return _norm_key(name)
+
+
+def _rrp_v171_pair_key(a: Any, b: Any) -> str:
+    try:
+        return _canonical_pair_key(a, b)
+    except Exception:
+        aa, bb = sorted([_rrp_v171_node_key(a), _rrp_v171_node_key(b)])
+        return aa + "|" + bb
+
+
+def _rrp_v171_table_cols(conn: sqlite3.Connection, table: str) -> set:
+    try:
+        return {str(x[1]) for x in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    except Exception:
+        return set()
+
+
+def _rrp_v171_json_loads(x: Any, default: Any = None) -> Any:
+    if default is None:
+        default = []
+    try:
+        if isinstance(x, (list, dict)):
+            return x
+        s = str(x or "").strip()
+        if not s:
+            return default
+        return json.loads(s)
+    except Exception:
+        return default
+
+
+def _rrp_v171_find_xrpl_addresses(*texts: Any) -> List[str]:
+    blob = " ".join(str(t or "") for t in texts)
+    # XRPL classic addresses: empiezan por r, longitud típica 25-35, base58 sin 0OIl.
+    found = re.findall(r"\br[1-9A-HJ-NP-Za-km-z]{24,34}\b", blob)
+    out = []
+    for a in found:
+        if a not in out:
+            out.append(a)
+    return out[:20]
+
+
+def _rrp_v171_ensure_watch_tables(conn: sqlite3.Connection) -> None:
+    try:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS onchain_watch_targets (
+                target_id     TEXT PRIMARY KEY,
+                route_id      TEXT,
+                src           TEXT NOT NULL,
+                dst           TEXT NOT NULL,
+                pair_key      TEXT,
+                watch_type    TEXT NOT NULL,
+                subject       TEXT,
+                status        TEXT NOT NULL DEFAULT 'active',
+                reason        TEXT,
+                source_kind   TEXT,
+                confidence    REAL NOT NULL DEFAULT 0.0,
+                created_at    TEXT NOT NULL,
+                updated_at    TEXT NOT NULL,
+                last_checked  TEXT,
+                last_signal   REAL NOT NULL DEFAULT 0.0,
+                last_summary  TEXT,
+                evidence_json TEXT NOT NULL DEFAULT '[]'
+            );
+            CREATE TABLE IF NOT EXISTS onchain_watch_signals (
+                signal_id     TEXT PRIMARY KEY,
+                target_id     TEXT NOT NULL,
+                pair_key      TEXT,
+                watch_type    TEXT NOT NULL,
+                signal_score  REAL NOT NULL DEFAULT 0.0,
+                signal_json   TEXT NOT NULL DEFAULT '{}',
+                observed_at   TEXT NOT NULL
+            );
+        """)
+        conn.commit()
+    except Exception:
+        pass
+
+
+def _rrp_v171_watch_kind_for_route(src: Any, dst: Any, kind: Any, evidence: Any = "", urls: Any = "") -> Tuple[str, str, str]:
+    """Devuelve (watch_type, subject, status). status active|needs_identifier|ignore."""
+    s = _rrp_v171_node(src); d = _rrp_v171_node(dst)
+    nodes = {s, d}
+    blob = " ".join([str(src or ""), str(dst or ""), str(kind or ""), str(evidence or ""), str(urls or "")])
+    k = str(kind or "").strip().lower()
+
+    # Solo rutas técnicas/documentales o rutas con nodo observable. No activar por fuentes genéricas.
+    has_observable = bool(nodes & _RRP_V171_OBSERVABLE_NODES)
+    if not has_observable and k not in _RRP_V171_ROUTE_KINDS_FOR_WATCH:
+        return "", "", "ignore"
+
+    if "RLUSD" in nodes or "rlusd" in _norm_key(blob):
+        return "rlusd_issuer", "RLUSD issuer", "active"
+    if "DEX/AMM" in nodes or "amm" in _norm_key(blob) or "decentralized exchange" in _norm_key(blob):
+        return "dex_amm", "XRPL DEX/AMM", "active"
+    if "Trustlines" in nodes or "trust line" in _norm_key(blob) or "trustline" in _norm_key(blob):
+        return "trustlines", "XRPL Trustlines", "active"
+    if "Issued Currencies" in nodes or "issued currencies" in _norm_key(blob) or "fungible tokens" in _norm_key(blob):
+        return "issued_currencies", "XRPL Issued Currencies", "active"
+    if "Large Transfers" in nodes:
+        return "large_transfers", "XRPL large transfers", "active"
+    if "Clusters" in nodes:
+        return "clusters", "XRPL clusters", "active"
+
+    addrs = _rrp_v171_find_xrpl_addresses(evidence, urls, src, dst)
+    if addrs:
+        return "wallet", addrs[0], "active"
+
+    # Si es XRPL + institución sin wallet/issuer/token, no se puede vigilar de verdad todavía.
+    if "XRPL" in nodes or "Public Gateway" in nodes:
+        return "wallet", "", "needs_identifier"
+
+    return "", "", "ignore"
+
+
+def _rrp_v171_upsert_watch_target(conn: sqlite3.Connection, src: Any, dst: Any, kind: Any, conf: Any = 0.0,
+                                  evidence: Any = "", source_urls: Any = "", route_id: str = "") -> bool:
+    _rrp_v171_ensure_watch_tables(conn)
+    wt, subject, status = _rrp_v171_watch_kind_for_route(src, dst, kind, evidence, source_urls)
+    if status == "ignore" or not wt:
+        return False
+    s = _rrp_v171_node(src); d = _rrp_v171_node(dst)
+    pair = _rrp_v171_pair_key(s, d)
+    tid = hashlib.sha256(f"{pair}|{wt}|{subject or 'pending'}".encode()).hexdigest()[:16]
+    now = _rrp_v171_now()
+    reason = "Ruta técnica/documental observable en XRPL. "
+    if status == "needs_identifier":
+        reason += "Aún falta wallet, issuer, token o cuenta pública para vigilar on-chain sin contaminar."
+    else:
+        reason += "Vigilancia real activable con datos públicos XRPL."
+    ev = []
+    try:
+        if source_urls:
+            ev = _rrp_v171_json_loads(source_urls, [])
+            if isinstance(ev, str):
+                ev = [ev]
+    except Exception:
+        ev = []
+    conn.execute("""
+        INSERT INTO onchain_watch_targets
+        (target_id, route_id, src, dst, pair_key, watch_type, subject, status, reason, source_kind,
+         confidence, created_at, updated_at, last_checked, last_signal, last_summary, evidence_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0.0, '', ?)
+        ON CONFLICT(target_id) DO UPDATE SET
+            route_id=excluded.route_id,
+            src=excluded.src,
+            dst=excluded.dst,
+            pair_key=excluded.pair_key,
+            watch_type=excluded.watch_type,
+            subject=excluded.subject,
+            status=excluded.status,
+            reason=excluded.reason,
+            source_kind=excluded.source_kind,
+            confidence=MAX(onchain_watch_targets.confidence, excluded.confidence),
+            updated_at=excluded.updated_at,
+            evidence_json=excluded.evidence_json
+    """, (tid, route_id, s, d, pair, wt, subject, status, reason, str(kind or ""), float(conf or 0.0), now, now, json.dumps(ev, ensure_ascii=False)))
+    conn.commit()
+    return True
+
+
+def _rrp_v171_seed_watch_targets_from_routes(conn: sqlite3.Connection) -> Dict[str, int]:
+    _rrp_v171_ensure_watch_tables(conn)
+    stats = {"seen": 0, "active": 0, "needs_identifier": 0, "created": 0}
+    try:
+        cols = _rrp_v171_table_cols(conn, "dynamic_routes")
+        if not cols:
+            return stats
+        rid = "route_id" if "route_id" in cols else "''"
+        src = "src" if "src" in cols else ("source" if "source" in cols else "''")
+        dst = "dst" if "dst" in cols else ("target" if "target" in cols else "''")
+        kind = "kind" if "kind" in cols else "'discovered'"
+        conf = "confidence" if "confidence" in cols else "0"
+        evid = "evidence" if "evidence" in cols else "''"
+        urls = "source_urls" if "source_urls" in cols else "''"
+        q = f"SELECT {rid},{src},{dst},{kind},{conf},{evid},{urls} FROM dynamic_routes WHERE COALESCE(sanitizer_status,'active')!='quarantined'"
+        for route_id, a, b, k, c, ev, su in conn.execute(q).fetchall():
+            stats["seen"] += 1
+            wt, subj, status = _rrp_v171_watch_kind_for_route(a, b, k, ev, su)
+            if status == "active":
+                stats["active"] += 1
+            elif status == "needs_identifier":
+                stats["needs_identifier"] += 1
+            if status != "ignore" and wt:
+                if _rrp_v171_upsert_watch_target(conn, a, b, k, c, ev, su, str(route_id or "")):
+                    stats["created"] += 1
+    except Exception:
+        pass
+    return stats
+
+
+def _rrp_v171_signal_score_from_counts(kind: str, metrics: Dict[str, Any]) -> float:
+    try:
+        if kind == "dex_amm":
+            return clamp(
+                normalize(float(metrics.get("dex_offer_count", 0)), 10, 200) * 0.35 +
+                normalize(float(metrics.get("amm_pool_count", 0)), 1, 80) * 0.30 +
+                normalize(float(metrics.get("book_depth_xrp", 0)), 1000, 5_000_000) * 0.25 +
+                normalize(float(metrics.get("amm_tvl_xrp", 0)), 10_000, 10_000_000) * 0.10
+            )
+        if kind == "rlusd_issuer":
+            return clamp(
+                normalize(float(metrics.get("rlusd_tx_count", 0)), 1, 150) * 0.30 +
+                normalize(float(metrics.get("rlusd_volume", 0)), 1_000, 5_000_000) * 0.35 +
+                normalize(float(metrics.get("rlusd_unique_accounts", 0)), 2, 80) * 0.20 +
+                normalize(float(metrics.get("rlusd_large_count", 0)), 1, 8) * 0.15
+            )
+        if kind in {"trustlines", "issued_currencies"}:
+            return clamp(
+                normalize(float(metrics.get("trustline_count", 0)), 1, 40) * 0.55 +
+                normalize(float(metrics.get("ripple_state_events", 0)), 1, 80) * 0.30 +
+                normalize(float(metrics.get("rlusd_unique_accounts", 0)), 2, 80) * 0.15
+            )
+        if kind == "large_transfers":
+            return clamp(normalize(float(metrics.get("rlusd_large_count", 0)), 1, 12) * 0.70 + normalize(float(metrics.get("rlusd_volume", 0)), 100_000, 10_000_000) * 0.30)
+        if kind == "clusters":
+            return clamp(normalize(float(metrics.get("rlusd_unique_accounts", 0)), 4, 120) * 0.55 + normalize(float(metrics.get("rlusd_tx_count", 0)), 10, 250) * 0.45)
+    except Exception:
+        return 0.0
+    return 0.0
+
+
+def _rrp_v171_fetch_live_watch_metrics() -> Dict[str, Any]:
+    """Una sola captura XRPL real para alimentar todos los targets. Evita duplicar llamadas."""
+    metrics: Dict[str, Any] = {
+        "dex_offer_count": 0, "amm_pool_count": 0, "amm_tvl_xrp": 0.0, "book_depth_xrp": 0.0,
+        "rlusd_tx_count": 0, "rlusd_volume": 0.0, "rlusd_unique_accounts": 0,
+        "rlusd_large_count": 0, "trustline_count": 0, "offer_count": 0, "amm_tx_count": 0,
+        "ripple_state_events": 0, "payment_count": 0, "server_ok": False,
+    }
+    try:
+        ok, msg = check_xrpl_connection()
+        metrics["server_ok"] = bool(ok)
+        metrics["server_msg"] = str(msg)
+    except Exception as exc:
+        metrics["server_msg"] = str(exc)
+    try:
+        metrics.update(fetch_xrpl_dex_global() or {})
+    except Exception as exc:
+        metrics["dex_error"] = str(exc)
+    try:
+        txs = fetch_issuer_transactions(limit_pages=2, per_page=120)
+        metrics["rlusd_tx_count"] = len(txs)
+        accounts = set()
+        volume = 0.0
+        large = trust = offer = amm = pay = ripple_state = 0
+        for tx in txs:
+            try:
+                accounts.add(str(tx.get("Account") or ""))
+                accounts.add(str(tx.get("Destination") or ""))
+                amt = parse_rlusd_amount(tx)
+                volume += float(amt or 0.0)
+                if float(amt or 0.0) >= 100_000:
+                    large += 1
+                cls = classify_tx(tx)
+                trust += int(cls.get("trustline", 0) or 0)
+                offer += int(cls.get("offer", 0) or 0)
+                amm += int(cls.get("amm", 0) or 0)
+                pay += int(cls.get("payment", 0) or 0)
+                raw = json.dumps(tx.get("meta") or tx.get("metaData") or {})
+                if "RippleState" in raw:
+                    ripple_state += 1
+            except Exception:
+                continue
+        accounts.discard("")
+        metrics.update({
+            "rlusd_volume": float(volume),
+            "rlusd_large_count": int(large),
+            "trustline_count": int(trust),
+            "offer_count": int(offer),
+            "amm_tx_count": int(amm),
+            "payment_count": int(pay),
+            "ripple_state_events": int(ripple_state),
+            "rlusd_unique_accounts": int(len(accounts)),
+        })
+    except Exception as exc:
+        metrics["rlusd_error"] = str(exc)
+    return metrics
+
+
+def _rrp_v171_insert_signal(conn: sqlite3.Connection, target_id: str, pair_key: str, watch_type: str, score: float, payload: Dict[str, Any]) -> None:
+    sid = hashlib.sha256(f"{target_id}|{watch_type}|{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}".encode()).hexdigest()[:20]
+    now = _rrp_v171_now()
+    conn.execute("""
+        INSERT OR REPLACE INTO onchain_watch_signals
+        (signal_id, target_id, pair_key, watch_type, signal_score, signal_json, observed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (sid, target_id, pair_key, watch_type, float(score or 0.0), json.dumps(payload, ensure_ascii=False)[:12000], now))
+    conn.execute("""
+        UPDATE onchain_watch_targets
+        SET last_checked=?, last_signal=?, last_summary=?, updated_at=?
+        WHERE target_id=?
+    """, (now, float(score or 0.0), str(payload.get("summary") or "")[:1000], now, target_id))
+
+
+def _rrp_v171_run_watch_cycle(conn: sqlite3.Connection, *, force: bool = False) -> Dict[str, Any]:
+    """Actualiza vigilancia real de todos los targets activos, filtrando los que no tienen identificador público."""
+    _rrp_v171_ensure_watch_tables(conn)
+    seeded = _rrp_v171_seed_watch_targets_from_routes(conn)
+    out = {"seeded": seeded, "checked": 0, "active": 0, "needs_identifier": 0, "signals": 0, "max_signal": 0.0, "metrics": {}}
+    try:
+        rows = conn.execute("""
+            SELECT target_id, src, dst, pair_key, watch_type, subject, status, confidence, last_checked
+            FROM onchain_watch_targets
+            ORDER BY updated_at DESC
+        """).fetchall()
+    except Exception:
+        rows = []
+    active_rows = [r for r in rows if str(r[6] or "") == "active"]
+    out["active"] = len(active_rows)
+    out["needs_identifier"] = len([r for r in rows if str(r[6] or "") == "needs_identifier"])
+    if not active_rows:
+        return out
+
+    # Antispam: no repetir cada rerun salvo force; si ya chequeó hace <45s, no llama XRPL.
+    if not force:
+        try:
+            last = max([str(r[8] or "") for r in active_rows] or [""])
+            if last:
+                dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
+                if (datetime.now(timezone.utc) - dt).total_seconds() < 45:
+                    return out
+        except Exception:
+            pass
+
+    metrics = _rrp_v171_fetch_live_watch_metrics()
+    out["metrics"] = metrics
+    now = _rrp_v171_now()
+    for tid, src, dst, pair_key, wt, subject, status, conf, last_checked in active_rows:
+        try:
+            score = _rrp_v171_signal_score_from_counts(str(wt), metrics)
+            summary = ""
+            if wt == "dex_amm":
+                summary = f"DEX/AMM vivo: offers={metrics.get('dex_offer_count',0)}, pools AMM={metrics.get('amm_pool_count',0)}, profundidad≈{float(metrics.get('book_depth_xrp',0.0)):.0f} XRP."
+            elif wt == "rlusd_issuer":
+                summary = f"RLUSD issuer observado: tx={metrics.get('rlusd_tx_count',0)}, volumen≈{float(metrics.get('rlusd_volume',0.0)):.2f} RLUSD, cuentas={metrics.get('rlusd_unique_accounts',0)}."
+            elif wt in {"trustlines", "issued_currencies"}:
+                summary = f"Trustlines/issued currencies: TrustSet/RippleState={metrics.get('trustline_count',0)}/{metrics.get('ripple_state_events',0)}, cuentas={metrics.get('rlusd_unique_accounts',0)}."
+            elif wt == "large_transfers":
+                summary = f"Grandes transferencias RLUSD detectadas={metrics.get('rlusd_large_count',0)}, volumen≈{float(metrics.get('rlusd_volume',0.0)):.2f}."
+            elif wt == "clusters":
+                summary = f"Cluster proxy: cuentas únicas={metrics.get('rlusd_unique_accounts',0)}, tx={metrics.get('rlusd_tx_count',0)}."
+            else:
+                summary = "Target on-chain activo; requiere lógica específica de wallet/issuer."
+            payload = {"src": src, "dst": dst, "watch_type": wt, "subject": subject, "summary": summary, "metrics": metrics, "observed_at": now}
+            _rrp_v171_insert_signal(conn, tid, pair_key, wt, score, payload)
+            out["checked"] += 1
+            out["signals"] += 1
+            out["max_signal"] = max(float(out.get("max_signal") or 0.0), float(score or 0.0))
+        except Exception:
+            continue
+    conn.commit()
+    return out
+
+
+# Cuando se registra una ruta nueva, crear objetivo de vigilancia si procede.
+_ORIG_REGISTER_DYNAMIC_ROUTE_V171 = globals().get("_register_dynamic_route")
+def _register_dynamic_route(conn: sqlite3.Connection, src: str, dst: str, kind: str,
+                            signal_col: str, label: str, confidence: float,
+                            evidence: str, source_urls: str, now: str) -> bool:
+    changed = False
+    if callable(_ORIG_REGISTER_DYNAMIC_ROUTE_V171):
+        changed = bool(_ORIG_REGISTER_DYNAMIC_ROUTE_V171(conn, src, dst, kind, signal_col, label, confidence, evidence, source_urls, now))
+    else:
+        changed = False
+    try:
+        _rrp_v171_upsert_watch_target(conn, src, dst, kind, confidence, evidence, source_urls)
+    except Exception:
+        pass
+    return changed
+
+
+# Integrar vigilancia real tras el refresco XRPL normal.
+_ORIG_REFRESH_HISTORY_V171 = globals().get("refresh_history")
+def refresh_history(conn: sqlite3.Connection, pages: int = 16) -> Tuple[bool, str]:
+    ok, msg = (False, "")
+    if callable(_ORIG_REFRESH_HISTORY_V171):
+        ok, msg = _ORIG_REFRESH_HISTORY_V171(conn, pages=pages)
+    else:
+        ok, msg = False, "refresh_history original no disponible"
+    try:
+        w = _rrp_v171_run_watch_cycle(conn, force=True)
+        msg = f"{msg} · Vigilancia real: {w.get('checked',0)} targets chequeados, señal máx {float(w.get('max_signal',0.0))*100:.0f}%."
+    except Exception as exc:
+        msg = f"{msg} · Vigilancia real no completada: {exc}"
+    return ok, msg
+
+
+# Añadir onchain_watch_observed a scoring/relevancia.
+try:
+    _RRP_V169_TECHNICAL_TYPES.update({"onchain_observation", "onchain_watch_observed", "onchain_watch_target", "live_xrpl_signal"})
+    _RRP_V170_TECHNICAL_WATCH_KINDS.update({"onchain_observation", "onchain_watch_observed", "onchain_watch_target", "live_xrpl_signal"})
+except Exception:
+    pass
+
+
+_ORIG_ROUTE_COLOR_V171 = globals().get("route_color")
+def route_color(row: pd.Series, route: Tuple[str, str, str, str, str]) -> str:
+    kind = str(route[2] if len(route) > 2 else "")
+    if kind in {"onchain_watch_observed", "live_xrpl_signal", "onchain_observation"}:
+        return "#10B981"
+    if callable(_ORIG_ROUTE_COLOR_V171):
+        return _ORIG_ROUTE_COLOR_V171(row, route)
+    return "#22D3EE"
+
+
+_ORIG_ROUTE_DASH_V171 = globals().get("route_dash")
+def route_dash(route: Tuple[str, str, str, str, str]) -> str:
+    kind = str(route[2] if len(route) > 2 else "")
+    if kind in {"onchain_watch_observed", "live_xrpl_signal", "onchain_observation"}:
+        return "dot"
+    if callable(_ORIG_ROUTE_DASH_V171):
+        return _ORIG_ROUTE_DASH_V171(route)
+    return "dash"
+
+
+_ORIG_ROUTE_SIGNAL_V171 = globals().get("route_signal")
+def route_signal(row: pd.Series, route: Tuple[str, str, str, str, str]) -> float:
+    kind = str(route[2] if len(route) > 2 else "")
+    if kind in {"onchain_watch_observed", "live_xrpl_signal", "onchain_observation"}:
+        return 0.68
+    if callable(_ORIG_ROUTE_SIGNAL_V171):
+        return _ORIG_ROUTE_SIGNAL_V171(row, route)
+    return 0.50
+
+
+def _rrp_v171_latest_watch_rows(conn: sqlite3.Connection, limit: int = 80) -> List[Dict[str, Any]]:
+    _rrp_v171_ensure_watch_tables(conn)
+    rows: List[Dict[str, Any]] = []
+    try:
+        q = """
+            SELECT t.target_id,t.src,t.dst,t.watch_type,t.subject,t.status,t.confidence,t.last_checked,t.last_signal,t.last_summary,
+                   s.signal_json,s.observed_at
+            FROM onchain_watch_targets t
+            LEFT JOIN onchain_watch_signals s ON s.signal_id=(
+                SELECT signal_id FROM onchain_watch_signals ss WHERE ss.target_id=t.target_id ORDER BY observed_at DESC LIMIT 1
+            )
+            ORDER BY COALESCE(t.last_checked,t.updated_at) DESC
+            LIMIT ?
+        """
+        for r in conn.execute(q, (limit,)).fetchall():
+            rows.append({
+                "target_id": r[0], "src": r[1], "dst": r[2], "watch_type": r[3], "subject": r[4], "status": r[5],
+                "confidence": float(r[6] or 0.0), "last_checked": r[7], "last_signal": float(r[8] or 0.0),
+                "last_summary": r[9], "signal_json": r[10], "observed_at": r[11]
+            })
+    except Exception:
+        pass
+    return rows
+
+
+def _rrp_v171_render_real_watch_panel(conn: sqlite3.Connection) -> None:
+    try:
+        _rrp_v171_ensure_watch_tables(conn)
+        seeded = _rrp_v171_seed_watch_targets_from_routes(conn)
+        rows = _rrp_v171_latest_watch_rows(conn)
+        active = [r for r in rows if r.get("status") == "active"]
+        need = [r for r in rows if r.get("status") == "needs_identifier"]
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("🎯 Targets on-chain", len(active))
+        c2.metric("🧾 Rutas analizadas", seeded.get("seen", 0))
+        c3.metric("🔎 Falta identificador", len(need))
+        c4.metric("📡 Señal máx", f"{max([r.get('last_signal',0.0) for r in active] or [0])*100:.0f}%")
+        col_a, col_b = st.columns([1, 3])
+        with col_a:
+            if st.button("📡 Vigilar ahora", key="rrp_v171_watch_now", use_container_width=True):
+                res = _rrp_v171_run_watch_cycle(conn, force=True)
+                st.success(f"Vigilancia XRPL: {res.get('checked',0)} targets chequeados · señal máx {float(res.get('max_signal',0.0))*100:.0f}%")
+                st.rerun()
+        with col_b:
+            st.caption("Solo se activa vigilancia real si la ruta toca una zona observable o trae wallet/issuer/token. Instituciones sin identificador público quedan fuera para filtrar basura.")
+        if active:
+            with st.expander("📡 Vigilancia real activa sobre XRPL", expanded=True):
+                for r in active[:20]:
+                    sig = float(r.get("last_signal") or 0.0)
+                    badge = "🟢" if sig >= 0.55 else "🟡" if sig >= 0.25 else "⚪"
+                    st.markdown(f"**{badge} {r.get('src')} ↔ {r.get('dst')}** · `{r.get('watch_type')}` · señal {sig:.0%}")
+                    if r.get("last_summary"):
+                        st.caption(str(r.get("last_summary")))
+        if need:
+            with st.expander("🪪 Rutas que necesitan wallet/issuer/token antes de vigilar", expanded=False):
+                for r in need[:30]:
+                    st.markdown(f"- **{r.get('src')} ↔ {r.get('dst')}** · falta identificador público verificable")
+    except Exception as exc:
+        st.caption(f"Vigilancia real no disponible ahora: {exc}")
+
+
+# Inyectar panel de vigilancia real dentro del flujo unificado de Discovery.
+_ORIG_RRP_V164_RENDER_UNIFIED_FLOW_V171 = globals().get("_rrp_v164_render_unified_flow")
+def _rrp_v164_render_unified_flow(conn: sqlite3.Connection) -> None:
+    if callable(_ORIG_RRP_V164_RENDER_UNIFIED_FLOW_V171):
+        _ORIG_RRP_V164_RENDER_UNIFIED_FLOW_V171(conn)
+    st.markdown("### 📡 Vigilancia real on-chain")
+    _rrp_v171_render_real_watch_panel(conn)
+
+
+# Inicializar targets al cargar, sin hacer llamada XRPL si no toca.
+try:
+    _rrp_v171_ensure_watch_tables(get_conn())
+    _rrp_v171_seed_watch_targets_from_routes(get_conn())
+except Exception:
+    pass
+
+
 if __name__ == "__main__":
     _rrp_v158_prune_static_map_to_xrpl()
     main()
+
+# =============================================================================
+# v172 · AUTO WATCH DISCOVERY FIX
+# -----------------------------------------------------------------------------
+# Objetivo:
+# - Si cualquier búsqueda/cascada descubre nuevos nodos observables, el radar
+#   crea objetivos de vigilancia automáticamente, sin esperar a que el usuario
+#   pulse otro botón.
+# - No vigila instituciones privadas sin identificador público.
+# - Solo activa vigilancia si el nodo/ruta toca zonas observables XRPL o trae
+#   wallet/issuer/token/cuenta pública verificable.
+# =============================================================================
+
+BUILD_ID = "v172_2026_05_13_AUTO_WATCH_DISCOVERY_FIX"
+BUILD_NOTE = "crea targets de vigilancia automáticamente desde rutas, nodos derivados y evidencias con identificadores públicos"
+VERSION = "Route Path Intelligence v6.2.3 PRO — XRPL Core · Auto Watch Discovery v172"
+
+try:
+    _RRP_V171_ROUTE_KINDS_FOR_WATCH.update({
+        "auto_discovered_watch_target", "wallet_discovered", "issuer_discovered",
+        "token_discovered", "observable_node_discovered", "official_protocol_feature",
+        "official_stablecoin_on_xrpl", "technical_protocol_dependency",
+        "official_issuer_documentation", "source_route_expansion"
+    })
+except Exception:
+    pass
+
+_RRP_V172_OBSERVABLE_ALIASES = {
+    "xrpl": "XRPL",
+    "xrp ledger": "XRPL",
+    "xrp ledger network": "XRPL",
+    "rlusd": "RLUSD",
+    "ripple usd": "RLUSD",
+    "ripple usd stablecoin": "RLUSD",
+    "dex amm": "DEX/AMM",
+    "dex/amm": "DEX/AMM",
+    "amm": "DEX/AMM",
+    "automated market maker": "DEX/AMM",
+    "automated market makers": "DEX/AMM",
+    "decentralized exchange": "DEX/AMM",
+    "decentralised exchange": "DEX/AMM",
+    "trustlines": "Trustlines",
+    "trustline": "Trustlines",
+    "trust lines": "Trustlines",
+    "trust line": "Trustlines",
+    "trustset": "Trustlines",
+    "ripple state": "Trustlines",
+    "ripplestate": "Trustlines",
+    "issued currencies": "Issued Currencies",
+    "issued currency": "Issued Currencies",
+    "fungible tokens": "Issued Currencies",
+    "fungible token": "Issued Currencies",
+    "tokens": "Issued Currencies",
+    "large transfers": "Large Transfers",
+    "large transfer": "Large Transfers",
+    "whale transfers": "Large Transfers",
+    "clusters": "Clusters",
+    "cluster": "Clusters",
+    "public gateway": "Public Gateway",
+    "gateway publico": "Public Gateway",
+}
+
+_RRP_V172_NOISE_WATCH_NODES = {
+    "Topology Engine", "Anomaly Engine", "Fingerprint Engine",
+    "Route Engine", "Discovery Engine", "Pump", "Fase", "Cobertura"
+}
+
+
+def _rrp_v172_norm_text(x: Any) -> str:
+    try:
+        return _norm_key(x)
+    except Exception:
+        return str(x or "").strip().lower()
+
+
+def _rrp_v172_result_blob(result: Dict[str, Any]) -> str:
+    parts: List[str] = []
+    try:
+        parts.append(str(result.get("institution") or ""))
+        parts.append(str(result.get("summary") or ""))
+        parts.append(json.dumps(result.get("evidence_items") or [], ensure_ascii=False))
+        parts.append(json.dumps(result.get("route_decisions") or [], ensure_ascii=False))
+        parts.append(json.dumps(result.get("sources") or [], ensure_ascii=False))
+        parts.append(json.dumps(result.get("derived_nodes") or [], ensure_ascii=False))
+    except Exception:
+        pass
+    return "\n".join(parts)
+
+
+def _rrp_v172_extract_urls_from_result(result: Dict[str, Any], limit: int = 40) -> List[str]:
+    urls: List[str] = []
+    def add(u: Any) -> None:
+        s = str(u or "").strip()
+        if s.startswith("http") and s not in urls:
+            urls.append(s)
+    try:
+        for e in result.get("evidence_items") or []:
+            if isinstance(e, dict):
+                add(e.get("url"))
+                add(e.get("source_url"))
+        for s in result.get("sources") or []:
+            if isinstance(s, dict):
+                add(s.get("url"))
+                add(s.get("source_url"))
+            else:
+                add(s)
+        for rd in result.get("route_decisions") or []:
+            if isinstance(rd, dict):
+                add(rd.get("url"))
+                add(rd.get("source_url"))
+                for u in rd.get("source_urls") or []:
+                    add(u)
+    except Exception:
+        pass
+    return urls[:limit]
+
+
+def _rrp_v172_canonical_watch_node(name: Any, context: Any = "") -> str:
+    raw = str(name or "").strip()
+    if not raw:
+        return ""
+    canonical = _canonical_entity_name(raw) if callable(globals().get("_canonical_entity_name")) else raw
+    if canonical in _RRP_V172_NOISE_WATCH_NODES:
+        return ""
+    if canonical in _RRP_V171_OBSERVABLE_NODES:
+        return canonical
+    blob = _rrp_v172_norm_text(f"{raw} {canonical} {context}")
+    # Coincidencia exacta primero.
+    for k, v in _RRP_V172_OBSERVABLE_ALIASES.items():
+        if blob == _rrp_v172_norm_text(k):
+            return v
+    # Coincidencia contextual: solo términos técnicos fuertes.
+    for k, v in _RRP_V172_OBSERVABLE_ALIASES.items():
+        nk = _rrp_v172_norm_text(k)
+        if nk and nk in blob:
+            return v
+    # Wallet XRPL directa.
+    try:
+        addrs = _rrp_v171_find_xrpl_addresses(raw, context)
+        if addrs:
+            return addrs[0]
+    except Exception:
+        pass
+    return ""
+
+
+def _rrp_v172_is_private_without_identifier(name: Any, context: Any = "") -> bool:
+    """Evita activar vigilancia real sobre bancos/instituciones sin cuenta pública."""
+    n = _canonical_entity_name(name) if callable(globals().get("_canonical_entity_name")) else str(name or "")
+    if n in _RRP_V171_OBSERVABLE_NODES:
+        return False
+    try:
+        if _rrp_v171_find_xrpl_addresses(name, context):
+            return False
+    except Exception:
+        pass
+    # Si no hay nodo observable ni address, se puede guardar como needs_identifier
+    # solo si una ruta lo conecta a XRPL/Public Gateway.
+    return True
+
+
+def _rrp_v172_seed_watch_from_discovered_node(conn: sqlite3.Connection, parent: Any, node: Any, reason: Any = "", result: Optional[Dict[str, Any]] = None) -> bool:
+    try:
+        ctx = _rrp_v172_result_blob(result or {}) + "\n" + str(reason or "")
+        watch_node = _rrp_v172_canonical_watch_node(node, ctx)
+        if not watch_node:
+            return False
+        src = _canonical_entity_name(parent or (result or {}).get("institution") or "XRPL")
+        if not src:
+            src = "XRPL"
+        # Si el nodo observable es el propio parent, no crear bucle.
+        if _rrp_v171_node(src) == _rrp_v171_node(watch_node):
+            return False
+        urls = _rrp_v172_extract_urls_from_result(result or {})
+        evidence = str(reason or "")
+        if result:
+            evidence = (evidence + "\n" + str(result.get("summary") or "")).strip()
+        kind = "observable_node_discovered"
+        conf = float((result or {}).get("confidence") or 0.58)
+        return bool(_rrp_v171_upsert_watch_target(conn, src, watch_node, kind, conf, evidence, json.dumps(urls, ensure_ascii=False)))
+    except Exception:
+        return False
+
+
+def _rrp_v172_seed_watch_from_result(conn: sqlite3.Connection, result: Dict[str, Any]) -> Dict[str, int]:
+    stats = {"routes": 0, "nodes": 0, "wallets": 0, "needs_identifier": 0}
+    if not isinstance(result, dict):
+        return stats
+    try:
+        _rrp_v171_ensure_watch_tables(conn)
+    except Exception:
+        pass
+    parent = _canonical_entity_name(result.get("institution") or "")
+    blob = _rrp_v172_result_blob(result)
+    urls = _rrp_v172_extract_urls_from_result(result)
+    urls_json = json.dumps(urls, ensure_ascii=False)
+
+    # 1) Rutas explícitas del resultado: si toca observable, target automático.
+    route_sources: List[Dict[str, Any]] = []
+    try:
+        if callable(globals().get("_rrp_v164_routes_for_result")):
+            route_sources.extend(_rrp_v164_routes_for_result(result) or [])
+    except Exception:
+        pass
+    try:
+        if callable(globals().get("_rrp_v156_result_routes")):
+            route_sources.extend(_rrp_v156_result_routes(result) or [])
+    except Exception:
+        pass
+    seen_pairs: Set[str] = set()
+    for r in route_sources:
+        if not isinstance(r, dict):
+            continue
+        a = r.get("src") or parent
+        b = r.get("dst") or r.get("to") or r.get("target") or r.get("node")
+        if not a or not b:
+            continue
+        pair = _rrp_v171_pair_key(a, b)
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
+        kind = str(r.get("kind") or r.get("type") or "auto_discovered_watch_target")
+        conf = float(r.get("confidence") or result.get("confidence") or 0.58)
+        ev = str(r.get("claim") or r.get("evidence") or result.get("summary") or "")
+        try:
+            if _rrp_v171_upsert_watch_target(conn, a, b, kind, conf, ev, urls_json):
+                stats["routes"] += 1
+        except Exception:
+            pass
+
+    # 2) Nodos derivados observables: crear target aunque todavía no haya línea fuerte.
+    try:
+        derived = _rrp_v156_derived_nodes(result, limit=60) if callable(globals().get("_rrp_v156_derived_nodes")) else []
+    except Exception:
+        derived = []
+    for d in derived:
+        if not isinstance(d, dict):
+            continue
+        n = d.get("name") or d.get("node") or d.get("target")
+        reason = d.get("reason") or d.get("type") or "nodo observable detectado"
+        if _rrp_v172_seed_watch_from_discovered_node(conn, parent, n, reason, result):
+            stats["nodes"] += 1
+
+    # 3) Wallets XRPL en evidencias/fuentes: target wallet automático.
+    try:
+        addrs = _rrp_v171_find_xrpl_addresses(blob, " ".join(urls))
+    except Exception:
+        addrs = []
+    for addr in addrs[:10]:
+        try:
+            if _rrp_v171_upsert_watch_target(conn, parent or "XRPL", addr, "wallet_discovered", float(result.get("confidence") or 0.62), f"Wallet XRPL detectada en evidencia/fuente: {addr}", urls_json):
+                stats["wallets"] += 1
+        except Exception:
+            pass
+
+    # 4) Si una institución aparece conectada a XRPL/Public Gateway pero sin wallet, registrar needs_identifier.
+    try:
+        for r in route_sources:
+            a = r.get("src") or parent
+            b = r.get("dst") or r.get("to") or r.get("target") or r.get("node")
+            nodes = {_rrp_v171_node(a), _rrp_v171_node(b)}
+            if nodes & {"XRPL", "Public Gateway"}:
+                other = b if _rrp_v171_node(a) in {"XRPL", "Public Gateway"} else a
+                if _rrp_v172_is_private_without_identifier(other, blob):
+                    if _rrp_v171_upsert_watch_target(conn, a, b, "auto_discovered_watch_target", float(r.get("confidence") or 0.50), str(r.get("claim") or result.get("summary") or ""), urls_json):
+                        stats["needs_identifier"] += 1
+    except Exception:
+        pass
+
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    return stats
+
+
+# Integración 1: después de aplicar una búsqueda/cascada al mapa, crear targets.
+_ORIG_RRP_V156_APPLY_TO_MAP_V172 = globals().get("_rrp_v156_apply_to_map")
+def _rrp_v156_apply_to_map(conn: sqlite3.Connection, result: Dict[str, Any]) -> Dict[str, Any]:
+    info: Dict[str, Any] = {}
+    if callable(_ORIG_RRP_V156_APPLY_TO_MAP_V172):
+        try:
+            info = _ORIG_RRP_V156_APPLY_TO_MAP_V172(conn, result) or {}
+        except Exception as exc:
+            info = {"reason": f"apply_error_v172: {type(exc).__name__}: {exc}"}
+    try:
+        w = _rrp_v172_seed_watch_from_result(conn, result or {})
+        info["auto_watch"] = w
+    except Exception as exc:
+        info["auto_watch_error"] = str(exc)
+    try:
+        _rrp_v171_seed_watch_targets_from_routes(conn)
+    except Exception:
+        pass
+    return info
+
+
+# Integración 2: al guardar el resultado en memoria de flujo, también sembrar targets.
+_ORIG_RRP_V156_RECORD_RESULT_V172 = globals().get("_rrp_v156_record_result")
+def _rrp_v156_record_result(result: Dict[str, Any], *, source: str, parent: str = "") -> None:
+    if callable(_ORIG_RRP_V156_RECORD_RESULT_V172):
+        _ORIG_RRP_V156_RECORD_RESULT_V172(result, source=source, parent=parent)
+    try:
+        _rrp_v172_seed_watch_from_result(get_conn(), result or {})
+    except Exception:
+        pass
+
+
+# Integración 3: panel más explícito sobre auto-creación.
+_ORIG_RRP_V171_RENDER_REAL_WATCH_PANEL_V172 = globals().get("_rrp_v171_render_real_watch_panel")
+def _rrp_v171_render_real_watch_panel(conn: sqlite3.Connection) -> None:
+    st.caption("Auto-vigilancia activa: cada ruta o nodo observable nuevo crea target automáticamente. Las instituciones sin wallet/issuer/token quedan como 'falta identificador', no se vigilan para evitar basura.")
+    if callable(_ORIG_RRP_V171_RENDER_REAL_WATCH_PANEL_V172):
+        _ORIG_RRP_V171_RENDER_REAL_WATCH_PANEL_V172(conn)
+    try:
+        rows = _rrp_v171_latest_watch_rows(conn, limit=200)
+        active = [r for r in rows if r.get("status") == "active"]
+        need = [r for r in rows if r.get("status") == "needs_identifier"]
+        st.caption(f"Targets actuales: {len(active)} activos · {len(need)} esperando identificador público.")
+    except Exception:
+        pass
+
+
+try:
+    _rrp_v171_ensure_watch_tables(get_conn())
+    _rrp_v171_seed_watch_targets_from_routes(get_conn())
+except Exception:
+    pass
