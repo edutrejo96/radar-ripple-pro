@@ -36382,6 +36382,1480 @@ try:
 except Exception:
     pass
 
+# [v186] main call moved to the very end so every patch is active before Streamlit renders.
+
+
+# =============================================================================
+# v185 · ROUTE CARD PUBLIC ENDPOINT CLEAN FIX
+# -----------------------------------------------------------------------------
+# Objetivo:
+# - La ficha A→B no debe mostrar "Watch" ni "Wallets XRPL sin etiqueta" cuando
+#   ya existe issuer/wallet público detectable.
+# - URLs tipo https:///docs... deben limpiarse.
+# - La ruta A→B debe enseñar el punto público real: issuer, wallet, DEX monitor,
+#   trustline layer, issued-currency layer, etc.
+# - La señal on-chain viva no se mezcla con la confianza documental.
+# =============================================================================
+
+BUILD_ID = "v185_2026_05_14_ROUTE_CARD_PUBLIC_ENDPOINT_CLEAN_FIX"
+BUILD_NOTE = "Fichas A→B con endpoints públicos reales, URLs limpias y sin Watch/Wallet genérico"
+VERSION = "Route Path Intelligence v6.2.3 PRO — XRPL Core · Public Endpoint Cards v185"
+
+
+def _rrp_v185_url_list(value: Any, limit: int = 16) -> List[str]:
+    raw = str(value or "")
+    if not raw:
+        return []
+    # Reparar los triples slash y URLs pegadas de versiones anteriores.
+    raw = raw.replace("https:///", "https://").replace("http:///", "http://")
+    raw = raw.replace("https:/", "https://").replace("http:/", "http://")
+    raw = re.sub(r"(?<!^)(https?://)", r"\n\1", raw)
+    found = re.findall(r"https?://[^\s,;<>'\"\)\]]+", raw)
+    out, seen = [], set()
+    for u in found:
+        u = re.sub(r"[\.\)\]\}\s]+$", "", str(u or "").strip())
+        # Si aun viene pegada una segunda URL dentro de la primera, cortar.
+        m = re.match(r"(https?://.*?)(?=https?://|$)", u)
+        if m:
+            u = m.group(1)
+        try:
+            u = _canonical_source_url(u) if callable(globals().get("_canonical_source_url")) else u
+        except Exception:
+            pass
+        if u and u not in seen:
+            seen.add(u); out.append(u)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _rrp_v185_find_xrpl_address(*parts: Any) -> str:
+    txt = " ".join(str(x or "") for x in parts)
+    try:
+        found = _rrp_v171_find_xrpl_addresses(txt) if callable(globals().get("_rrp_v171_find_xrpl_addresses")) else []
+        if found:
+            return str(found[0])
+    except Exception:
+        pass
+    m = re.search(r"\br[1-9A-HJ-NP-Za-km-z]{24,34}\b", txt)
+    return m.group(0) if m else ""
+
+
+def _rrp_v185_short_addr(addr: str) -> str:
+    a = str(addr or "").strip()
+    return a if len(a) <= 18 else f"{a[:8]}…{a[-6:]}"
+
+
+def _rrp_v185_clean_route_text(text: Any, max_chars: int = 1600) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    # Usar limpiador anterior si existe.
+    try:
+        raw = _rrp_v182_clean_repeated_connection_points(raw, max_chars=max_chars * 2) if callable(globals().get("_rrp_v182_clean_repeated_connection_points")) else raw
+    except Exception:
+        pass
+    # Compactar repeticiones de frases exactas.
+    raw = raw.replace("https:///", "https://").replace("http:///", "http://")
+    raw = re.sub(r"(Puntos públicos de conexión para vigilar esta línea:\s*){2,}", r"\1", raw)
+    raw = re.sub(r"(Puntos públicos de conexión:\s*){2,}", r"\1", raw)
+    # Deduplicar items separados por · dentro de la zona de puntos públicos.
+    for marker in ["Puntos públicos de conexión para vigilar esta línea:", "Puntos públicos de conexión:", "Puntos vigilados:"]:
+        if marker in raw:
+            head, tail = raw.split(marker, 1)
+            items = re.split(r"\s*·\s*", tail)
+            clean, seen = [], set()
+            for it in items:
+                it = it.strip(" .\n\t")
+                if not it:
+                    continue
+                # cortar basura de secciones posteriores
+                it = re.split(r"\n\n|Explicación|Capa deductiva|Fuentes verificables|Nodos reales", it, maxsplit=1)[0].strip()
+                k = _norm_key(it)[:180]
+                if k and k not in seen:
+                    seen.add(k); clean.append(it)
+            raw = head.strip() + "\n\n" + marker + " " + " · ".join(clean[:12])
+            break
+    raw = re.sub(r"[ \t]{2,}", " ", raw)
+    raw = re.sub(r"\n{3,}", "\n\n", raw)
+    return raw[:max_chars]
+
+
+def _rrp_v185_pretty_hop_and_dst(origin: Any, hop: Any, destination: Any, path_type: Any = "", evidence: Any = "", explanation: Any = "", urls: Any = "") -> Tuple[str, str]:
+    """Devuelve (hop_limpio, destino_limpio) para la ficha A→B.
+
+    Reglas:
+    - Un issuer/wallet XRPL no debe aparecer como "Wallets XRPL sin etiqueta".
+    - Si la ruta es RLUSD→wallet, el destino visual debe ser XRPL y el hop el issuer.
+    - Watch genérico se reemplaza por el punto público real si se detecta.
+    """
+    o = str(origin or "").strip()
+    h = str(hop or "").strip()
+    d = str(destination or "").strip()
+    blob = " ".join([o, h, d, str(path_type or ""), str(evidence or ""), str(explanation or ""), str(urls or "")])
+    nb = _norm_key(blob)
+    addr = _rrp_v185_find_xrpl_address(blob)
+
+    generic_wallet_labels = {
+        "Wallets XRPL sin etiqueta", "Wallet XRPL sin etiqueta", "XRPL Wallet",
+        "Wallet XRPL", "Wallet", "Watch", "XRPL Watch", "Public observation point",
+        "Punto público", "Issuer / wallet",
+    }
+    if d in generic_wallet_labels or _norm_key(d) in {_norm_key(x) for x in generic_wallet_labels}:
+        d = "XRPL"
+    if h in generic_wallet_labels or _norm_key(h) in {_norm_key(x) for x in generic_wallet_labels}:
+        h = "XRPL public edge"
+
+    if "rlusd" in nb:
+        issuer = globals().get("RLUSD_ISSUER", "") or "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De"
+        if issuer in blob or addr == issuer or not addr:
+            h = "RLUSD issuer"
+            # Si el destino era wallet genérica, el destino conceptual es XRPL.
+            if d in {"", "Wallets XRPL sin etiqueta", "Wallet XRPL sin etiqueta", "XRPL Wallet", "XRPL public edge"} or _norm_key(d).startswith("wallet"):
+                d = "XRPL"
+
+    if addr and (h in {"XRPL public edge", "Issuer / wallet", "Watch"} or "issuer" in nb or "wallet" in nb):
+        if "rlusd" in nb:
+            h = "RLUSD issuer"
+        else:
+            h = f"XRPL issuer/wallet {_rrp_v185_short_addr(addr)}"
+        if d in generic_wallet_labels or _norm_key(d).startswith("wallet"):
+            d = "XRPL"
+
+    # Hops técnicos claros.
+    if any(x in nb for x in ["dex amm", "dex/amm", "decentralized exchange", "book offers", "amm pools"]):
+        if d == "DEX/AMM" or h in {"XRPL DEX/AMM", "DEX/AMM"}:
+            h = "DEX/AMM monitor"
+    if any(x in nb for x in ["trustline", "trust lines", "ripplestate", "trustset"]):
+        if d == "Trustlines" or h in {"XRPL Trustlines", "Trustlines"}:
+            h = "Trustline layer"
+    if any(x in nb for x in ["issued currencies", "issued currency", "fungible tokens"]):
+        if d == "Issued Currencies" or h in {"XRPL Issued Currencies", "Issued Currencies"}:
+            h = "Issued-currency layer" if h not in {"RLUSD issuer"} else h
+
+    # Evitar prefijos raros heredados.
+    h = h.replace("XRPL DEX/AMM", "DEX/AMM monitor").replace("XRPL Trustlines", "Trustline layer").replace("XRPL Issued Currencies", "Issued-currency layer")
+    return h.strip() or "XRPL public edge", d.strip() or "XRPL"
+
+
+# Reescribir otra vez la generación de filas de vigilancia para que v184/v182 no se pisen.
+_ORIG_RRP_V175_ROUTE_PATH_ROWS_FROM_WATCH_V185 = globals().get("_rrp_v175_route_path_rows_from_watch")
+def _rrp_v175_route_path_rows_from_watch(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    rows = _ORIG_RRP_V175_ROUTE_PATH_ROWS_FROM_WATCH_V185(conn) if callable(_ORIG_RRP_V175_ROUTE_PATH_ROWS_FROM_WATCH_V185) else []
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        rr = dict(r)
+        urls = "\n".join(_rrp_v185_url_list(rr.get("source_urls"), limit=16))
+        ev = _rrp_v185_clean_route_text(rr.get("evidence"), 1400)
+        ex = _rrp_v185_clean_route_text(rr.get("explanation"), 1800)
+        hop, dst = _rrp_v185_pretty_hop_and_dst(rr.get("origin"), rr.get("public_hop"), rr.get("destination"), rr.get("path_type"), ev, ex, urls)
+        rr["public_hop"] = hop
+        rr["destination"] = dst
+        rr["evidence"] = ev
+        rr["explanation"] = ex
+        rr["source_urls"] = urls
+        # Si aún no hay escaneo, forzar señal viva cero aunque haya confianza documental.
+        txt = _norm_key(ev + " " + ex)
+        if any(k in txt for k in ["pendiente de escaneo", "aun no tiene rastreo", "target creado desde ruta", "target creado"]):
+            rr["live_signal"] = 0.0
+        out.append(rr)
+    return out
+
+
+# Limpiar también el DataFrame ya agregado antes de construir el payload del gráfico.
+_ORIG_ROUTE_PREPARE_CHART_DF_V185 = globals().get("_route_prepare_chart_df")
+def _route_prepare_chart_df(paths: pd.DataFrame, max_paths: int = 50) -> pd.DataFrame:
+    df = _ORIG_ROUTE_PREPARE_CHART_DF_V185(paths, max_paths=max_paths) if callable(_ORIG_ROUTE_PREPARE_CHART_DF_V185) else pd.DataFrame()
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return df
+    for col in ["source_urls"]:
+        if col in df.columns:
+            df[col] = df[col].apply(lambda x: "\n".join(_rrp_v185_url_list(x, limit=16)))
+    for col in ["evidence", "explanation", "deduction_note"]:
+        if col in df.columns:
+            df[col] = df[col].apply(lambda x: _rrp_v185_clean_route_text(x, 1600 if col == "evidence" else 1800))
+    # Recalcular etiquetas visibles.
+    hop_col = "hop_clean" if "hop_clean" in df.columns else ("public_hop" if "public_hop" in df.columns else None)
+    dst_col = "destination_clean" if "destination_clean" in df.columns else ("destination" if "destination" in df.columns else None)
+    org_col = "origin_clean" if "origin_clean" in df.columns else ("origin" if "origin" in df.columns else None)
+    if hop_col and dst_col and org_col:
+        new_hops, new_dsts = [], []
+        for _, row in df.iterrows():
+            hop, dst = _rrp_v185_pretty_hop_and_dst(row.get(org_col), row.get(hop_col), row.get(dst_col), row.get("path_type"), row.get("evidence"), row.get("explanation"), row.get("source_urls"))
+            new_hops.append(hop); new_dsts.append(dst)
+        df[hop_col] = new_hops
+        df[dst_col] = new_dsts
+        if "route_label" in df.columns:
+            df["route_label"] = df[org_col].astype(str) + " → " + df[hop_col].astype(str) + " → " + df[dst_col].astype(str)
+    return df
+
+
+# Payload final: limpiar un último nivel antes de pintar la ficha HTML.
+_ORIG_RRP_BUILD_PREMIUM_ROUTE_PAYLOAD_V185 = globals().get("_rrp_build_premium_route_payload")
+def _rrp_build_premium_route_payload(chart: pd.DataFrame) -> List[Dict[str, Any]]:
+    payload = _ORIG_RRP_BUILD_PREMIUM_ROUTE_PAYLOAD_V185(chart) if callable(_ORIG_RRP_BUILD_PREMIUM_ROUTE_PAYLOAD_V185) else []
+    for r in payload:
+        urls = _rrp_v185_url_list("\n".join(r.get("source_urls") or []), limit=16)
+        hop, dst = _rrp_v185_pretty_hop_and_dst(r.get("origin"), r.get("hop"), r.get("destination"), r.get("path_type"), r.get("evidence"), r.get("explanation"), "\n".join(urls))
+        r["hop"] = hop
+        r["destination"] = dst
+        r["route_label"] = f"{r.get('origin','')} → {hop} → {dst}"
+        r["evidence"] = _rrp_v185_clean_route_text(r.get("evidence"), 1500)
+        r["explanation"] = _rrp_v185_clean_route_text(r.get("explanation"), 1800)
+        r["source_urls"] = urls
+        # Evitar Watchlist fuerte si es solo target pendiente.
+        if float(r.get("live_score") or 0.0) <= 0 and "pendiente" in _norm_key(str(r.get("path_type") or "") + " " + str(r.get("explanation") or "")):
+            r["status"] = "⏳ Target pendiente"
+            r["status_css"] = "watch"
+            r["live_score"] = 0.0
+            r["live_label"] = "⏳ target pendiente de escaneo"
+    return payload
+
+
+# Reparar algunos targets heredados en la DB para que dejen de pintar Watch/wallet genérica.
+def _rrp_v185_repair_existing_targets(conn: sqlite3.Connection) -> None:
+    try:
+        _rrp_v171_ensure_watch_tables(conn)
+        now = _rrp_v171_now() if callable(globals().get("_rrp_v171_now")) else datetime.now(timezone.utc).isoformat()
+        issuer = globals().get("RLUSD_ISSUER", "") or "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De"
+        conn.execute("""
+            UPDATE onchain_watch_targets
+            SET subject='RLUSD issuer', watch_type='rlusd_issuer', updated_at=?
+            WHERE (src='RLUSD' OR dst='RLUSD' OR evidence_json LIKE '%RLUSD%' OR reason LIKE '%RLUSD%')
+              AND status='active'
+        """, (now,))
+        conn.execute("""
+            UPDATE onchain_watch_targets
+            SET dst='XRPL', updated_at=?
+            WHERE dst IN ('Wallets XRPL sin etiqueta','Wallet XRPL sin etiqueta','XRPL Wallet','Wallet')
+        """, (now,))
+        conn.execute("""
+            UPDATE onchain_watch_targets
+            SET subject='DEX/AMM monitor', watch_type='dex_amm', updated_at=?
+            WHERE (src='DEX/AMM' OR dst='DEX/AMM' OR subject IN ('XRPL DEX/AMM','DEX/AMM'))
+              AND watch_type NOT IN ('rlusd_issuer','asset_issuer')
+        """, (now,))
+        conn.execute("""
+            UPDATE onchain_watch_targets
+            SET subject='Trustline layer', watch_type='trustlines', updated_at=?
+            WHERE (src='Trustlines' OR dst='Trustlines' OR subject IN ('XRPL Trustlines','Trustlines'))
+              AND watch_type NOT IN ('rlusd_issuer','asset_issuer')
+        """, (now,))
+        conn.execute("""
+            UPDATE onchain_watch_targets
+            SET subject='Issued-currency layer', watch_type='issued_currencies', updated_at=?
+            WHERE (src='Issued Currencies' OR dst='Issued Currencies' OR subject IN ('XRPL Issued Currencies','Issued Currencies'))
+              AND watch_type NOT IN ('rlusd_issuer','asset_issuer')
+        """, (now,))
+        conn.commit()
+    except Exception:
+        pass
+
+try:
+    _c185 = get_conn()
+    _rrp_v185_repair_existing_targets(_c185)
+    if callable(globals().get("_rrp_v175_persist_watch_paths")):
+        _rrp_v175_persist_watch_paths(_c185)
+except Exception:
+    pass
+
+# =============================================================================
+# v186 · WALLET DYNAMIC CLASSIFIER + CLEAN MAP FIX
+# -----------------------------------------------------------------------------
+# Objetivo:
+# - Las wallets XRPL no pueden caer como "Wallets XRPL sin etiqueta" ni quedarse
+#   en Descubrimientos. Si aparece una dirección r..., se convierte en nodo real,
+#   se clasifica como Wallet/Issuer XRPL y se puede investigar/vigilar.
+# - Quitar recuadros fijos visuales: el mapa debe clasificar por tipo de nodo
+#   descubierto, no por cajones heredados que contaminan la lectura.
+# - La búsqueda de una wallet debe producir una ficha normal: fuentes, ruta a XRPL,
+#   punto público y target on-chain.
+# - Todos los parches quedan antes de main().
+# =============================================================================
+try:
+    VERSION = "Route Path Intelligence v6.2.3 PRO — Dynamic Wallet Classifier"
+    BUILD_ID = "v186_2026_05_14_WALLET_DYNAMIC_CLASSIFIER_CLEAN_MAP_FIX"
+    BUILD_NOTE = "Wallets XRPL investigables, clasificación dinámica y mapa sin recuadros fijos heredados."
+except Exception:
+    pass
+
+RRP_V186_CLEAN_MAP_BOXES = True
+RRP_V186_XRPL_WALLET_RE = re.compile(r"\br[1-9A-HJ-NP-Za-km-z]{24,34}\b")
+
+# Nuevas capas dinámicas. No son nodos fijos: son columnas semánticas para nodos
+# descubiertos por documentos/on-chain. Si no aparecen, no ensucian el mapa.
+try:
+    ZONE_POS.update({
+        "WalletXRPL": {"x": 6.10, "y_start": 2.80, "y_step": -0.72, "box": (5.75,-2.10,6.45,3.15), "label": "Wallets / Issuers XRPL"},
+        "XRPL_Tokens": {"x": 7.00, "y_start": 2.80, "y_step": -0.72, "box": (6.65,-2.10,7.35,3.15), "label": "Tokens / issued currencies"},
+        "XRPL_Liquidity": {"x": 7.90, "y_start": 2.80, "y_step": -0.72, "box": (7.55,-2.10,8.25,3.15), "label": "DEX / AMM / liquidez"},
+        "InstitutionalInfra": {"x": 8.80, "y_start": 2.80, "y_step": -0.72, "box": (8.45,-2.10,9.15,3.15), "label": "Infra institucional"},
+        "RWA_Tokenized": {"x": 9.70, "y_start": 2.80, "y_step": -0.72, "box": (9.35,-2.10,10.05,3.15), "label": "RWA / activos tokenizados"},
+    })
+    LAYER_NORMALIZE.update({
+        "walletxrpl": "WalletXRPL", "wallet xrpl": "WalletXRPL", "xrpl wallet": "WalletXRPL", "issuer xrpl": "WalletXRPL", "issuer": "WalletXRPL",
+        "xrpl tokens": "XRPL_Tokens", "issued currencies": "XRPL_Tokens", "issued currency": "XRPL_Tokens", "tokens xrpl": "XRPL_Tokens",
+        "xrpl liquidity": "XRPL_Liquidity", "liquidity": "XRPL_Liquidity", "dex amm": "XRPL_Liquidity", "amm": "XRPL_Liquidity",
+        "institutionalinfra": "InstitutionalInfra", "institutional infra": "InstitutionalInfra",
+        "rwa tokenized": "RWA_Tokenized", "tokenized asset": "RWA_Tokenized", "tokenized assets": "RWA_Tokenized",
+    })
+except Exception:
+    pass
+
+
+def _rrp_v186_is_xrpl_wallet(value: Any) -> bool:
+    s = str(value or "").strip()
+    return bool(RRP_V186_XRPL_WALLET_RE.fullmatch(s))
+
+
+def _rrp_v186_extract_wallets_from_text(*parts: Any, limit: int = 20) -> List[str]:
+    found: List[str] = []
+    blob = "\n".join(str(p or "") for p in parts)
+    for w in RRP_V186_XRPL_WALLET_RE.findall(blob):
+        if w not in found:
+            found.append(w)
+        if len(found) >= limit:
+            break
+    return found
+
+
+def _rrp_v186_wallet_label(wallet: Any, label: Any = "") -> str:
+    w = str(wallet or "").strip()
+    lbl = str(label or "").strip()
+    if not w:
+        return "Wallet XRPL"
+    if w == str(globals().get("RLUSD_ISSUER", "")) or w == "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De":
+        return "RLUSD issuer"
+    known = globals().get("KNOWN_XRPL_WALLETS", {}).get(w, "")
+    if known:
+        return known
+    if lbl and lbl.lower() not in {"wallets xrpl sin etiqueta", "wallet xrpl sin etiqueta", "unknown", "desconocido", "?", "nan", "none"}:
+        return lbl
+    return "XRPL wallet " + _wallet_short_address(w, 10, 6) if "_wallet_short_address" in globals() else "XRPL wallet " + w[:10] + "…" + w[-6:]
+
+
+def _rrp_v186_node_type(name: Any, context: Any = "") -> Tuple[str, str, str]:
+    """Clasificación dinámica por naturaleza del nodo, no por lista fija heredada."""
+    raw = str(name or "").strip()
+    blob = _norm_key(str(raw) + " " + str(context or ""))
+    if _rrp_v186_is_xrpl_wallet(raw):
+        return "WalletXRPL", "👛", "wallet XRPL detectada"
+    if "rlusd" in blob or "stablecoin" in blob or "usdc" in blob or "usdt" in blob or "eurc" in blob or "pyusd" in blob:
+        return "XRPL_Tokens", "🪙", "stablecoin/token detectado"
+    if "issued currenc" in blob or "fungible token" in blob or "trust line token" in blob or "token fungible" in blob:
+        return "XRPL_Tokens", "🔎", "issued currency/token XRPL"
+    if "dex" in blob or "amm" in blob or "orderbook" in blob or "liquidity" in blob or "liquidez" in blob:
+        return "XRPL_Liquidity", "🌊", "liquidez XRPL/DEX/AMM"
+    if "trustline" in blob or "trust line" in blob or "ripplestate" in blob or "trustset" in blob:
+        return "XRPL_Tokens", "🔗", "trustline/token XRPL"
+    if "rwa" in blob or "tokenized" in blob or "tokenised" in blob or "tokenizacion" in blob or "treasury token" in blob or "fund token" in blob:
+        return "RWA_Tokenized", "🧾", "activo tokenizado/RWA"
+    if "xrpl" in blob or "xrp ledger" in blob:
+        return "Público", "💧", "núcleo XRPL"
+    if any(x in blob for x in ["swift", "fednow", "sepa", "rtgs", "clearing", "settlement", "iso 20022", "ripplenet", "ripple payments", "treasury", "custody", "metaco", "hidden road"]):
+        return "InstitutionalInfra", "🏗️", "infraestructura institucional"
+    if any(x in blob for x in ["central bank", "banco central", "cbdc", "mdbc", "digital euro", "digital yuan"]):
+        return "CBDC", "🏦", "banco central/CBDC"
+    if any(x in blob for x in ["government", "gobierno", "ministry", "ministerio", "regulator", "regulador"]):
+        return "Gobierno", "🏛️", "gobierno/regulador"
+    return "Descubierto", "🔎", "clasificación dinámica pendiente"
+
+
+# Sustituir clasificador de entidad por clasificador dinámico. Mantiene el nombre de
+# la función que ya usa el resto de la app.
+_ORIG_CLASSIFY_ENTITY_V186 = globals().get("_classify_entity")
+def _classify_entity(name: str) -> str:
+    try:
+        return _rrp_v186_node_type(name)[0]
+    except Exception:
+        if callable(_ORIG_CLASSIFY_ENTITY_V186):
+            return _ORIG_CLASSIFY_ENTITY_V186(name)
+        return "Descubierto"
+
+
+_ORIG_INFER_LAYER_ICON_FROM_NAME_V186 = globals().get("_infer_layer_icon_from_name")
+def _infer_layer_icon_from_name(name: Any, fallback_layer: str = "Descubierto", fallback_icon: str = "🔎") -> Tuple[str, str]:
+    try:
+        layer, icon, _ = _rrp_v186_node_type(name)
+        if layer and layer != "Descubierto":
+            return layer, icon
+    except Exception:
+        pass
+    if callable(_ORIG_INFER_LAYER_ICON_FROM_NAME_V186):
+        try:
+            return _ORIG_INFER_LAYER_ICON_FROM_NAME_V186(name, fallback_layer, fallback_icon)
+        except Exception:
+            pass
+    return fallback_layer, fallback_icon
+
+
+_ORIG_FORCED_LAYER_ICON_V186 = globals().get("_forced_layer_icon_for_node_name")
+def _forced_layer_icon_for_node_name(name: Any) -> Tuple[str, str, str]:
+    try:
+        layer, icon, reason = _rrp_v186_node_type(name)
+        if layer and layer != "Descubierto":
+            return layer, icon, reason
+    except Exception:
+        pass
+    if callable(_ORIG_FORCED_LAYER_ICON_V186):
+        try:
+            return _ORIG_FORCED_LAYER_ICON_V186(name)
+        except Exception:
+            pass
+    return "", "", ""
+
+
+# Evitar que las funciones de wallet devuelvan el cajón genérico cuando sí hay dirección.
+_ORIG_WALLET_FULL_NAME_V186 = globals().get("_wallet_full_name")
+def _wallet_full_name(wallet: str, label: str = "", fallback: str = "Wallet XRPL") -> str:
+    try:
+        return _rrp_v186_wallet_label(wallet, label)
+    except Exception:
+        if callable(_ORIG_WALLET_FULL_NAME_V186):
+            return _ORIG_WALLET_FULL_NAME_V186(wallet, label, fallback)
+        return fallback
+
+
+# Resultado local cuando el usuario busca directamente una wallet XRPL.
+def _rrp_v186_wallet_discovery_result(wallet: str) -> Dict[str, Any]:
+    wallet = str(wallet or "").strip()
+    name = _rrp_v186_wallet_label(wallet)
+    is_rlusd = wallet == (globals().get("RLUSD_ISSUER", "") or "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De")
+    urls = [
+        f"https://xrpscan.com/account/{wallet}",
+        f"https://bithomp.com/explorer/{wallet}",
+    ]
+    if is_rlusd:
+        urls.insert(0, "https://docs.ripple.com/stablecoin")
+        urls.insert(0, "https://ripple.com/ripple-press/raising-the-standard-for-stablecoins-ripple-usd-launches-globally")
+    ev_type = "official_asset_issuer" if is_rlusd else "xrpl_wallet_public_endpoint"
+    conf = 0.86 if is_rlusd else 0.62
+    summary = (
+        f"Wallet pública XRPL detectada: {wallet}. Se clasifica como punto público observable. "
+        "La app debe vigilar account_tx, pagos, trustlines, delivered_amount, DEX/AMM y grandes transferencias. "
+        "No atribuye actividad a una institución privada salvo que esa fuente vincule la wallet con esa entidad."
+    )
+    evidence_items = [
+        {"title": f"{name} — XRPSCAN", "type": "public_wallet_explorer", "summary": f"Explorador público XRPL para {wallet}.", "url": urls[-2]},
+        {"title": f"{name} — Bithomp", "type": "public_wallet_explorer", "summary": f"Explorador alternativo XRPL para {wallet}.", "url": urls[-1]},
+    ]
+    if is_rlusd:
+        evidence_items.insert(0, {"title": "RLUSD issuer / stablecoin docs", "type": "official_asset_issuer", "summary": "Ripple/RLUSD documenta el activo y su punto público de emisión/vigilancia en XRPL.", "url": "https://docs.ripple.com/stablecoin"})
+    route_decisions = [
+        {"from": name, "to": "XRPL", "evidence_type": ev_type, "kind": ev_type, "confidence": conf, "draw_on_map": True,
+         "claim": f"{name} es una wallet/issuer pública observable en XRPL: {wallet}."},
+    ]
+    if is_rlusd:
+        route_decisions += [
+            {"from": "RLUSD", "to": "XRPL", "evidence_type": "official_stablecoin_on_xrpl", "kind": "official_stablecoin_on_xrpl", "confidence": 0.86, "draw_on_map": True,
+             "claim": "RLUSD tiene punto público de issuer/currency en XRPL; vigilancia on-chain activable."},
+            {"from": "RLUSD", "to": name, "evidence_type": "official_asset_issuer", "kind": "asset_issuer", "confidence": 0.86, "draw_on_map": True,
+             "claim": f"RLUSD se vigila mediante su issuer XRPL: {wallet}."},
+        ]
+    return {
+        "institution": name,
+        "entity_type": "WalletXRPL",
+        "layer": "WalletXRPL",
+        "icon": "👛" if not is_rlusd else "🪙",
+        "connected": True,
+        "confidence": conf,
+        "summary": summary,
+        "sources": [{"title": u, "url": u, "type": "public_explorer"} for u in urls],
+        "evidence_items": evidence_items,
+        "route_decisions": route_decisions,
+        "wallets": [{"address": wallet, "label": name, "role": "issuer" if is_rlusd else "public_wallet"}],
+        "public_connectors": [{"type": "xrpl_wallet", "wallet": wallet, "label": name}],
+        "connects_to": ["XRPL"],
+        "_wallet_public_endpoint": True,
+        "_skip_ai": True,
+    }
+
+
+_ORIG_SEARCH_INSTITUTION_CONNECTIONS_V186 = globals().get("search_institution_connections")
+def search_institution_connections(institution_name: str,
+                                   conn: Optional[sqlite3.Connection] = None,
+                                   force_online: bool = False) -> Dict[str, Any]:
+    raw = str(institution_name or "").strip()
+    # Si el usuario pega una wallet o la búsqueda contiene una wallet, investigar la wallet directamente.
+    wallets = _rrp_v186_extract_wallets_from_text(raw, limit=1)
+    if _rrp_v186_is_xrpl_wallet(raw) or wallets:
+        wallet = raw if _rrp_v186_is_xrpl_wallet(raw) else wallets[0]
+        res = _rrp_v186_wallet_discovery_result(wallet)
+        try:
+            if conn is None:
+                conn = get_conn()
+            _rrp_v186_persist_wallet_endpoint(conn, wallet, res)
+        except Exception:
+            pass
+        return res
+    if callable(_ORIG_SEARCH_INSTITUTION_CONNECTIONS_V186):
+        try:
+            res = _ORIG_SEARCH_INSTITUTION_CONNECTIONS_V186(institution_name, conn=conn, force_online=force_online)
+        except TypeError:
+            res = _ORIG_SEARCH_INSTITUTION_CONNECTIONS_V186(institution_name)
+    else:
+        res = {"institution": raw, "connected": False, "confidence": 0.0, "summary": "Buscador base no disponible."}
+    try:
+        # Enriquecer cualquier resultado con wallets encontradas en fuentes/resúmenes.
+        blob = json.dumps(res, ensure_ascii=False)
+        for w in _rrp_v186_extract_wallets_from_text(blob, limit=8):
+            label = _rrp_v186_wallet_label(w)
+            res.setdefault("wallets", [])
+            if not any(str(x.get("address") if isinstance(x, dict) else x) == w for x in res["wallets"]):
+                res["wallets"].append({"address": w, "label": label, "role": "detected_public_endpoint"})
+            res.setdefault("public_connectors", []).append({"type": "xrpl_wallet", "wallet": w, "label": label})
+            res.setdefault("route_decisions", []).append({
+                "from": label, "to": "XRPL", "evidence_type": "xrpl_wallet_public_endpoint", "kind": "public_endpoint", "confidence": 0.62, "draw_on_map": True,
+                "claim": f"Wallet XRPL detectada como punto público observable: {w}."
+            })
+    except Exception:
+        pass
+    return res
+
+
+def _rrp_v186_persist_wallet_endpoint(conn: sqlite3.Connection, wallet: str, result: Optional[Dict[str, Any]] = None) -> None:
+    try:
+        ensure_discovery_tables(conn)
+        now = datetime.now(timezone.utc).isoformat()
+        label = _rrp_v186_wallet_label(wallet)
+        nid = "wallet_" + hashlib.sha1(wallet.encode("utf-8")).hexdigest()[:16]
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO dynamic_nodes(node_id,name,layer,icon,confidence,source_url,summary,added_at)
+            VALUES(?,?,?,?,?,?,?,?)
+            """,
+            (nid, label, "WalletXRPL", "👛", float((result or {}).get("confidence", 0.62) or 0.62),
+             f"https://xrpscan.com/account/{wallet}", f"Wallet pública XRPL vigilable: {wallet}", now),
+        )
+        rid = "wallet_route_" + hashlib.sha1((label + "|XRPL").encode("utf-8")).hexdigest()[:16]
+        urls = f"https://xrpscan.com/account/{wallet}\nhttps://bithomp.com/explorer/{wallet}"
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO dynamic_routes(route_id,src,dst,kind,signal_col,label,confidence,evidence,source_urls,added_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
+            (rid, label, "XRPL", "xrpl_wallet_public_endpoint", "public_xrpl_score", f"{label} -> XRPL",
+             float((result or {}).get("confidence", 0.62) or 0.62), f"Wallet XRPL pública observable: {wallet}", urls, now),
+        )
+        # Crear target on-chain si existen las tablas v171+.
+        try:
+            if callable(globals().get("_rrp_v171_ensure_watch_tables")):
+                _rrp_v171_ensure_watch_tables(conn)
+                tid = "wallet_watch_" + hashlib.sha1(wallet.encode("utf-8")).hexdigest()[:16]
+                payload = json.dumps({"wallet": wallet, "label": label, "explorers": urls.split("\n")}, ensure_ascii=False)
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO onchain_watch_targets(target_id, src, dst, subject, watch_type, status, reason, evidence_json, created_at, updated_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (tid, label, "XRPL", label, "xrpl_wallet", "active", "Wallet XRPL detectada; vigilar account_tx, pagos, trustlines y grandes transferencias.", payload, now, now),
+                )
+        except Exception:
+            pass
+        conn.commit()
+    except Exception:
+        pass
+
+
+_ORIG_APPLY_DISCOVERY_TO_MAP_V186 = globals().get("apply_discovery_to_map")
+def apply_discovery_to_map(conn: sqlite3.Connection, result: Dict[str, Any], auto: bool = False) -> Dict[str, Any]:
+    # Persistir primero wallets extraídas para que no queden como genéricas.
+    try:
+        blob = json.dumps(result or {}, ensure_ascii=False)
+        for w in _rrp_v186_extract_wallets_from_text(blob, limit=20):
+            _rrp_v186_persist_wallet_endpoint(conn, w, result)
+    except Exception:
+        pass
+    if callable(_ORIG_APPLY_DISCOVERY_TO_MAP_V186):
+        out = _ORIG_APPLY_DISCOVERY_TO_MAP_V186(conn, result, auto=auto)
+    else:
+        out = {"added": 0, "routes": 0}
+    try:
+        # Re-clasificar nodo principal de la búsqueda según tipo real.
+        name = str((result or {}).get("institution") or "").strip()
+        layer, icon, reason = _rrp_v186_node_type(name, json.dumps(result or {}, ensure_ascii=False)[:4000])
+        if name and layer and layer != "Descubierto":
+            ensure_discovery_tables(conn)
+            now = datetime.now(timezone.utc).isoformat()
+            nid = "node_" + hashlib.sha1(_canonical_entity_key(name).encode("utf-8")).hexdigest()[:16]
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO dynamic_nodes(node_id,name,layer,icon,confidence,source_url,summary,added_at)
+                VALUES(?,?,?,?,?,?,?,?)
+                """,
+                (nid, name, layer, icon, float((result or {}).get("confidence", 0.5) or 0.5), "", f"Clasificación dinámica: {reason}", now),
+            )
+            conn.commit()
+    except Exception:
+        pass
+    return out
+
+
+_ORIG_LOAD_DYNAMIC_MAP_ELEMENTS_V186 = globals().get("load_dynamic_map_elements")
+def load_dynamic_map_elements(conn: Optional[sqlite3.Connection] = None):
+    dyn_nodes, dyn_routes, new_boxes = ({}, [], [])
+    if callable(_ORIG_LOAD_DYNAMIC_MAP_ELEMENTS_V186):
+        try:
+            dyn_nodes, dyn_routes, new_boxes = _ORIG_LOAD_DYNAMIC_MAP_ELEMENTS_V186(conn)
+        except Exception:
+            dyn_nodes, dyn_routes, new_boxes = ({}, [], [])
+    # Limpiar nodos genéricos y re-clasificar por tipo real.
+    clean_nodes: Dict[str, Dict[str, Any]] = {}
+    for name, meta in dict(dyn_nodes or {}).items():
+        nm = str(name or "").strip()
+        if _norm_key(nm) in {"wallets xrpl sin etiqueta", "wallet xrpl sin etiqueta", "xrpl wallet", "watch"}:
+            continue
+        layer, icon, reason = _rrp_v186_node_type(nm, json.dumps(meta, ensure_ascii=False)[:1200])
+        m = dict(meta or {})
+        if layer and (m.get("layer") in {"Descubierto", "Stablecoins", "Otro", "Vigilancia", "Público", "Ripple"} or layer != "Descubierto"):
+            m["layer"] = layer
+            m["icon"] = icon or m.get("icon") or "🔎"
+            m["classification_reason"] = reason
+        clean_nodes[nm] = m
+    return clean_nodes, dyn_routes, []  # v186: sin recuadros dinámicos; los nodos se explican en la ficha.
+
+
+# Quitar recuadros fijos heredados del mapa sin tocar líneas ni nodos.
+_ORIG_MAKE_MAP_V186 = globals().get("make_map")
+def make_map(*args, **kwargs):
+    fig = _ORIG_MAKE_MAP_V186(*args, **kwargs) if callable(_ORIG_MAKE_MAP_V186) else go.Figure()
+    if RRP_V186_CLEAN_MAP_BOXES:
+        try:
+            fig.layout.shapes = tuple()
+            zone_terms = {
+                "Americas", "Europa", "Asia-Pac", "Infraestructura", "Ripple", "Institucional", "Exchanges", "Vigilancia", "Motores",
+                "XRPL/RLUSD", "Reguladores", "CBDC / banco central", "Fintech / pagos", "Asset managers", "Clearing / settlement",
+                "Red privada / OTC", "Puentes / cross-chain", "Proveedores / APIs", "Otros descubiertos", "Wallets / Issuers XRPL",
+                "Tokens / issued currencies", "DEX / AMM / liquidez", "Infra institucional", "RWA / activos tokenizados",
+                "🔍 Zona de vigilancia", "🔀 Router",
+            }
+            kept = []
+            for a in list(fig.layout.annotations or []):
+                t = re.sub(r"<[^>]+>", "", str(getattr(a, "text", "") or "")).strip()
+                if any(z in t for z in zone_terms):
+                    continue
+                kept.append(a)
+            fig.layout.annotations = tuple(kept)
+        except Exception:
+            pass
+    return fig
+
+
+# Al arrancar, dejar solo XRPL como núcleo estático y limpiar clasificaciones genéricas antiguas.
+def _rrp_v186_prepare_clean_dynamic_map() -> None:
+    try:
+        if callable(globals().get("_rrp_v158_prune_static_map_to_xrpl")):
+            _rrp_v158_prune_static_map_to_xrpl()
+        else:
+            xrpl = NODES.get("XRPL", {"pos": (0.0, 0.0), "layer": "Público", "icon": "💧"})
+            NODES.clear(); NODES["XRPL"] = xrpl
+    except Exception:
+        pass
+    try:
+        conn = get_conn()
+        ensure_discovery_tables(conn)
+        # Borrar nodo genérico antiguo y re-clasificar wallets si hay dirección en resumen/source_url.
+        conn.execute("DELETE FROM dynamic_nodes WHERE lower(name) IN ('wallets xrpl sin etiqueta','wallet xrpl sin etiqueta','xrpl wallet','watch')")
+        rows = conn.execute("SELECT node_id,name,summary,source_url,layer FROM dynamic_nodes").fetchall()
+        for node_id, name, summary, source_url, layer_old in rows:
+            blob = f"{name} {summary} {source_url}"
+            wallets = _rrp_v186_extract_wallets_from_text(blob, limit=1)
+            if wallets:
+                w = wallets[0]
+                label = _rrp_v186_wallet_label(w, name)
+                conn.execute("UPDATE dynamic_nodes SET name=?, layer='WalletXRPL', icon='👛', summary=? WHERE node_id=?", (label, f"Wallet pública XRPL vigilable: {w}", node_id))
+        conn.commit()
+    except Exception:
+        pass
+
+# =============================================================================
+# v187 · RLUSD ISSUER CANONICAL WATCH FIX
+# -----------------------------------------------------------------------------
+# Convierte la wallet pública rMxCK... en un nodo canónico RLUSD issuer.
+# =============================================================================
+
+BUILD_ID = "v187_2026_05_14_RLUSD_ISSUER_CANONICAL_WATCH_FIX"
+BUILD_NOTE = "RLUSD issuer canónico, wallet rMxCK reclasificada y vigilancia viva por issuer XRPL"
+VERSION = "Route Path Intelligence v6.2.3 PRO — XRPL Core · RLUSD Issuer Canonical Watch v187"
+
+RRP_V187_RLUSD_ISSUER = str(globals().get("RLUSD_ISSUER") or "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De")
+RRP_V187_RLUSD_NODE = "RLUSD"
+RRP_V187_RLUSD_ISSUER_NODE = "RLUSD issuer"
+RRP_V187_RLUSD_URLS = [
+    "https://docs.ripple.com/stablecoin",
+    "https://ripple.com/ripple-press/raising-the-standard-for-stablecoins-ripple-usd-launches-globally",
+    "https://xrpl.org/docs/concepts/tokens/fungible-tokens",
+    "https://xrpl.org/docs/references/protocol/transactions/types/trustset",
+    f"https://xrpscan.com/account/{RRP_V187_RLUSD_ISSUER}",
+    f"https://bithomp.com/explorer/{RRP_V187_RLUSD_ISSUER}",
+]
+
+try:
+    ENTITY_CANONICAL_ALIASES.update({
+        _norm_key(RRP_V187_RLUSD_ISSUER): RRP_V187_RLUSD_ISSUER_NODE,
+        _norm_key("rlusd issuer"): RRP_V187_RLUSD_ISSUER_NODE,
+        _norm_key("ripple usd issuer"): RRP_V187_RLUSD_ISSUER_NODE,
+        _norm_key("rlusd issuer xrpl"): RRP_V187_RLUSD_ISSUER_NODE,
+    })
+except Exception:
+    pass
+
+
+def _rrp_v187_is_rlusd_issuer(value: Any) -> bool:
+    txt = str(value or "")
+    return RRP_V187_RLUSD_ISSUER in txt or _norm_key(txt) in {_norm_key(RRP_V187_RLUSD_ISSUER), _norm_key(RRP_V187_RLUSD_ISSUER_NODE), _norm_key("RLUSD issuer")}
+
+
+def _rrp_v187_clean_urls(value: Any = "", extra: Optional[List[str]] = None, limit: int = 24) -> List[str]:
+    raw = str(value or "")
+    if extra:
+        raw += "\n" + "\n".join(str(x or "") for x in extra)
+    raw = raw.replace("https:///", "https://").replace("http:///", "http://")
+    raw = re.sub(r"(?<!^)(https?://)", r"\n\1", raw)
+    found = []
+    try:
+        if callable(globals().get("_rrp_v185_url_list")):
+            found.extend(_rrp_v185_url_list(raw, limit=limit))
+    except Exception:
+        pass
+    found.extend(re.findall(r"https?://[^\s,;<>'\"\)\]]+", raw))
+    out, seen = [], set()
+    for u in found:
+        u = str(u or "").strip().replace("https:///", "https://").replace("http:///", "http://")
+        u = re.sub(r"[\.,\)\]\}\s]+$", "", u)
+        if u and u not in seen:
+            seen.add(u); out.append(u)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _rrp_v187_source_urls_text(extra: Optional[List[str]] = None) -> str:
+    return "\n".join(_rrp_v187_clean_urls("", RRP_V187_RLUSD_URLS + (extra or []), limit=24))
+
+
+def _rrp_v187_short_wallet(wallet: Any) -> str:
+    w = str(wallet or "").strip()
+    return w if len(w) <= 18 else f"{w[:8]}…{w[-6:]}"
+
+
+def _rrp_v187_rlusd_claim(kind: str = "issuer") -> str:
+    if kind == "issuer":
+        return (f"RLUSD tiene un issuer público observable en XRPL: {RRP_V187_RLUSD_ISSUER}. "
+                "Ese issuer permite vigilar account_tx, trustlines/RippleState, pagos, DEX/orderbook, AMM y grandes transferencias. "
+                "Esto valida un punto público de vigilancia; no prueba por sí solo adopción bancaria.")
+    if kind == "xrpl":
+        return "RLUSD/Ripple USD aparece documentado como activo emitido/vigilable en XRP Ledger mediante issuer/currency code públicos."
+    if kind == "trustlines":
+        return "RLUSD como issued currency en XRPL se vigila a través de trustlines/RippleState y eventos TrustSet/Payment."
+    if kind == "issued":
+        return "RLUSD encaja en el modelo técnico de issued currencies/fungible tokens del XRP Ledger."
+    return "Relación técnica/documental de RLUSD con XRPL."
+
+
+def _rrp_v187_upsert_dynamic_node(conn: sqlite3.Connection, name: str, layer: str, icon: str, confidence: float, summary: str, source_url: str = "") -> None:
+    ensure_discovery_tables(conn)
+    now = datetime.now(timezone.utc).isoformat()
+    nid = "node_" + hashlib.sha1(_canonical_entity_key(name).encode("utf-8")).hexdigest()[:16]
+    conn.execute("""
+        INSERT OR REPLACE INTO dynamic_nodes(node_id,name,layer,icon,confidence,source_url,summary,added_at)
+        VALUES(?,?,?,?,?,?,?,?)
+    """, (nid, name, layer, icon, float(confidence or 0.0), source_url, summary, now))
+
+
+def _rrp_v187_upsert_dynamic_route(conn: sqlite3.Connection, src: str, dst: str, kind: str, confidence: float, evidence: str, urls: Optional[List[str]] = None, signal_col: str = "public_xrpl_score") -> None:
+    ensure_discovery_tables(conn)
+    now = datetime.now(timezone.utc).isoformat()
+    rid = "route_" + hashlib.sha1((_canonical_entity_key(src) + "|" + _canonical_entity_key(dst) + "|" + str(kind)).encode("utf-8")).hexdigest()[:16]
+    conn.execute("""
+        INSERT OR REPLACE INTO dynamic_routes(route_id,src,dst,kind,signal_col,label,confidence,evidence,source_urls,added_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?)
+    """, (rid, src, dst, kind, signal_col, f"{src} -> {dst}", float(confidence or 0.0), evidence, "\n".join(_rrp_v187_clean_urls("", urls or [])), now))
+
+
+def _rrp_v187_upsert_proof(conn: sqlite3.Connection, a: str, b: str, proof_type: str, confidence: float, claim: str, urls: Optional[List[str]] = None, onchain: int = 0) -> None:
+    ensure_discovery_tables(conn)
+    now = datetime.now(timezone.utc).isoformat()
+    clean_urls = _rrp_v187_clean_urls("", urls or RRP_V187_RLUSD_URLS, limit=16)
+    proofs = []
+    for u in clean_urls[:8]:
+        label = "RLUSD issuer / XRPL public endpoint" if RRP_V187_RLUSD_ISSUER in u else ("Ripple/XRPL official documentation" if any(x in u for x in ["ripple.com", "xrpl.org", "docs.ripple.com"]) else "Public explorer/source")
+        proofs.append({"type": proof_type, "label": label, "title": label, "url": u, "snippet": claim, "internet": True, "onchain": bool(onchain), "weight": float(confidence or 0.0), "node_a": a, "node_b": b})
+    pdata = {"node_a": a, "node_b": b, "proofs": proofs, "cert_label": "✅ Punto público/documental verificado", "cert_color": "#22C55E", "calibrated_score": float(confidence or 0.0), "has_onchain": bool(onchain), "has_internet": bool(clean_urls), "summary": claim, "source_urls": clean_urls, "v187_rlusd_issuer_canonical": True}
+    conn.execute("""
+        INSERT OR REPLACE INTO connection_proofs
+        (proof_id, node_a, node_b, node_a_key, node_b_key, pair_key, proof_type, proof_data, onchain, confidence, validated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (_canonical_pair_proof_id(a, b), a, b, _canonical_entity_key(a), _canonical_entity_key(b), _canonical_pair_key(a, b), proof_type, json.dumps(pdata, ensure_ascii=False), int(onchain or 0), float(confidence or 0.0), now))
+
+
+def _rrp_v187_upsert_route_path(conn: sqlite3.Connection, origin: str, hop: str, dst: str, confidence: float, path_type: str, evidence: str, explanation: str) -> None:
+    ensure_route_paths_table(conn)
+    today = datetime.now(timezone.utc).date().isoformat()
+    pid = "v187_" + hashlib.sha1((origin + "|" + hop + "|" + dst + "|" + path_type).encode("utf-8")).hexdigest()[:16]
+    conn.execute("""
+        INSERT OR REPLACE INTO route_paths(day,path_id,origin,public_hop,destination,confidence,path_type,evidence,explanation)
+        VALUES(?,?,?,?,?,?,?,?,?)
+    """, (today, pid, origin, hop, dst, float(confidence or 0.0), path_type, evidence[:1500], explanation[:1800]))
+
+
+def _rrp_v187_upsert_watch_target(conn: sqlite3.Connection, src: str, dst: str, subject: str, watch_type: str, confidence: float, reason: str, urls: Optional[List[str]] = None, status: str = "active") -> None:
+    try:
+        if callable(globals().get("_rrp_v171_ensure_watch_tables")):
+            _rrp_v171_ensure_watch_tables(conn)
+        else:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        tid = "watch_" + hashlib.sha1(f"{src}|{dst}|{subject}|{watch_type}".encode("utf-8")).hexdigest()[:18]
+        payload = {"issuer": RRP_V187_RLUSD_ISSUER, "currency": "RLUSD", "wallet": RRP_V187_RLUSD_ISSUER, "watch_points": ["account_tx", "Payment", "TrustSet", "RippleState", "DEX/orderbook", "AMM", "large transfers"], "urls": _rrp_v187_clean_urls("", urls or RRP_V187_RLUSD_URLS), "v187": True}
+        conn.execute("""
+            INSERT OR REPLACE INTO onchain_watch_targets
+            (target_id, route_id, src, dst, pair_key, watch_type, subject, status, reason, source_kind, confidence, created_at, updated_at, last_signal, evidence_json)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (tid, "v187_rlusd_issuer", src, dst, _canonical_pair_key(src, dst), watch_type, subject, status, reason, "v187_public_endpoint", float(confidence or 0.0), now, now, 0.0, json.dumps(payload, ensure_ascii=False)))
+    except Exception:
+        pass
+
+
+def _rrp_v187_persist_rlusd_issuer_ecosystem(conn: sqlite3.Connection, source: str = "detected") -> None:
+    try:
+        ensure_discovery_tables(conn)
+        urls = RRP_V187_RLUSD_URLS
+        claim_issuer = _rrp_v187_rlusd_claim("issuer")
+        claim_xrpl = _rrp_v187_rlusd_claim("xrpl")
+        claim_trust = _rrp_v187_rlusd_claim("trustlines")
+        claim_issued = _rrp_v187_rlusd_claim("issued")
+        _rrp_v187_upsert_dynamic_node(conn, "RLUSD", "Stablecoins", "🪙", 0.86, "Ripple USD / RLUSD detectado como activo estable con punto público XRPL vigilable.", "https://docs.ripple.com/stablecoin")
+        _rrp_v187_upsert_dynamic_node(conn, "RLUSD issuer", "WalletXRPL", "🪙", 0.86, f"Issuer público RLUSD en XRPL: {RRP_V187_RLUSD_ISSUER}", f"https://xrpscan.com/account/{RRP_V187_RLUSD_ISSUER}")
+        _rrp_v187_upsert_dynamic_node(conn, "Trustlines", "LiquidezXRPL", "🔗", 0.84, "Capa técnica XRPL para issued currencies mediante trust lines/RippleState.", "https://xrpl.org/docs/concepts/tokens/fungible-tokens")
+        _rrp_v187_upsert_dynamic_node(conn, "Issued Currencies", "TokenXRPL", "🔎", 0.84, "Modelo de tokens fungibles/issued currencies en XRP Ledger.", "https://xrpl.org/docs/concepts/tokens/fungible-tokens")
+        routes = [
+            ("RLUSD", "RLUSD issuer", "official_asset_issuer", 0.86, claim_issuer),
+            ("RLUSD issuer", "XRPL", "xrpl_public_endpoint", 0.86, f"RLUSD issuer es una cuenta pública XRPL vigilable: {RRP_V187_RLUSD_ISSUER}."),
+            ("RLUSD", "XRPL", "official_stablecoin_on_xrpl", 0.86, claim_xrpl),
+            ("RLUSD", "Trustlines", "technical_protocol_dependency", 0.78, claim_trust),
+            ("RLUSD", "Issued Currencies", "technical_protocol_dependency", 0.82, claim_issued),
+            ("Issued Currencies", "Trustlines", "technical_protocol_dependency", 0.82, "La documentación de XRP Ledger vincula issued currencies/tokens con trust lines/RippleState."),
+        ]
+        for a, b, kind, conf, ev in routes:
+            _rrp_v187_upsert_dynamic_route(conn, a, b, kind, conf, ev, urls)
+            _rrp_v187_upsert_proof(conn, a, b, kind, conf, ev, urls)
+        _rrp_v187_upsert_route_path(conn, "RLUSD", "RLUSD issuer", "XRPL", 0.86, "v187_rlusd_issuer_public_endpoint", claim_issuer, "Ruta canónica: RLUSD → RLUSD issuer → XRPL. El borde público observable es el issuer XRPL, no una wallet genérica.")
+        _rrp_v187_upsert_route_path(conn, "RLUSD", "RLUSD issuer", "Trustlines", 0.78, "v187_rlusd_trustline_watch", claim_trust, "RLUSD se vigila por issuer/currency + trustlines/RippleState.")
+        _rrp_v187_upsert_route_path(conn, "RLUSD", "RLUSD issuer", "Issued Currencies", 0.82, "v187_rlusd_issued_currency_watch", claim_issued, "RLUSD encaja en el modelo de issued currencies de XRPL y se vigila por issuer/currency.")
+        _rrp_v187_upsert_watch_target(conn, "RLUSD", "XRPL", "RLUSD issuer", "rlusd_issuer", 0.86, claim_issuer, urls)
+        _rrp_v187_upsert_watch_target(conn, "RLUSD", "Trustlines", "RLUSD issuer", "rlusd_trustlines", 0.78, claim_trust, urls)
+        _rrp_v187_upsert_watch_target(conn, "RLUSD", "Issued Currencies", "RLUSD issuer", "rlusd_issued_currency", 0.82, claim_issued, urls)
+        conn.execute("DELETE FROM dynamic_nodes WHERE lower(name) IN ('wallets xrpl sin etiqueta','wallet xrpl sin etiqueta','xrpl wallet','watch')")
+        conn.execute("UPDATE dynamic_routes SET src='RLUSD issuer' WHERE src=?", (RRP_V187_RLUSD_ISSUER,))
+        conn.execute("UPDATE dynamic_routes SET dst='RLUSD issuer' WHERE dst=?", (RRP_V187_RLUSD_ISSUER,))
+        conn.execute("UPDATE dynamic_routes SET dst='XRPL' WHERE dst IN ('Wallets XRPL sin etiqueta','Wallet XRPL sin etiqueta','XRPL Wallet','Wallet') AND (src='RLUSD' OR evidence LIKE '%RLUSD%' OR evidence LIKE ?)", (f"%{RRP_V187_RLUSD_ISSUER}%",))
+        conn.execute("UPDATE route_paths SET public_hop='RLUSD issuer', destination='XRPL' WHERE (origin='RLUSD' OR evidence LIKE '%RLUSD%' OR explanation LIKE '%RLUSD%' OR evidence LIKE ? OR explanation LIKE ?) AND (public_hop IN ('Watch','XRPL Watch','Wallets XRPL sin etiqueta','Wallet XRPL sin etiqueta','XRPL public edge') OR destination IN ('Wallets XRPL sin etiqueta','Wallet XRPL sin etiqueta','XRPL Wallet','Wallet'))", (f"%{RRP_V187_RLUSD_ISSUER}%", f"%{RRP_V187_RLUSD_ISSUER}%"))
+        try:
+            conn.execute("UPDATE onchain_watch_targets SET subject='RLUSD issuer', watch_type='rlusd_issuer', dst='XRPL', reason=? WHERE (subject=? OR evidence_json LIKE ? OR src='RLUSD')", (claim_issuer, RRP_V187_RLUSD_ISSUER, f"%{RRP_V187_RLUSD_ISSUER}%"))
+        except Exception:
+            pass
+        conn.commit()
+    except Exception:
+        pass
+
+_ORIG_RRP_V186_WALLET_LABEL_V187 = globals().get("_rrp_v186_wallet_label")
+def _rrp_v186_wallet_label(wallet: str, context: Any = "") -> str:
+    w = str(wallet or "").strip()
+    if w == RRP_V187_RLUSD_ISSUER or "rlusd" in _norm_key(str(context or "")):
+        return "RLUSD issuer"
+    if callable(_ORIG_RRP_V186_WALLET_LABEL_V187):
+        try:
+            return _ORIG_RRP_V186_WALLET_LABEL_V187(wallet, context)
+        except TypeError:
+            return _ORIG_RRP_V186_WALLET_LABEL_V187(wallet)
+        except Exception:
+            pass
+    return f"XRPL wallet {_rrp_v187_short_wallet(w)}"
+
+_ORIG_RRP_V186_NODE_TYPE_V187 = globals().get("_rrp_v186_node_type")
+def _rrp_v186_node_type(name: Any, *contexts: Any) -> Tuple[str, str, str]:
+    blob = " ".join([str(name or "")] + [str(c or "") for c in contexts])
+    nb = _norm_key(blob)
+    if RRP_V187_RLUSD_ISSUER in blob or "rlusd issuer" in nb or ("rlusd" in nb and "issuer" in nb):
+        return "WalletXRPL", "🪙", "issuer oficial/vigilable de RLUSD en XRPL"
+    if re.search(r"\br[1-9A-HJ-NP-Za-km-z]{24,34}\b", blob):
+        return "WalletXRPL", "👛", "wallet pública XRPL detectada"
+    if callable(_ORIG_RRP_V186_NODE_TYPE_V187):
+        try:
+            return _ORIG_RRP_V186_NODE_TYPE_V187(name, *contexts)
+        except Exception:
+            pass
+    return "Descubierto", "🔎", "clasificación dinámica pendiente"
+
+_ORIG_SEARCH_INSTITUTION_CONNECTIONS_V187 = globals().get("search_institution_connections")
+def search_institution_connections(institution_name: str, conn: Optional[sqlite3.Connection] = None, force_online: bool = False) -> Dict[str, Any]:
+    raw = str(institution_name or "").strip()
+    if _rrp_v187_is_rlusd_issuer(raw) or _norm_key(raw) in {_norm_key("RLUSD issuer"), _norm_key("Ripple USD issuer")}:
+        if conn is None:
+            conn = get_conn()
+        _rrp_v187_persist_rlusd_issuer_ecosystem(conn, "direct_wallet_search")
+        return {
+            "institution": "RLUSD issuer", "connected": True, "confidence": 0.86, "category": "Wallet / Issuer XRPL", "layer": "WalletXRPL", "icon": "🪙",
+            "summary": _rrp_v187_rlusd_claim("issuer"),
+            "sources": [{"title": u, "url": u, "type": "official_or_explorer"} for u in RRP_V187_RLUSD_URLS],
+            "evidence_items": [{"title": "RLUSD issuer público XRPL", "type": "official_asset_issuer", "summary": _rrp_v187_rlusd_claim("issuer"), "url": f"https://xrpscan.com/account/{RRP_V187_RLUSD_ISSUER}"}],
+            "route_decisions": [
+                {"from": "RLUSD", "to": "RLUSD issuer", "evidence_type": "official_asset_issuer", "confidence": 0.86, "draw_on_map": True, "claim": _rrp_v187_rlusd_claim("issuer")},
+                {"from": "RLUSD issuer", "to": "XRPL", "evidence_type": "xrpl_public_endpoint", "confidence": 0.86, "draw_on_map": True, "claim": f"RLUSD issuer es cuenta pública XRPL: {RRP_V187_RLUSD_ISSUER}."},
+                {"from": "RLUSD", "to": "XRPL", "evidence_type": "official_stablecoin_on_xrpl", "confidence": 0.86, "draw_on_map": True, "claim": _rrp_v187_rlusd_claim("xrpl")},
+            ],
+            "wallets": [{"address": RRP_V187_RLUSD_ISSUER, "label": "RLUSD issuer", "role": "issuer", "asset": "RLUSD"}],
+            "public_connectors": [{"type": "xrpl_issuer", "wallet": RRP_V187_RLUSD_ISSUER, "currency": "RLUSD", "label": "RLUSD issuer"}],
+            "_v187_rlusd_issuer": True,
+        }
+    if callable(_ORIG_SEARCH_INSTITUTION_CONNECTIONS_V187):
+        try:
+            res = _ORIG_SEARCH_INSTITUTION_CONNECTIONS_V187(institution_name, conn=conn, force_online=force_online)
+        except TypeError:
+            res = _ORIG_SEARCH_INSTITUTION_CONNECTIONS_V187(institution_name)
+    else:
+        res = {"institution": raw, "connected": False, "confidence": 0.0, "summary": "Buscador base no disponible."}
+    try:
+        blob = json.dumps(res or {}, ensure_ascii=False) + " " + raw
+        if RRP_V187_RLUSD_ISSUER in blob or "rlusd" in _norm_key(blob):
+            if conn is None:
+                conn = get_conn()
+            _rrp_v187_persist_rlusd_issuer_ecosystem(conn, "search_result_enrichment")
+            res.setdefault("wallets", []).append({"address": RRP_V187_RLUSD_ISSUER, "label": "RLUSD issuer", "role": "issuer", "asset": "RLUSD"})
+            res.setdefault("public_connectors", []).append({"type": "xrpl_issuer", "wallet": RRP_V187_RLUSD_ISSUER, "currency": "RLUSD", "label": "RLUSD issuer"})
+    except Exception:
+        pass
+    return res
+
+_ORIG_RRP_V186_PERSIST_WALLET_ENDPOINT_V187 = globals().get("_rrp_v186_persist_wallet_endpoint")
+def _rrp_v186_persist_wallet_endpoint(conn: sqlite3.Connection, wallet: str, result: Optional[Dict[str, Any]] = None) -> None:
+    w = str(wallet or "").strip()
+    if w == RRP_V187_RLUSD_ISSUER or "rlusd" in _norm_key(json.dumps(result or {}, ensure_ascii=False)):
+        _rrp_v187_persist_rlusd_issuer_ecosystem(conn, "wallet_endpoint")
+        return
+    if callable(_ORIG_RRP_V186_PERSIST_WALLET_ENDPOINT_V187):
+        try:
+            return _ORIG_RRP_V186_PERSIST_WALLET_ENDPOINT_V187(conn, wallet, result)
+        except Exception:
+            pass
+
+_ORIG_APPLY_DISCOVERY_TO_MAP_V187 = globals().get("apply_discovery_to_map")
+def apply_discovery_to_map(conn: sqlite3.Connection, result: Dict[str, Any], auto: bool = False) -> Dict[str, Any]:
+    try:
+        blob = json.dumps(result or {}, ensure_ascii=False)
+        if RRP_V187_RLUSD_ISSUER in blob or "rlusd" in _norm_key(blob):
+            _rrp_v187_persist_rlusd_issuer_ecosystem(conn, "apply_discovery")
+    except Exception:
+        pass
+    if callable(_ORIG_APPLY_DISCOVERY_TO_MAP_V187):
+        return _ORIG_APPLY_DISCOVERY_TO_MAP_V187(conn, result, auto=auto)
+    return {"added": 0, "routes": 0}
+
+_ORIG_RRP_V185_PRETTY_HOP_AND_DST_V187 = globals().get("_rrp_v185_pretty_hop_and_dst")
+def _rrp_v185_pretty_hop_and_dst(origin: Any, hop: Any, destination: Any, path_type: Any = "", evidence: Any = "", explanation: Any = "", urls: Any = "") -> Tuple[str, str]:
+    blob = " ".join(str(x or "") for x in [origin, hop, destination, path_type, evidence, explanation, urls])
+    nb = _norm_key(blob)
+    if RRP_V187_RLUSD_ISSUER in blob or "rlusd issuer" in nb or ("rlusd" in nb and ("issuer" in nb or "wallet" in nb)):
+        d = str(destination or "").strip()
+        if _norm_key(d) in {"", "wallets xrpl sin etiqueta", "wallet xrpl sin etiqueta", "xrpl wallet", "wallet", "watch", "xrpl public edge"}:
+            d = "XRPL"
+        return "RLUSD issuer", d or "XRPL"
+    if callable(_ORIG_RRP_V185_PRETTY_HOP_AND_DST_V187):
+        try:
+            return _ORIG_RRP_V185_PRETTY_HOP_AND_DST_V187(origin, hop, destination, path_type, evidence, explanation, urls)
+        except Exception:
+            pass
+    return str(hop or "XRPL public edge"), str(destination or "XRPL")
+
+_ORIG_RRP_V175_ROUTE_PATH_ROWS_FROM_WATCH_V187 = globals().get("_rrp_v175_route_path_rows_from_watch")
+def _rrp_v175_route_path_rows_from_watch(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    rows = _ORIG_RRP_V175_ROUTE_PATH_ROWS_FROM_WATCH_V187(conn) if callable(_ORIG_RRP_V175_ROUTE_PATH_ROWS_FROM_WATCH_V187) else []
+    out = []
+    for r in rows:
+        rr = dict(r)
+        blob = json.dumps(rr, ensure_ascii=False)
+        if RRP_V187_RLUSD_ISSUER in blob or "rlusd" in _norm_key(blob):
+            rr["origin"] = "RLUSD" if _norm_key(rr.get("origin")) in {"rlusd", "ripple usd"} or "rlusd" in _norm_key(blob) else rr.get("origin")
+            rr["public_hop"] = "RLUSD issuer"
+            if _norm_key(rr.get("destination")) in {"wallets xrpl sin etiqueta", "wallet xrpl sin etiqueta", "xrpl wallet", "wallet", "watch", "xrpl public edge", ""}:
+                rr["destination"] = "XRPL"
+            rr["source_urls"] = _rrp_v187_source_urls_text(_rrp_v187_clean_urls(rr.get("source_urls")))
+            if "pendiente" in _norm_key(rr.get("explanation")) or "target creado" in _norm_key(rr.get("explanation")):
+                rr["live_signal"] = 0.0
+        out.append(rr)
+    return out
+
+
+def _rrp_v187_prepare_rlusd_issuer_canonical() -> None:
+    try:
+        conn = get_conn()
+        ensure_discovery_tables(conn)
+        checks = []
+        for table in ["dynamic_nodes", "dynamic_routes", "connection_proofs", "route_paths", "onchain_watch_targets", "institution_search_cache"]:
+            try:
+                checks.extend([" ".join(str(x or "") for x in row) for row in conn.execute(f"SELECT * FROM {table} LIMIT 80").fetchall()])
+            except Exception:
+                pass
+        blob = "\n".join(checks)
+        if RRP_V187_RLUSD_ISSUER in blob or "rlusd" in _norm_key(blob):
+            _rrp_v187_persist_rlusd_issuer_ecosystem(conn, "startup_migration")
+    except Exception:
+        pass
+
+
+
+# =============================================================================
+# v188 · ONTOLOGÍA DINÁMICA PARA CUALQUIER NODO DESCUBIERTO
+# =============================================================================
+# Objetivo:
+# - No depender de clasificadores fijos.
+# - Cualquier nodo nuevo descubierto por documentos/cascada/on-chain se clasifica
+#   por naturaleza real: wallet, issuer, stablecoin, RWA, banco, rail, oracle, etc.
+# - Si no puede clasificarse, no se pierde: queda como "Nodo por investigar".
+# - Si trae identificador público, se convierte en target vigilable sin inventar relación.
+
+BUILD_ID = "v188_2026_05_14_DYNAMIC_NODE_ONTOLOGY_FIX"
+BUILD_NOTE = "Ontología dinámica: cualquier nodo nuevo se clasifica por tipo real y no cae en cajones fijos"
+
+RRP_V188_GENERIC_BAD_NAMES = {
+    "", "?", "none", "nan", "source", "sources", "fuente", "fuentes", "verified", "watch",
+    "wallets xrpl sin etiqueta", "wallet xrpl sin etiqueta", "sin etiqueta", "desconocido", "unknown",
+    "external gateway interoperability layer", "external gateway / interoperability layer",
+}
+
+try:
+    ZONE_POS.update({
+        "PublicEndpoint": {"x": 6.10, "y_start": 2.80, "y_step": -0.72, "box": (5.75,-2.10,6.45,3.15), "label": "Endpoints públicos"},
+        "Issuer": {"x": 7.00, "y_start": 2.80, "y_step": -0.72, "box": (6.65,-2.10,7.35,3.15), "label": "Issuers / emisores"},
+        "StablecoinFiat": {"x": 7.90, "y_start": 2.80, "y_step": -0.72, "box": (7.55,-2.10,8.25,3.15), "label": "Stablecoins / fiat tokenizado"},
+        "TokenizedAssets": {"x": 8.80, "y_start": 2.80, "y_step": -0.72, "box": (8.45,-2.10,9.15,3.15), "label": "Activos tokenizados / RWA"},
+        "PaymentRails": {"x": 9.70, "y_start": 2.80, "y_step": -0.72, "box": (9.35,-2.10,10.05,3.15), "label": "Rails / pagos"},
+        "Institution": {"x": 10.60, "y_start": 2.80, "y_step": -0.72, "box": (10.25,-2.10,10.95,3.15), "label": "Instituciones"},
+        "CentralBank": {"x": 11.50, "y_start": 2.80, "y_step": -0.72, "box": (11.15,-2.10,11.85,3.15), "label": "Bancos centrales / CBDC"},
+        "Regulatory": {"x": 12.40, "y_start": 2.80, "y_step": -0.72, "box": (12.05,-2.10,12.75,3.15), "label": "Reguladores / gobierno"},
+        "Custody": {"x": 13.30, "y_start": 2.80, "y_step": -0.72, "box": (12.95,-2.10,13.65,3.15), "label": "Custodia / prime"},
+        "BridgeInterop": {"x": 14.20, "y_start": 2.80, "y_step": -0.72, "box": (13.85,-2.10,14.55,3.15), "label": "Puentes / interoperabilidad"},
+        "DataOracles": {"x": 15.10, "y_start": 2.80, "y_step": -0.72, "box": (14.75,-2.10,15.45,3.15), "label": "Datos / oráculos"},
+        "NeedsResearch": {"x": 16.00, "y_start": 2.80, "y_step": -0.72, "box": (15.65,-2.10,16.35,3.15), "label": "Nodos por investigar"},
+    })
+    LAYER_NORMALIZE.update({
+        "publicendpoint": "PublicEndpoint", "public endpoint": "PublicEndpoint", "endpoint publico": "PublicEndpoint", "wallet": "PublicEndpoint",
+        "issuer": "Issuer", "issuer xrpl": "Issuer", "emisor": "Issuer", "emisor xrpl": "Issuer",
+        "stablecoinfiat": "StablecoinFiat", "stablecoin": "StablecoinFiat", "stablecoins": "StablecoinFiat", "fiat tokenizado": "StablecoinFiat", "tokenized fiat": "StablecoinFiat",
+        "tokenizedassets": "TokenizedAssets", "rwa": "TokenizedAssets", "tokenized asset": "TokenizedAssets", "activos tokenizados": "TokenizedAssets",
+        "paymentrails": "PaymentRails", "payment rail": "PaymentRails", "rail pagos": "PaymentRails", "payments": "PaymentRails", "pagos": "PaymentRails",
+        "institution": "Institution", "institucion": "Institution", "banco comercial": "Institution",
+        "centralbank": "CentralBank", "central bank": "CentralBank", "banco central": "CentralBank", "cbdc": "CentralBank", "mdbc": "CentralBank",
+        "regulatory": "Regulatory", "regulator": "Regulatory", "regulador": "Regulatory", "gobierno": "Regulatory",
+        "custody": "Custody", "custodia": "Custody", "prime brokerage": "Custody",
+        "bridgeinterop": "BridgeInterop", "bridge": "BridgeInterop", "interop": "BridgeInterop", "interoperability": "BridgeInterop",
+        "dataoracles": "DataOracles", "oracle": "DataOracles", "oraculo": "DataOracles", "data provider": "DataOracles",
+        "needsresearch": "NeedsResearch", "por investigar": "NeedsResearch",
+    })
+except Exception:
+    pass
+
+RRP_V188_EVM_RE = re.compile(r"\b0x[a-fA-F0-9]{40}\b")
+RRP_V188_STELLAR_RE = re.compile(r"\bG[A-Z2-7]{55}\b")
+RRP_V188_TRON_RE = re.compile(r"\bT[1-9A-HJ-NP-Za-km-z]{33}\b")
+RRP_V188_XDC_RE = re.compile(r"\bxdc[a-fA-F0-9]{40}\b")
+RRP_V188_SYMBOL_RE = re.compile(r"\b[A-Z0-9]{3,12}\b")
+
+RRP_V188_STABLECOIN_SYMBOLS = {"RLUSD", "USDC", "USDT", "EURC", "PYUSD", "GUSD", "TUSD", "FDUSD", "USDG", "USDE", "EURS", "EURI", "USDB", "DAI", "USDS"}
+RRP_V188_RWA_TERMS = {"rwa", "real world asset", "tokenized fund", "tokenised fund", "tokenized treasury", "tokenized bond", "tokenized deposit", "buidl", "vb ill", "ondo", "tokenized asset", "activos tokenizados", "fondo tokenizado"}
+RRP_V188_RAIL_TERMS = {"swift", "fednow", "fedwire", "sepa", "ach", "rtgs", "target2", "t2s", "iso 20022", "ripplenet", "ripple payments", "ripple prime", "ripple treasury", "gtreasury", "rail", "payment rail"}
+RRP_V188_CUSTODY_TERMS = {"custody", "custodia", "metaco", "standard custody", "prime broker", "prime brokerage", "hidden road", "custodian"}
+RRP_V188_BRIDGE_TERMS = {"bridge", "cross-chain", "cross chain", "interop", "interoperability", "wormhole", "axelar", "layerzero", "ccip", "chainlink ccip"}
+RRP_V188_ORACLE_TERMS = {"oracle", "oraculo", "chainlink", "pyth", "data provider", "proof of reserve", "attestation", "analytics"}
+RRP_V188_EXCHANGE_TERMS = {"exchange", "gateway", "on-ramp", "off-ramp", "market maker", "liquidity provider", "bitstamp", "bitso", "gatehub", "kraken", "coinbase", "binance"}
+
+
+def _rrp_v188_good_node_name(name: Any) -> bool:
+    s = str(name or "").strip()
+    k = _norm_key(s)
+    if not s or k in RRP_V188_GENERIC_BAD_NAMES:
+        return False
+    if len(s) > 120:
+        return False
+    if s.startswith("http://") or s.startswith("https://"):
+        return False
+    if k in {"abrir documento fuente", "abrir fuente", "ver fuente"}:
+        return False
+    return True
+
+
+def _rrp_v188_extract_identifiers(*parts: Any) -> Dict[str, List[str]]:
+    blob = "\n".join(str(p or "") for p in parts)
+    out = {"xrpl_wallets": [], "evm_wallets": [], "stellar_wallets": [], "tron_wallets": [], "xdc_wallets": [], "symbols": []}
+    try:
+        out["xrpl_wallets"] = _rrp_v186_extract_wallets_from_text(blob, limit=50) if callable(globals().get("_rrp_v186_extract_wallets_from_text")) else []
+    except Exception:
+        out["xrpl_wallets"] = []
+    for key, rx in [("evm_wallets", RRP_V188_EVM_RE), ("stellar_wallets", RRP_V188_STELLAR_RE), ("tron_wallets", RRP_V188_TRON_RE), ("xdc_wallets", RRP_V188_XDC_RE)]:
+        seen = []
+        for m in rx.findall(blob):
+            if m not in seen:
+                seen.append(m)
+        out[key] = seen[:50]
+    # Símbolos: solo guardar si parecen activos relevantes, no cualquier sigla institucional.
+    syms = []
+    for m in RRP_V188_SYMBOL_RE.findall(blob):
+        if m in RRP_V188_STABLECOIN_SYMBOLS and m not in syms:
+            syms.append(m)
+    out["symbols"] = syms[:30]
+    return out
+
+
+def _rrp_v188_node_type(name: Any, *contexts: Any) -> Tuple[str, str, str]:
+    raw = str(name or "").strip()
+    ctx = " ".join(str(c or "") for c in contexts)
+    blob_raw = f"{raw} {ctx}"
+    blob = _norm_key(blob_raw)
+    if not _rrp_v188_good_node_name(raw):
+        return "NeedsResearch", "🔎", "nombre genérico o insuficiente; requiere investigación"
+
+    # Identificadores públicos por patrón, no por lista fija.
+    if callable(globals().get("_rrp_v186_is_xrpl_wallet")) and _rrp_v186_is_xrpl_wallet(raw):
+        if raw == "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De" or "rlusd" in blob:
+            return "Issuer", "🪙", "issuer XRPL de RLUSD detectado"
+        if any(x in blob for x in ["issuer", "emisor", "currency", "issued", "token", "stablecoin"]):
+            return "Issuer", "🏷️", "issuer/wallet XRPL con posible emisión de activo"
+        return "PublicEndpoint", "👛", "wallet pública XRPL detectada"
+    if RRP_V188_EVM_RE.fullmatch(raw):
+        return "PublicEndpoint", "Ξ", "wallet pública EVM detectada"
+    if RRP_V188_STELLAR_RE.fullmatch(raw):
+        return "PublicEndpoint", "⭐", "wallet pública Stellar detectada"
+    if RRP_V188_TRON_RE.fullmatch(raw):
+        return "PublicEndpoint", "🔴", "wallet pública Tron detectada"
+    if RRP_V188_XDC_RE.fullmatch(raw):
+        return "PublicEndpoint", "🔷", "wallet pública XDC detectada"
+
+    # Activos y funciones XRPL.
+    if raw.upper() in RRP_V188_STABLECOIN_SYMBOLS or any(x.lower() in blob for x in [s.lower() for s in RRP_V188_STABLECOIN_SYMBOLS]) or "stablecoin" in blob or "fiat token" in blob or "tokenized fiat" in blob:
+        return "StablecoinFiat", "🪙", "stablecoin/fiat tokenizado detectado"
+    if any(term in blob for term in RRP_V188_RWA_TERMS):
+        return "TokenizedAssets", "🧾", "activo tokenizado/RWA detectado"
+    if any(x in blob for x in ["issued currenc", "fungible token", "trust line token", "token fungible"]):
+        return "XRPL_Tokens", "🔎", "issued currency/token XRPL"
+    if any(x in blob for x in ["trustline", "trust line", "ripplestate", "trustset"]):
+        return "XRPL_Tokens", "🔗", "trustline/token XRPL"
+    if any(x in blob for x in ["dex", "amm", "orderbook", "book offers", "liquidity", "liquidez", "pool"]):
+        return "XRPL_Liquidity", "🌊", "liquidez XRPL/DEX/AMM"
+    if any(x in blob for x in ["xrpl", "xrp ledger"]):
+        return "Público", "💧", "núcleo o borde público XRPL"
+
+    # Infraestructura y entidades.
+    if any(term in blob for term in RRP_V188_CUSTODY_TERMS):
+        return "Custody", "🔐", "custodia/prime/cuenta institucional"
+    if any(term in blob for term in RRP_V188_BRIDGE_TERMS):
+        return "BridgeInterop", "🌉", "puente/interoperabilidad"
+    if any(term in blob for term in RRP_V188_ORACLE_TERMS):
+        return "DataOracles", "📊", "datos/oráculo/attestation"
+    if any(term in blob for term in RRP_V188_RAIL_TERMS):
+        return "PaymentRails", "🏗️", "rail o infraestructura de pagos"
+    if any(term in blob for term in RRP_V188_EXCHANGE_TERMS):
+        return "ExchangeGateway", "🏛️", "exchange/gateway/liquidez pública"
+    if any(x in blob for x in ["central bank", "banco central", "cbdc", "mdbc", "digital euro", "digital yuan", "bank of england", "european central bank", "people s bank of china", "pboc"]):
+        return "CentralBank", "🏦", "banco central/CBDC"
+    if any(x in blob for x in ["government", "gobierno", "ministry", "ministerio", "regulator", "regulador", "commission", "authority", "superintendencia"]):
+        return "Regulatory", "🏛️", "gobierno/regulador"
+    if any(x in blob for x in ["bank", "banco", "credit", "remit", "payments", "pay", "financial", "securities", "asset management", "capital", "clearing", "settlement"]):
+        return "Institution", "🏦", "institución financiera/empresa"
+
+    return "NeedsResearch", "🔎", "nodo nuevo; se conserva para investigación y clasificación posterior"
+
+
+_ORIG_RRP_V186_NODE_TYPE_V188 = globals().get("_rrp_v186_node_type")
+def _rrp_v186_node_type(name: Any, *contexts: Any) -> Tuple[str, str, str]:
+    try:
+        layer, icon, reason = _rrp_v188_node_type(name, *contexts)
+        if layer and layer != "NeedsResearch":
+            return layer, icon, reason
+        # Mantener NeedsResearch si el clasificador viejo lo mandaría a genérico.
+        if callable(_ORIG_RRP_V186_NODE_TYPE_V188):
+            old = _ORIG_RRP_V186_NODE_TYPE_V188(name, *contexts)
+            if old and old[0] not in {"Descubierto", "Otro", "Stablecoins", "Vigilancia", "Público"}:
+                return old
+        return layer, icon, reason
+    except Exception:
+        if callable(_ORIG_RRP_V186_NODE_TYPE_V188):
+            return _ORIG_RRP_V186_NODE_TYPE_V188(name, *contexts)
+        return "NeedsResearch", "🔎", "nodo por investigar"
+
+
+_ORIG_CLASSIFY_ENTITY_V188 = globals().get("_classify_entity")
+def _classify_entity(name: str) -> str:
+    try:
+        layer, _, _ = _rrp_v188_node_type(name)
+        return layer or "NeedsResearch"
+    except Exception:
+        if callable(_ORIG_CLASSIFY_ENTITY_V188):
+            return _ORIG_CLASSIFY_ENTITY_V188(name)
+        return "NeedsResearch"
+
+
+_ORIG_INFER_LAYER_ICON_V188 = globals().get("_infer_layer_icon_from_name")
+def _infer_layer_icon_from_name(name: Any, fallback_layer: str = "Descubierto", fallback_icon: str = "🔎") -> Tuple[str, str]:
+    try:
+        layer, icon, _ = _rrp_v188_node_type(name)
+        if layer and layer not in {"NeedsResearch", "Descubierto"}:
+            return layer, icon
+        if layer == "NeedsResearch" and (fallback_layer in {"", "Descubierto", "Otro", "Stablecoins", "Vigilancia", "Público"}):
+            return layer, icon
+    except Exception:
+        pass
+    if callable(_ORIG_INFER_LAYER_ICON_V188):
+        try:
+            return _ORIG_INFER_LAYER_ICON_V188(name, fallback_layer, fallback_icon)
+        except Exception:
+            pass
+    return fallback_layer, fallback_icon
+
+
+def _rrp_v188_hash_id(prefix: str, value: Any) -> str:
+    return prefix + hashlib.sha1(str(value or "").encode("utf-8")).hexdigest()[:16]
+
+
+def _rrp_v188_upsert_dynamic_node(conn: sqlite3.Connection, name: Any, context: Any = "", confidence: float = 0.50, source_url: str = "", summary: str = "") -> bool:
+    try:
+        nm = str(name or "").strip()
+        if not _rrp_v188_good_node_name(nm):
+            return False
+        ensure_discovery_tables(conn)
+        layer, icon, reason = _rrp_v188_node_type(nm, context)
+        now = datetime.now(timezone.utc).isoformat()
+        nid = _rrp_v188_hash_id("node_", _canonical_entity_key(nm) if callable(globals().get("_canonical_entity_key")) else nm)
+        conn.execute(
+            """
+            INSERT INTO dynamic_nodes(node_id,name,layer,icon,confidence,source_url,summary,added_at)
+            VALUES(?,?,?,?,?,?,?,?)
+            ON CONFLICT(node_id) DO UPDATE SET
+                name=excluded.name,
+                layer=excluded.layer,
+                icon=excluded.icon,
+                confidence=MAX(dynamic_nodes.confidence, excluded.confidence),
+                source_url=COALESCE(NULLIF(excluded.source_url,''), dynamic_nodes.source_url),
+                summary=COALESCE(NULLIF(excluded.summary,''), dynamic_nodes.summary)
+            """,
+            (nid, nm, layer or "NeedsResearch", icon or "🔎", float(confidence or 0.0), str(source_url or ""), summary or f"Clasificación dinámica: {reason}", now),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        return False
+
+
+def _rrp_v188_collect_nodes_from_result(result: Dict[str, Any]) -> List[Tuple[str, str, float, str]]:
+    out: List[Tuple[str, str, float, str]] = []
+    def add(name: Any, ctx: Any = "", conf: Any = 0.50, url: Any = ""):
+        nm = str(name or "").strip()
+        if _rrp_v188_good_node_name(nm) and nm not in [x[0] for x in out]:
+            out.append((nm, str(ctx or ""), float(conf or 0.50), str(url or "")))
+    if not isinstance(result, dict):
+        return out
+    conf = float(result.get("confidence", 0.50) or 0.50)
+    base_ctx = json.dumps(result, ensure_ascii=False)[:5000]
+    add(result.get("institution"), base_ctx, conf)
+    add(result.get("canonical_name"), base_ctx, conf)
+    for k in ["connects_to", "nodes", "derived_nodes", "discovered_nodes", "public_watch_nodes"]:
+        vals = result.get(k)
+        if isinstance(vals, list):
+            for v in vals:
+                if isinstance(v, dict):
+                    add(v.get("name") or v.get("node") or v.get("label") or v.get("target"), json.dumps(v, ensure_ascii=False), v.get("confidence", conf), v.get("url", ""))
+                else:
+                    add(v, base_ctx, conf)
+    for rd in result.get("route_decisions", []) or []:
+        if isinstance(rd, dict):
+            ctx = json.dumps(rd, ensure_ascii=False)
+            add(rd.get("from") or rd.get("src") or rd.get("source"), ctx, rd.get("confidence", conf))
+            add(rd.get("to") or rd.get("dst") or rd.get("target"), ctx, rd.get("confidence", conf))
+    for w in result.get("wallets", []) or []:
+        if isinstance(w, dict):
+            add(w.get("label") or w.get("address"), json.dumps(w, ensure_ascii=False), conf, w.get("url", ""))
+            add(w.get("address"), json.dumps(w, ensure_ascii=False), conf, w.get("url", ""))
+        else:
+            add(w, "wallet detectada", conf)
+    for pc in result.get("public_connectors", []) or []:
+        if isinstance(pc, dict):
+            add(pc.get("label") or pc.get("wallet") or pc.get("issuer") or pc.get("asset"), json.dumps(pc, ensure_ascii=False), conf)
+    # Identificadores embebidos en fuentes/resumen.
+    ids = _rrp_v188_extract_identifiers(base_ctx)
+    for w in ids.get("xrpl_wallets", []): add(w, base_ctx, conf)
+    for w in ids.get("evm_wallets", []): add(w, base_ctx, conf)
+    for w in ids.get("stellar_wallets", []): add(w, base_ctx, conf)
+    for s in ids.get("symbols", []): add(s, base_ctx, conf)
+    return out
+
+
+def _rrp_v188_create_public_targets_from_identifiers(conn: sqlite3.Connection, result: Dict[str, Any]) -> Dict[str, int]:
+    stats = {"xrpl_wallets": 0, "other_public_endpoints": 0, "symbols": 0}
+    try:
+        blob = json.dumps(result or {}, ensure_ascii=False)
+        ids = _rrp_v188_extract_identifiers(blob)
+        for w in ids.get("xrpl_wallets", []):
+            if callable(globals().get("_rrp_v186_persist_wallet_endpoint")):
+                _rrp_v186_persist_wallet_endpoint(conn, w, result)
+            else:
+                _rrp_v188_upsert_dynamic_node(conn, w, blob, float((result or {}).get("confidence", 0.62) or 0.62), f"https://xrpscan.com/account/{w}", "Wallet XRPL pública detectada.")
+            stats["xrpl_wallets"] += 1
+        for key in ["evm_wallets", "stellar_wallets", "tron_wallets", "xdc_wallets"]:
+            for w in ids.get(key, []):
+                _rrp_v188_upsert_dynamic_node(conn, w, f"endpoint público {key}", 0.52, "", "Endpoint público detectado. Solo se vigila si una ruta documental lo conecta con el caso investigado.")
+                stats["other_public_endpoints"] += 1
+        for s in ids.get("symbols", []):
+            _rrp_v188_upsert_dynamic_node(conn, s, blob, 0.62, "", "Activo/símbolo detectado en documentos. Requiere issuer/wallet/currency code para vigilancia on-chain atribuible.")
+            stats["symbols"] += 1
+    except Exception:
+        pass
+    return stats
+
+
+_ORIG_APPLY_DISCOVERY_TO_MAP_V188 = globals().get("apply_discovery_to_map")
+def apply_discovery_to_map(conn: sqlite3.Connection, result: Dict[str, Any], auto: bool = False) -> Dict[str, Any]:
+    try:
+        for nm, ctx, conf, url in _rrp_v188_collect_nodes_from_result(result or {}):
+            _rrp_v188_upsert_dynamic_node(conn, nm, ctx, conf, url)
+        _rrp_v188_create_public_targets_from_identifiers(conn, result or {})
+    except Exception:
+        pass
+    if callable(_ORIG_APPLY_DISCOVERY_TO_MAP_V188):
+        try:
+            out = _ORIG_APPLY_DISCOVERY_TO_MAP_V188(conn, result, auto=auto)
+        except TypeError:
+            out = _ORIG_APPLY_DISCOVERY_TO_MAP_V188(conn, result)
+    else:
+        out = {"added": 0, "routes": 0}
+    try:
+        # Segundo pase por si el aplicador base añadió rutas/nodos nuevos con capas genéricas.
+        for nm, ctx, conf, url in _rrp_v188_collect_nodes_from_result(result or {}):
+            _rrp_v188_upsert_dynamic_node(conn, nm, ctx, conf, url)
+    except Exception:
+        pass
+    return out
+
+
+_ORIG_SEARCH_INSTITUTION_CONNECTIONS_V188 = globals().get("search_institution_connections")
+def search_institution_connections(institution_name: str,
+                                   conn: Optional[sqlite3.Connection] = None,
+                                   force_online: bool = False) -> Dict[str, Any]:
+    # Mantener el comportamiento v186/v187 para wallets, pero enriquecer cualquier resultado.
+    if callable(_ORIG_SEARCH_INSTITUTION_CONNECTIONS_V188):
+        try:
+            res = _ORIG_SEARCH_INSTITUTION_CONNECTIONS_V188(institution_name, conn=conn, force_online=force_online)
+        except TypeError:
+            res = _ORIG_SEARCH_INSTITUTION_CONNECTIONS_V188(institution_name)
+        except Exception as e:
+            res = {"institution": str(institution_name or ""), "connected": False, "confidence": 0.0, "summary": f"Error de búsqueda: {e}", "route_decisions": []}
+    else:
+        res = {"institution": str(institution_name or ""), "connected": False, "confidence": 0.0, "summary": "Buscador base no disponible.", "route_decisions": []}
+    try:
+        blob = json.dumps(res or {}, ensure_ascii=False)
+        layer, icon, reason = _rrp_v188_node_type(res.get("institution") or institution_name, blob)
+        res["layer"] = layer
+        res["entity_type"] = layer
+        res["icon"] = icon
+        res["classification_reason"] = reason
+        res.setdefault("dynamic_classification", {"layer": layer, "icon": icon, "reason": reason})
+        ids = _rrp_v188_extract_identifiers(blob)
+        if any(ids.values()):
+            res.setdefault("public_connectors", [])
+            for w in ids.get("xrpl_wallets", []):
+                lab = _rrp_v186_wallet_label(w) if callable(globals().get("_rrp_v186_wallet_label")) else f"XRPL wallet {w[:8]}…{w[-6:]}"
+                if not any(isinstance(x, dict) and x.get("wallet") == w for x in res["public_connectors"]):
+                    res["public_connectors"].append({"type": "xrpl_wallet", "wallet": w, "label": lab, "watchable": True})
+            for w in ids.get("evm_wallets", []):
+                res["public_connectors"].append({"type": "evm_wallet", "wallet": w, "label": "EVM wallet", "watchable": False})
+            for s in ids.get("symbols", []):
+                res["public_connectors"].append({"type": "asset_symbol", "symbol": s, "label": s, "watchable": s == "RLUSD"})
+        if conn is not None:
+            for nm, ctx, conf, url in _rrp_v188_collect_nodes_from_result(res):
+                _rrp_v188_upsert_dynamic_node(conn, nm, ctx, conf, url)
+            _rrp_v188_create_public_targets_from_identifiers(conn, res)
+    except Exception:
+        pass
+    return res
+
+
+_ORIG_LOAD_DYNAMIC_MAP_ELEMENTS_V188 = globals().get("load_dynamic_map_elements")
+def load_dynamic_map_elements(conn: Optional[sqlite3.Connection] = None):
+    if callable(_ORIG_LOAD_DYNAMIC_MAP_ELEMENTS_V188):
+        try:
+            dyn_nodes, dyn_routes, new_boxes = _ORIG_LOAD_DYNAMIC_MAP_ELEMENTS_V188(conn)
+        except Exception:
+            dyn_nodes, dyn_routes, new_boxes = ({}, [], [])
+    else:
+        dyn_nodes, dyn_routes, new_boxes = ({}, [], [])
+    clean_nodes: Dict[str, Dict[str, Any]] = {}
+    for name, meta in dict(dyn_nodes or {}).items():
+        nm = str(name or "").strip()
+        if not _rrp_v188_good_node_name(nm):
+            continue
+        m = dict(meta or {})
+        ctx = json.dumps(m, ensure_ascii=False)[:2000]
+        layer, icon, reason = _rrp_v188_node_type(nm, ctx)
+        if layer:
+            m["layer"] = layer
+            m["icon"] = icon or m.get("icon") or "🔎"
+            m["classification_reason"] = reason
+        clean_nodes[nm] = m
+    return clean_nodes, dyn_routes, []
+
+
+def _rrp_v188_reclassify_existing_nodes(conn: sqlite3.Connection) -> Dict[str, int]:
+    stats = {"nodes": 0, "wallets": 0, "targets": 0}
+    try:
+        ensure_discovery_tables(conn)
+        rows = conn.execute("SELECT node_id,name,layer,icon,confidence,source_url,summary FROM dynamic_nodes").fetchall()
+        for node_id, name, layer, icon, conf, url, summary in rows:
+            ctx = " ".join(str(x or "") for x in [layer, icon, url, summary])
+            new_layer, new_icon, reason = _rrp_v188_node_type(name, ctx)
+            if new_layer and (new_layer != layer or icon in {"?", "🔎", "•", ""}):
+                conn.execute("UPDATE dynamic_nodes SET layer=?, icon=?, summary=COALESCE(NULLIF(summary,''), ?) WHERE node_id=?", (new_layer, new_icon, f"Clasificación dinámica v188: {reason}", node_id))
+                stats["nodes"] += 1
+        # Persistir wallets encontradas en rutas/pruebas/caché.
+        blob_parts = []
+        for table in ["dynamic_routes", "connection_proofs", "route_paths", "institution_search_cache"]:
+            try:
+                blob_parts.extend(" ".join(str(x or "") for x in row) for row in conn.execute(f"SELECT * FROM {table} LIMIT 500").fetchall())
+            except Exception:
+                pass
+        ids = _rrp_v188_extract_identifiers("\n".join(blob_parts))
+        for w in ids.get("xrpl_wallets", []):
+            if callable(globals().get("_rrp_v186_persist_wallet_endpoint")):
+                _rrp_v186_persist_wallet_endpoint(conn, w, {"confidence": 0.62})
+                stats["wallets"] += 1
+        conn.commit()
+    except Exception:
+        pass
+    return stats
+
+
+def _rrp_v188_prepare_dynamic_ontology() -> None:
+    try:
+        conn = get_conn()
+        ensure_discovery_tables(conn)
+        _rrp_v188_reclassify_existing_nodes(conn)
+        # Si existe función de watch, refrescar targets desde rutas ya clasificadas.
+        if callable(globals().get("_rrp_v171_seed_watch_targets_from_routes")):
+            try:
+                _rrp_v171_seed_watch_targets_from_routes(conn)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+try:
+    _rrp_v186_prepare_clean_dynamic_map()
+    _rrp_v187_prepare_rlusd_issuer_canonical()
+    _rrp_v188_prepare_dynamic_ontology()
+except Exception:
+    pass
+
+# Ejecutar main al final real del archivo, con todos los parches cargados.
 if __name__ == "__main__":
-    _rrp_v158_prune_static_map_to_xrpl()
+    _rrp_v186_prepare_clean_dynamic_map()
+    _rrp_v187_prepare_rlusd_issuer_canonical()
+    _rrp_v188_prepare_dynamic_ontology()
     main()
