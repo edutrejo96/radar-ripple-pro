@@ -2439,7 +2439,9 @@ def _rrp_safe_sqlite_connect() -> sqlite3.Connection:
                 last_error = exc
                 continue
 
-            conn = sqlite3.connect(db_abs, timeout=30, check_same_thread=False)
+            # Abrir en modo read-write-create explícito. En Streamlit Cloud un connect normal
+            # puede abrir una BD heredada que luego falla al primer CREATE TABLE.
+            conn = sqlite3.connect(f"file:{db_abs}?mode=rwc", uri=True, timeout=30, check_same_thread=False)
             conn.execute("PRAGMA busy_timeout=15000")
 
             # Intentar WAL, pero no romper la app si SQLite/Cloud no lo permite.
@@ -2457,6 +2459,22 @@ def _rrp_safe_sqlite_connect() -> sqlite3.Connection:
                     conn.execute("PRAGMA synchronous=NORMAL")
                 except Exception:
                     pass
+
+            # Prueba real de escritura dentro de SQLite, no solo del directorio.
+            # Esto captura: readonly database, disk I/O, DB bloqueada, imagen corrupta,
+            # sidecars -wal/-shm imposibles y bases antiguas dañadas antes de entrar en get_conn().
+            try:
+                conn.execute("CREATE TABLE IF NOT EXISTS __rrp_sqlite_write_probe (id INTEGER)")
+                conn.execute("INSERT INTO __rrp_sqlite_write_probe (id) VALUES (1)")
+                conn.execute("DELETE FROM __rrp_sqlite_write_probe")
+                conn.commit()
+            except Exception as exc:
+                last_error = exc
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                continue
 
             DB_PATH = db_abs
             return conn
@@ -2479,7 +2497,7 @@ def _rrp_safe_sqlite_connect() -> sqlite3.Connection:
     return conn
 
 
-def get_conn() -> sqlite3.Connection:
+def _rrp_get_conn_schema_raw() -> sqlite3.Connection:
     conn = _rrp_safe_sqlite_connect()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS raw_events (
@@ -2590,6 +2608,105 @@ def get_conn() -> sqlite3.Connection:
             pass
 
     return conn
+
+
+def get_conn() -> sqlite3.Connection:
+    """Conexión SQLite con fallback también durante creación de esquema.
+
+    v178 protegía el PRAGMA WAL, pero en Streamlit Cloud todavía podía caer
+    justo en el primer CREATE TABLE si la BD heredada estaba en readonly,
+    corrupta, bloqueada o con sidecars WAL rotos. Esta envoltura prueba el
+    esquema completo; si falla, mueve DB_PATH a /tmp con una BD limpia y
+    reintenta sin tumbar la app.
+    """
+    global DB_PATH
+    try:
+        return _rrp_get_conn_schema_raw()
+    except Exception as first_exc:
+        try:
+            if 'st' in globals():
+                st.warning(f"SQLite no pudo inicializar la base actual ({type(first_exc).__name__}). Usando base limpia temporal.")
+        except Exception:
+            pass
+
+        import os as _rrp_os
+        import tempfile as _rrp_tempfile
+        import time as _rrp_time
+
+        original_db_path = str(DB_PATH or "")
+        fallback_paths = [
+            _rrp_os.path.join(_rrp_tempfile.gettempdir(), "ripple_radar_advanced_runtime.sqlite"),
+            _rrp_os.path.join(_rrp_tempfile.gettempdir(), f"ripple_radar_advanced_runtime_{int(_rrp_time.time())}.sqlite"),
+        ]
+        last_exc = first_exc
+        for fb in fallback_paths:
+            try:
+                DB_PATH = fb
+                return _rrp_get_conn_schema_raw()
+            except Exception as exc:
+                last_exc = exc
+                try:
+                    for suffix in ("", "-wal", "-shm"):
+                        p = fb + suffix
+                        if _rrp_os.path.exists(p):
+                            _rrp_os.remove(p)
+                except Exception:
+                    pass
+                continue
+
+        # Última defensa: memoria con el mismo esquema mínimo.
+        try:
+            DB_PATH = ":memory:"
+            conn = sqlite3.connect(":memory:", timeout=30, check_same_thread=False)
+            conn.execute("PRAGMA busy_timeout=15000")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS raw_events (
+                    tx_hash TEXT PRIMARY KEY, ledger_day TEXT, timestamp_utc TEXT, amount REAL,
+                    tx_type TEXT, account TEXT, destination TEXT, fee_drops INTEGER, sequence INTEGER,
+                    raw_json TEXT, inserted_at TEXT
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS daily_metrics (
+                    day TEXT PRIMARY KEY, xrpl_volume REAL, tx_count INTEGER, payment_count INTEGER,
+                    trustline_count INTEGER, offer_count INTEGER, amm_count INTEGER, bridge_count INTEGER,
+                    large_tx_count INTEGER, unique_accounts INTEGER, unique_edges INTEGER,
+                    public_xrpl_score REAL, payment_flow_score REAL, trustline_score REAL, dex_score REAL,
+                    large_transfer_score REAL, bridge_score REAL, public_gateway_score REAL,
+                    institutional_route_score REAL, prime_brokerage_score REAL, custody_score REAL,
+                    cluster_score REAL, topology_score REAL, anomaly_score REAL, fingerprint_score REAL,
+                    cross_network_score REAL, time_regime_score REAL, persistence_score REAL,
+                    radar_coverage REAL, pump_score REAL, adoption_score REAL, bull_score REAL, bear_score REAL,
+                    flip_score REAL, phase INTEGER, phase_name TEXT, source TEXT, updated_at TEXT
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS clusters (
+                    day TEXT, cluster_id TEXT, accounts TEXT, size INTEGER, volume REAL,
+                    tx_count INTEGER, role TEXT, score REAL, PRIMARY KEY(day, cluster_id)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS fingerprints (
+                    day TEXT, fingerprint_type TEXT, score REAL, evidence TEXT,
+                    PRIMARY KEY(day, fingerprint_type)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS app_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, level TEXT, message TEXT, details TEXT, created_at TEXT
+                )
+            """)
+            conn.commit()
+            try:
+                if 'st' in globals():
+                    st.warning("SQLite está usando memoria temporal: los datos se perderán al reiniciar. Revisa permisos o borra la BD antigua.")
+            except Exception:
+                pass
+            return conn
+        except Exception:
+            DB_PATH = original_db_path
+            raise last_exc
 
 
 def log_event(conn: sqlite3.Connection, level: str, message: str, details: str = "") -> None:
@@ -34867,6 +34984,220 @@ def _rrp_v171_render_real_watch_panel(conn: sqlite3.Connection) -> None:
         pass
     if callable(_ORIG_RRP_V171_RENDER_REAL_WATCH_PANEL_V177):
         return _ORIG_RRP_V171_RENDER_REAL_WATCH_PANEL_V177(conn)
+
+
+
+# =============================================================================
+# v181 · SQLite rollback estable
+# =============================================================================
+# Motivo: el endurecimiento WAL/URI de v178-v180 podía romper en Streamlit Cloud
+# con bases antiguas/corruptas. Volvemos a una conexión simple tipo versiones
+# previas: sin WAL obligatorio, sin URI mode, con cuarentena de BD dañada y
+# fallback a /tmp/memoria. Esto evita que la app caiga en get_conn().
+_RRP_ORIG_GET_CONN_V181 = globals().get("get_conn")
+
+
+def _rrp_v181_core_schema(conn: sqlite3.Connection) -> None:
+    """Esquema mínimo estable. Las tablas extra se crean por sus ensure_* propios."""
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS raw_events (
+            tx_hash TEXT PRIMARY KEY,
+            ledger_day TEXT,
+            timestamp_utc TEXT,
+            amount REAL,
+            tx_type TEXT,
+            account TEXT,
+            destination TEXT,
+            fee_drops INTEGER,
+            sequence INTEGER,
+            raw_json TEXT,
+            inserted_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS daily_metrics (
+            day TEXT PRIMARY KEY,
+            xrpl_volume REAL,
+            tx_count INTEGER,
+            payment_count INTEGER,
+            trustline_count INTEGER,
+            offer_count INTEGER,
+            amm_count INTEGER,
+            bridge_count INTEGER,
+            large_tx_count INTEGER,
+            unique_accounts INTEGER,
+            unique_edges INTEGER,
+            public_xrpl_score REAL,
+            payment_flow_score REAL,
+            trustline_score REAL,
+            dex_score REAL,
+            large_transfer_score REAL,
+            bridge_score REAL,
+            public_gateway_score REAL,
+            institutional_route_score REAL,
+            prime_brokerage_score REAL,
+            custody_score REAL,
+            cluster_score REAL,
+            topology_score REAL,
+            anomaly_score REAL,
+            fingerprint_score REAL,
+            cross_network_score REAL,
+            time_regime_score REAL,
+            persistence_score REAL,
+            radar_coverage REAL,
+            pump_score REAL,
+            adoption_score REAL,
+            bull_score REAL,
+            bear_score REAL,
+            flip_score REAL,
+            phase INTEGER,
+            phase_name TEXT,
+            source TEXT,
+            updated_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS clusters (
+            day TEXT,
+            cluster_id TEXT,
+            accounts TEXT,
+            size INTEGER,
+            volume REAL,
+            tx_count INTEGER,
+            role TEXT,
+            score REAL,
+            PRIMARY KEY(day, cluster_id)
+        );
+        CREATE TABLE IF NOT EXISTS fingerprints (
+            day TEXT,
+            fingerprint_type TEXT,
+            score REAL,
+            evidence TEXT,
+            PRIMARY KEY(day, fingerprint_type)
+        );
+        CREATE TABLE IF NOT EXISTS app_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            level TEXT,
+            message TEXT,
+            details TEXT,
+            created_at TEXT
+        );
+    """)
+    conn.commit()
+
+
+def _rrp_v181_quarantine_sqlite(path: str, reason: str = "") -> None:
+    """Renombra una SQLite dañada sin borrar el archivo del usuario si se puede."""
+    try:
+        import os as _os, time as _time
+        if not path or path == ":memory:":
+            return
+        ts = int(_time.time())
+        for suffix in ("", "-wal", "-shm"):
+            p = path + suffix
+            if _os.path.exists(p):
+                try:
+                    _os.replace(p, f"{p}.broken_{ts}")
+                except Exception:
+                    try:
+                        _os.remove(p)
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+
+def _rrp_v181_open_plain_sqlite(path: str) -> sqlite3.Connection:
+    import os as _os
+    if path and path != ":memory:":
+        d = _os.path.dirname(_os.path.abspath(path)) or "."
+        _os.makedirs(d, exist_ok=True)
+    conn = sqlite3.connect(path, timeout=30, check_same_thread=False)
+    try:
+        conn.execute("PRAGMA busy_timeout=15000")
+    except Exception:
+        pass
+    # No forzamos WAL. Las versiones que no fallaban trabajaban bien con modos simples.
+    for pragma in ("PRAGMA journal_mode=DELETE", "PRAGMA synchronous=NORMAL"):
+        try:
+            conn.execute(pragma)
+        except Exception:
+            pass
+    _rrp_v181_core_schema(conn)
+    # Prueba mínima de lectura del catálogo.
+    conn.execute("SELECT name FROM sqlite_master LIMIT 1").fetchall()
+    return conn
+
+
+def get_conn() -> sqlite3.Connection:
+    """Conexión SQLite estable estilo rollback.
+
+    Orden:
+    1) DB_PATH actual.
+    2) Si falla por DatabaseError/corrupción, se pone en cuarentena y se recrea limpia.
+    3) /tmp como respaldo.
+    4) memoria como último recurso.
+    """
+    global DB_PATH
+    import os as _os, tempfile as _tempfile, time as _time
+
+    candidates = []
+    for p in (
+        _os.environ.get("RRP_DB_PATH", ""),
+        str(DB_PATH or "ripple_radar_advanced.sqlite"),
+        _os.path.join(_tempfile.gettempdir(), "ripple_radar_advanced_runtime.sqlite"),
+    ):
+        p = str(p or "").strip()
+        if p and p not in candidates:
+            candidates.append(p)
+
+    last_exc = None
+    for path in candidates:
+        # intento normal
+        try:
+            conn = _rrp_v181_open_plain_sqlite(path)
+            DB_PATH = path
+            return conn
+        except sqlite3.DatabaseError as exc:
+            last_exc = exc
+            _rrp_v181_quarantine_sqlite(path, str(exc))
+            # intento limpio en el mismo path tras cuarentena
+            try:
+                conn = _rrp_v181_open_plain_sqlite(path)
+                DB_PATH = path
+                try:
+                    if 'st' in globals():
+                        st.warning("SQLite detectó una base dañada/antigua y creó una base limpia. Si esperabas datos previos, revisa los .broken_*.")
+                except Exception:
+                    pass
+                return conn
+            except Exception as exc2:
+                last_exc = exc2
+                continue
+        except Exception as exc:
+            last_exc = exc
+            continue
+
+    # Última defensa: BD temporal única.
+    temp_path = _os.path.join(_tempfile.gettempdir(), f"ripple_radar_advanced_runtime_{int(_time.time())}.sqlite")
+    try:
+        conn = _rrp_v181_open_plain_sqlite(temp_path)
+        DB_PATH = temp_path
+        try:
+            if 'st' in globals():
+                st.warning("SQLite no pudo usar la ruta principal; usando base temporal en /tmp.")
+        except Exception:
+            pass
+        return conn
+    except Exception as exc:
+        last_exc = exc
+
+    # Memoria: no persistente pero evita caída total.
+    conn = sqlite3.connect(":memory:", timeout=30, check_same_thread=False)
+    _rrp_v181_core_schema(conn)
+    DB_PATH = ":memory:"
+    try:
+        if 'st' in globals():
+            st.error(f"SQLite persistente falló; usando memoria temporal. Último error: {type(last_exc).__name__}")
+    except Exception:
+        pass
+    return conn
 
 try:
     c = get_conn()
