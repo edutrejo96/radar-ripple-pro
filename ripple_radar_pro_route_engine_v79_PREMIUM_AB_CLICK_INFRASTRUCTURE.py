@@ -26067,5 +26067,364 @@ try:
 except Exception:
     pass
 
+
+
+# =============================================================================
+# v155 · RECONSTRUCCIÓN MANUAL + FIX BARRIDO LOCAL + BÚSQUEDA DE LÍNEAS
+# =============================================================================
+# Problemas corregidos:
+# 1) El barrido internacional v147 llamaba a una función que ya devolvía
+#    (canonical, script, native) pero la desempaquetaba como (script, native).
+#    Eso generaba: too many values to unpack (expected 2).
+# 2) El panel de nodos fijos mostraba demasiadas líneas pendientes del mapa base.
+#    En modo reconstrucción manual, esas líneas se ocultan por defecto y solo se
+#    investigan cuando el admin las busca explícitamente.
+# 3) Se añade un reset más visible y robusto para limpiar rutas/pruebas/cachés
+#    dinámicas sin borrar el esqueleto de nodos fijos.
+
+try:
+    VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery · v155 Manual Rebuild Line Search"
+    BUILD_ID = "v155_2026_05_12_MANUAL_REBUILD_LINE_SEARCH_FIX"
+    BUILD_NOTE = "Reconstrucción manual limpia + fix local sweep tuple unpack + líneas pendientes menos confusas"
+except Exception:
+    pass
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Fix crítico: identidad local internacional siempre devuelve 3 valores.
+# ─────────────────────────────────────────────────────────────────────────────
+_RRP_V155_BASE_NATIVE_IDENTITY = globals().get("_ORIG_NATIVE_IDENTITY_FOR_LOCAL_SWEEP_V147_PRE")
+if _RRP_V155_BASE_NATIVE_IDENTITY is None:
+    _RRP_V155_BASE_NATIVE_IDENTITY = globals().get("_native_identity_for_local_sweep")
+
+def _rrp_v155_unpack_native_identity(value: Any, entity: Any) -> Tuple[str, str, str]:
+    canonical = _canonical_entity_name(entity)
+    script = "en"
+    native = canonical
+    try:
+        if isinstance(value, (list, tuple)):
+            if len(value) >= 3:
+                canonical = _canonical_entity_name(value[0] or canonical)
+                script = str(value[1] or "en")
+                native = str(value[2] or canonical)
+            elif len(value) == 2:
+                script = str(value[0] or "en")
+                native = str(value[1] or canonical)
+            elif len(value) == 1:
+                native = str(value[0] or canonical)
+        elif isinstance(value, dict):
+            canonical = _canonical_entity_name(value.get("canonical") or canonical)
+            script = str(value.get("script") or value.get("lang") or "en")
+            native = str(value.get("native") or value.get("native_name") or canonical)
+    except Exception:
+        pass
+    return canonical, script, native
+
+
+def _native_identity_for_local_sweep(entity: Any) -> Tuple[str, str, str]:
+    """v155: versión segura. Nunca vuelve a romper por unpack 2/3 valores."""
+    raw = str(entity or "").strip()
+    canonical = _canonical_entity_name(raw)
+    script = "en"
+    native = canonical
+    try:
+        if _RRP_V155_BASE_NATIVE_IDENTITY and _RRP_V155_BASE_NATIVE_IDENTITY is not _native_identity_for_local_sweep:
+            canonical, script, native = _rrp_v155_unpack_native_identity(_RRP_V155_BASE_NATIVE_IDENTITY(raw), raw)
+    except Exception:
+        canonical, script, native = _canonical_entity_name(raw), "en", _canonical_entity_name(raw)
+    # Si la versión base no detectó región local, aplicar el perfil internacional v147.
+    try:
+        if (not script or script == "en") and "_region_hint_for_entity_v147" in globals():
+            profile, local_name = _region_hint_for_entity_v147(raw or canonical)
+            if profile and profile != "en":
+                script = profile
+                native = local_name or native or canonical
+    except Exception:
+        pass
+    # Casos fijos/manuales: no son país, pero sí necesitan documentación especializada.
+    try:
+        if "_rrp_v153_is_fixed_node" in globals() and _rrp_v153_is_fixed_node(canonical):
+            script = "en"
+            native = canonical
+    except Exception:
+        pass
+    return _canonical_entity_name(canonical), str(script or "en"), str(native or canonical)
+
+
+# Refuerzo defensivo: si una función antigua intenta usar el barrido local y falla,
+# la búsqueda no debe romper la UI completa ni el botón de línea.
+_ORIG_RUN_LOCAL_SOURCE_SWEEP_V155 = globals().get("_run_local_source_sweep")
+def _run_local_source_sweep(entity: Any, conn: Optional[sqlite3.Connection] = None) -> Dict[str, Any]:
+    try:
+        if _ORIG_RUN_LOCAL_SOURCE_SWEEP_V155:
+            return _ORIG_RUN_LOCAL_SOURCE_SWEEP_V155(entity, conn=conn)
+    except Exception as e:
+        return _finalize_discovery_result({
+            "institution": _canonical_entity_name(entity),
+            "connected": False,
+            "confidence": 0.0,
+            "summary": "Barrido local/internacional no completado; queda pendiente de búsqueda manual.",
+            "sources": [], "evidence_items": [], "route_decisions": [], "connects_to": [],
+            "_local_source_sweep_error": str(e)[:240],
+            "_manual_pending": True,
+        }, _canonical_entity_name(entity), _classify_entity(_canonical_entity_name(entity)), None)
+    return _finalize_discovery_result({
+        "institution": _canonical_entity_name(entity),
+        "connected": False,
+        "confidence": 0.0,
+        "summary": "Barrido local/internacional no disponible; queda pendiente de búsqueda manual.",
+        "sources": [], "evidence_items": [], "route_decisions": [], "connects_to": [],
+        "_manual_pending": True,
+    }, _canonical_entity_name(entity), _classify_entity(_canonical_entity_name(entity)), None)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reset manual robusto.
+# ─────────────────────────────────────────────────────────────────────────────
+def _rrp_v155_delete_table_rows(conn: sqlite3.Connection, table: str) -> int:
+    try:
+        before = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+    except Exception:
+        return 0
+    try:
+        conn.execute(f"DELETE FROM {table}")
+        return int(before or 0)
+    except Exception:
+        return 0
+
+
+def _rrp_v155_manual_rebuild_reset(conn: sqlite3.Connection, include_cache: bool = True, include_audit: bool = True) -> Dict[str, int]:
+    """Limpia todo lo dinámico. Mantiene NODES y ROUTES hardcoded como esqueleto visual."""
+    try:
+        ensure_discovery_tables(conn)
+    except Exception:
+        pass
+    try:
+        ensure_route_paths_table(conn)
+    except Exception:
+        pass
+    tables = [
+        "dynamic_routes", "dynamic_nodes", "connection_proofs", "route_paths",
+        "node_verifications", "map_update_log",
+    ]
+    if include_cache:
+        tables += ["institution_search_cache", "search_cache_aliases"]
+    if include_audit:
+        tables += ["api_search_audit", "sanitizer_quarantine"]
+    counts: Dict[str, int] = {}
+    for t in tables:
+        counts[t] = _rrp_v155_delete_table_rows(conn, t)
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    # Limpiar estados de sesión que pueden volver a pintar tarjetas viejas.
+    try:
+        for k in list(st.session_state.keys()):
+            if str(k).startswith(("disc_", "cascade_", "rrp_v", "map_focus", "selected_")):
+                del st.session_state[k]
+    except Exception:
+        pass
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+    return counts
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Búsqueda documental de una línea concreta.
+# ─────────────────────────────────────────────────────────────────────────────
+def _rrp_v155_line_document_query(a: Any, b: Any) -> str:
+    ca = _canonical_entity_name(a)
+    cb = _canonical_entity_name(b)
+    # Evitar que se interprete como una institución compuesta rara.
+    return f'{ca} ↔ {cb} documented relationship Ripple XRPL official sources PDFs on-chain evidence'
+
+
+def _rrp_v155_search_line_documents(a: Any, b: Any, conn: Optional[sqlite3.Connection]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    q = _rrp_v155_line_document_query(a, b)
+    res = search_institution_connections(q, conn=conn, force_online=True)
+    res = _finalize_discovery_result(res, q, _classify_entity(q), None)
+    # Marcar en el resultado qué línea se estaba validando.
+    try:
+        res["line_focus"] = {"source": _canonical_entity_name(a), "target": _canonical_entity_name(b)}
+    except Exception:
+        pass
+    info = {"added_routes": 0, "added_nodes": 0}
+    try:
+        if conn is not None:
+            info = apply_discovery_to_map(conn, res, auto=True) or info
+    except Exception as e:
+        res["_map_apply_error"] = str(e)[:240]
+    return res, info
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Ocultar el ruido de pendientes del mapa base por defecto.
+# ─────────────────────────────────────────────────────────────────────────────
+_ORIG_RRP_V149_DOCUMENT_PENDING_PAIRS_FOR_NODE_V155 = globals().get("_rrp_v149_document_pending_pairs_for_node")
+def _rrp_v149_document_pending_pairs_for_node(conn: Optional[sqlite3.Connection], focus_node: Any, limit: int = 16) -> List[Dict[str, Any]]:
+    """v155: en reconstrucción manual no abrumar con todas las líneas base.
+
+    Por defecto solo se muestran pendientes guardados dinámicamente. Las líneas del
+    esqueleto fijo se pueden mostrar activando el checkbox del panel.
+    """
+    show_base = bool(st.session_state.get("rrp_v155_show_base_pending_lines", False))
+    if not _ORIG_RRP_V149_DOCUMENT_PENDING_PAIRS_FOR_NODE_V155:
+        return []
+    try:
+        all_items = list(_ORIG_RRP_V149_DOCUMENT_PENDING_PAIRS_FOR_NODE_V155(conn, focus_node, limit=80) or [])
+    except Exception:
+        return []
+    if show_base:
+        return all_items[:limit]
+    # Filtrar: mostrar solo líneas nacidas de dynamic_routes; no todas las ROUTES fijas.
+    dyn_pairs: Set[str] = set()
+    try:
+        if conn is not None:
+            ensure_discovery_tables(conn)
+            cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dynamic_routes)").fetchall()}
+            if {"src", "dst"}.issubset(cols):
+                q = "SELECT src,dst FROM dynamic_routes"
+                if "sanitizer_status" in cols:
+                    q += " WHERE COALESCE(sanitizer_status,'active')!='quarantined'"
+                for src, dst in conn.execute(q).fetchall():
+                    dyn_pairs.add(_canonical_pair_key(src, dst))
+    except Exception:
+        pass
+    filtered = [it for it in all_items if _canonical_pair_key(focus_node, it.get("peer")) in dyn_pairs]
+    return filtered[:limit]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Panel de nodo final: sin wrappers viejos y con botón de búsqueda de línea seguro.
+# ─────────────────────────────────────────────────────────────────────────────
+_RRP_V155_TRUE_BASE_NODE_PANEL = globals().get("_RRP_TRUE_BASE_RENDER_NODE_INFO_PANEL_V152") or globals().get("_ORIG_RENDER_NODE_INFO_PANEL_V149")
+_RRP_V155_PARSE_NODE_PANEL_ARGS = globals().get("_rrp_v152_parse_node_panel_args")
+
+def render_node_info_panel(*args, **kwargs) -> None:
+    if _RRP_V155_PARSE_NODE_PANEL_ARGS:
+        focus_node, row, conn, all_routes, all_nodes = _RRP_V155_PARSE_NODE_PANEL_ARGS(*args, **kwargs)
+    else:
+        focus_node = str(args[0] if args else kwargs.get("focus_node", ""))
+        row = args[1] if len(args) > 1 else pd.Series({})
+        conn = args[2] if len(args) > 2 else kwargs.get("conn")
+        all_routes = args[3] if len(args) > 3 else kwargs.get("all_routes", [])
+        all_nodes = args[4] if len(args) > 4 else kwargs.get("all_nodes", {})
+
+    try:
+        if conn is not None and "_rrp_v151_cleanup_all_fixed_false_negatives" in globals():
+            _rrp_v151_cleanup_all_fixed_false_negatives(conn)
+    except Exception:
+        pass
+
+    try:
+        if _RRP_V155_TRUE_BASE_NODE_PANEL:
+            _RRP_V155_TRUE_BASE_NODE_PANEL(focus_node, row, conn, all_routes, all_nodes)
+    except Exception as e:
+        st.error(f"No pude renderizar la ficha base del nodo: {e}")
+        return
+
+    try:
+        is_fixed = bool("_rrp_v153_is_fixed_node" in globals() and _rrp_v153_is_fixed_node(focus_node))
+    except Exception:
+        is_fixed = False
+    if is_fixed:
+        st.caption("📌 Nodo fijo: no se considera 0% negativo. Primero hay que investigarlo documental/on-chain de forma manual o por línea concreta.")
+
+    with st.expander("🧭 Investigación manual de líneas del nodo", expanded=False):
+        st.markdown(
+            "Por defecto se ocultan las líneas pendientes del mapa base para no llenar la ficha de ruido. "
+            "Actívalas solo si quieres revisar una por una las relaciones estructurales del nodo."
+        )
+        show = st.checkbox(
+            "Mostrar líneas pendientes del mapa base",
+            value=bool(st.session_state.get("rrp_v155_show_base_pending_lines", False)),
+            key="rrp_v155_show_base_pending_lines",
+        )
+        if not show:
+            st.info("Modo limpio: busca el nodo o una relación concreta manualmente desde Descubrimientos. Ejemplo: `xrpledger`, `RLUSD`, `XRPL RLUSD`, `XRPL Custody/Metaco`.")
+            return
+
+    pending = []
+    try:
+        pending = _rrp_v149_document_pending_pairs_for_node(conn, focus_node, limit=16)
+    except Exception:
+        pending = []
+    if not pending:
+        return
+
+    st.markdown(
+        "<div style='margin-top:10px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.30);"
+        "border-radius:12px;padding:10px 12px;'>"
+        "<div style='color:#F59E0B;font-weight:900'>🧾 Líneas pendientes de investigación documental / on-chain</div>"
+        "<div style='color:#CBD5E1;font-size:.80rem;margin-top:4px;line-height:1.45'>"
+        "Estas líneas no son negativas. Son hipótesis/estructura del mapa que solo deben convertirse en evidencia tras investigar fuentes/documentos concretos."
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+    for item in pending:
+        try:
+            peer = item.get("peer") or ""
+            kind = item.get("kind") or "pending"
+            note = item.get("note") or "Pendiente de revisión documental/on-chain."
+            with st.expander(f"🧾 Pendiente · {focus_node} ↔ {peer} · {kind}", expanded=False):
+                st.markdown(f"**Estado:** pendiente de investigación específica.  \n**Lectura correcta:** {note}")
+                key = f"v155_doc_line_{hashlib.sha256(_canonical_pair_key(focus_node, peer).encode()).hexdigest()[:12]}"
+                if st.button("🧾 Investigar documentos de esta línea", key=key, use_container_width=True):
+                    with st.spinner(f"Investigando documentos para: {_canonical_entity_name(focus_node)} ↔ {_canonical_entity_name(peer)}"):
+                        try:
+                            res, info = _rrp_v155_search_line_documents(focus_node, peer, conn)
+                            st.session_state["disc_result"] = res
+                            st.session_state["disc_query"] = _rrp_v155_line_document_query(focus_node, peer)
+                            st.session_state["disc_from_cache"] = False
+                            st.success(
+                                f"Investigación de línea lanzada: {info.get('added_routes',0)} rutas · "
+                                f"{info.get('added_nodes',0)} nodos/puntos actualizados. Revisa Descubrimientos."
+                            )
+                        except Exception as e:
+                            st.error(f"No pude completar la investigación documental de la línea: {type(e).__name__}: {e}")
+        except Exception:
+            continue
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Discovery: añadir reset v155 muy visible antes del motor normal.
+# ─────────────────────────────────────────────────────────────────────────────
+_ORIG_RENDER_DISCOVERY_ENGINE_V155 = globals().get("render_discovery_engine")
+def render_discovery_engine(conn: sqlite3.Connection) -> None:
+    try:
+        is_admin = bool(_is_admin_unlimited_ai(None))
+    except Exception:
+        is_admin = False
+    if is_admin:
+        with st.expander("🧨 Admin · empezar investigación manual desde cero", expanded=True):
+            st.warning(
+                "Esto borra rutas dinámicas, pruebas, cachés y estados de investigación guardados. "
+                "No borra los nodos fijos del mapa. Úsalo para reconstruir evidencias manualmente nodo por nodo."
+            )
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("🧹 Limpiar evidencias/rutas/caché ahora", key="v155_clean_manual_all", use_container_width=True):
+                    counts = _rrp_v155_manual_rebuild_reset(conn, include_cache=True, include_audit=True)
+                    st.success("Limpieza completa: " + ", ".join(f"{k}={v}" for k, v in counts.items()))
+                    st.rerun()
+            with c2:
+                if st.button("👁️ Ocultar pendientes base", key="v155_hide_base_pending", use_container_width=True):
+                    st.session_state["rrp_v155_show_base_pending_lines"] = False
+                    st.success("Pendientes del mapa base ocultados. Ahora investiga manualmente desde el buscador.")
+                    st.rerun()
+            st.caption("Orden recomendado: reset → buscar `xrpledger` → `RLUSD` → `Ripple CBDC Platform` → relaciones concretas como `XRPL RLUSD` o `Ripple CBDC Platform XRPL`.")
+    if _ORIG_RENDER_DISCOVERY_ENGINE_V155:
+        _ORIG_RENDER_DISCOVERY_ENGINE_V155(conn)
+
+
+try:
+    if "_rrp_v151_cleanup_all_fixed_false_negatives" in globals():
+        _rrp_v151_cleanup_all_fixed_false_negatives(get_conn())
+except Exception:
+    pass
+
+
 if __name__ == "__main__":
     main()
