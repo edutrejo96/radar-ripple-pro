@@ -173,8 +173,8 @@ except Exception:
 
 APP_NAME = "Ripple Radar Pro"
 VERSION = "Route Path Intelligence v6.2.3 PRO — Proof-First Universal Public Discovery · v154 Fixed Node Search Pending Display"
-BUILD_ID = "v157_2026_05_13_XRPL_CORE_DOCUMENT_ONLY_CASCADE"
-BUILD_NOTE = "Nodos fijos en buscador: pendiente documental/on-chain, no falso 0%; cache vieja normalizada y display corregido"
+BUILD_ID = "v178_2026_05_13_SQLITE_WAL_FALLBACK_ENTRYPOINT_FIX"
+BUILD_NOTE = "SQLite robusto en Streamlit Cloud: WAL con fallback seguro + DB writable en /tmp si el repo está bloqueado"
 DB_PATH = "ripple_radar_advanced.sqlite"
 
 import os as _os
@@ -2394,13 +2394,93 @@ ENTITY_EXPANSION_TARGETS: Dict[str, List[str]] = {}
 # DB
 # =============================================================================
 
+def _rrp_safe_sqlite_connect() -> sqlite3.Connection:
+    """Abre SQLite de forma robusta en local y Streamlit Cloud.
+
+    En algunos despliegues `PRAGMA journal_mode=WAL` falla porque el directorio
+    de la app es de solo lectura, no permite crear los ficheros -wal/-shm, o hay
+    una BD heredada bloqueada. Antes esto rompía la app en get_conn().
+    Ahora probamos WAL y, si no se puede, caemos a DELETE/TRUNCATE/MEMORY.
+    Si la ruta principal no es escribible, usamos /tmp como fallback persistente
+    dentro de la sesión del contenedor.
+    """
+    global DB_PATH
+    import os as _rrp_os
+    import tempfile as _rrp_tempfile
+
+    raw_candidates = [
+        _rrp_os.environ.get("RRP_DB_PATH", ""),
+        str(DB_PATH or ""),
+        _rrp_os.path.join(_rrp_tempfile.gettempdir(), _rrp_os.path.basename(str(DB_PATH or "ripple_radar_advanced.sqlite"))),
+    ]
+    candidates = []
+    for p in raw_candidates:
+        p = str(p or "").strip()
+        if p and p not in candidates:
+            candidates.append(p)
+
+    last_error = None
+    for db_path in candidates:
+        try:
+            db_abs = _rrp_os.path.abspath(db_path)
+            db_dir = _rrp_os.path.dirname(db_abs) or "."
+            _rrp_os.makedirs(db_dir, exist_ok=True)
+
+            # Test rápido de escritura. WAL necesita poder crear sidecars -wal/-shm.
+            probe = _rrp_os.path.join(db_dir, ".rrp_sqlite_write_probe")
+            try:
+                with open(probe, "a", encoding="utf-8") as fh:
+                    fh.write("")
+                try:
+                    _rrp_os.remove(probe)
+                except Exception:
+                    pass
+            except Exception as exc:
+                last_error = exc
+                continue
+
+            conn = sqlite3.connect(db_abs, timeout=30, check_same_thread=False)
+            conn.execute("PRAGMA busy_timeout=15000")
+
+            # Intentar WAL, pero no romper la app si SQLite/Cloud no lo permite.
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+            except Exception:
+                for mode in ("DELETE", "TRUNCATE", "MEMORY"):
+                    try:
+                        conn.execute(f"PRAGMA journal_mode={mode}")
+                        break
+                    except Exception:
+                        continue
+                try:
+                    conn.execute("PRAGMA synchronous=NORMAL")
+                except Exception:
+                    pass
+
+            DB_PATH = db_abs
+            return conn
+        except Exception as exc:
+            last_error = exc
+            try:
+                conn.close()  # type: ignore[name-defined]
+            except Exception:
+                pass
+            continue
+
+    # Última defensa: memoria. No persistente, pero evita caída completa de la app.
+    conn = sqlite3.connect(":memory:", timeout=30, check_same_thread=False)
+    conn.execute("PRAGMA busy_timeout=15000")
+    try:
+        if 'st' in globals():
+            st.warning("SQLite no pudo abrir una base persistente; usando memoria temporal. Revisa permisos de la ruta DB.")
+    except Exception:
+        pass
+    return conn
+
+
 def get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    # WAL mode: múltiples lectores concurrentes + un escritor sin bloquear.
-    # Esencial en despliegue público donde varios usuarios comparten la misma BD.
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA busy_timeout=6000")   # espera hasta 6s si hay write-lock
+    conn = _rrp_safe_sqlite_connect()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS raw_events (
             tx_hash TEXT PRIMARY KEY,
@@ -34391,7 +34471,7 @@ except Exception:
 # - Si no hay identificador público, queda en needs_identifier, no se inventa señal.
 # =============================================================================
 
-BUILD_ID = "v177_2026_05_13_SEARCHER_ASSET_CONNECTOR_INTEGRATION"
+BUILD_ID = "v178_2026_05_13_SQLITE_WAL_FALLBACK_ENTRYPOINT_FIX"
 BUILD_NOTE = "buscador extrae activos/issuers/wallets y crea rutas + vigilancia desde fuentes"
 VERSION = "Route Path Intelligence v6.2.3 PRO — XRPL Core · Searcher Asset Connectors v177"
 
