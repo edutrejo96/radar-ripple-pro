@@ -27642,13 +27642,483 @@ def render_node_info_panel(*args, **kwargs) -> None:
             st.session_state["rrp_simple_force_online"] = False
             st.success("Nodo enviado a Discovery. Abre la pestaña Descubrimientos.")
 
+
+# =============================================================================
+# v158 · XRPL ONLY + DOCUMENT-FIRST CLEAN REBUILD
+# =============================================================================
+# Objetivo definitivo solicitado:
+# - Sin nodos fijos heredados salvo XRPL.
+# - Sin rutas fijas: ninguna línea se dibuja por estar hardcodeada.
+# - Todo nodo/ruta nace solo de una búsqueda documental/cascada.
+# - Reset visible en Descubrimientos para borrar datos viejos y empezar limpio.
+# - PDFs/fuentes detectadas se guardan y se muestran.
+
+BUILD_ID = "v158_2026_05_13_XRPL_ONLY_DOCUMENT_CASCADE_CLEAN"
+BUILD_NOTE = "Mapa limpio: solo XRPL fijo; rutas/nodos solo por documentos; reset visible; PDFs/fuentes guardados"
+RRP_V158_BUILD = BUILD_ID
+
+
+def _rrp_v158_prune_static_map_to_xrpl() -> None:
+    """Mantiene el mapa base en un único nodo: XRPL. No hay rutas hardcodeadas."""
+    global NODES, ROUTES, PUBLIC_TRACE_WATCHPOINTS, PUBLIC_GATEWAY_DETAIL_WATCHPOINTS
+    try:
+        old_xrpl = dict((globals().get("NODES") or {}).get("XRPL") or {})
+    except Exception:
+        old_xrpl = {}
+    old_xrpl.setdefault("pos", (0.0, 0.0))
+    old_xrpl.setdefault("layer", "Público")
+    old_xrpl.setdefault("icon", "💧")
+    old_xrpl.setdefault("description", "Núcleo público del radar. El resto de nodos/rutas nace solo por investigación documental/on-chain.")
+    NODES = {"XRPL": old_xrpl}
+    ROUTES = []
+    PUBLIC_TRACE_WATCHPOINTS = []
+    PUBLIC_GATEWAY_DETAIL_WATCHPOINTS = []
+
+
+# Desactivar motores antiguos que recreaban líneas/nodos fijos.
+def bootstrap_static_node_routes(conn: sqlite3.Connection) -> int:
+    _rrp_v158_prune_static_map_to_xrpl()
+    return 0
+
+
+def _ensure_static_verifications(conn: sqlite3.Connection) -> int:
+    return 0
+
+
+def _add_static_route_once(*args, **kwargs) -> bool:
+    return False
+
+
+def _is_core_infra_pair(*args, **kwargs) -> bool:
+    return False
+
+
+def _static_routes_for_entity(*args, **kwargs) -> List[Dict[str, Any]]:
+    return []
+
+
+def _rrp_collect_fixed_route_proofs(*args, **kwargs) -> List[Dict[str, Any]]:
+    return []
+
+
+def _rrp_v158_ensure_document_tables(conn: sqlite3.Connection) -> None:
+    try:
+        _rrp_v157_ensure_document_tables(conn)
+    except Exception:
+        pass
+    try:
+        cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(discovery_documents)").fetchall()}
+        if "is_pdf" not in cols:
+            conn.execute("ALTER TABLE discovery_documents ADD COLUMN is_pdf INTEGER DEFAULT 0")
+        if "source_rank" not in cols:
+            conn.execute("ALTER TABLE discovery_documents ADD COLUMN source_rank INTEGER DEFAULT 99")
+        conn.commit()
+    except Exception:
+        pass
+
+
+def _rrp_v158_url_type(url: Any, explicit_type: Any = "") -> Tuple[str, int, int]:
+    """Devuelve (tipo, is_pdf, rank). Rank bajo = más importante."""
+    u = str(url or "").strip().lower()
+    t = str(explicit_type or "").strip().lower()
+    is_pdf = 1 if (".pdf" in u or u.endswith(".pdf") or "pdf" in t) else 0
+    official_domains = [
+        "xrpl.org", "docs.xrpl.org", "ripple.com", "bis.org", "swift.com", "imf.org", "worldbank.org",
+        "ecb.europa.eu", "europa.eu", "federalreserve.gov", "pbc.gov.cn", "banrep.gov", "bde.es",
+        "gov", "sec.gov", "dtcc.com", "businesswire.com"
+    ]
+    if is_pdf:
+        return (t or "pdf/document", 1, 1)
+    if any(d in u for d in official_domains):
+        return (t or "official/source", 0, 2)
+    if t in {"official_announcement", "official_partner", "primary_source", "partner_page", "press_release", "filing", "regulatory_filing"}:
+        return (t, 0, 2)
+    return (t or "source", 0, 5)
+
+
+def _rrp_v158_extract_documents(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Extrae PDFs y fuentes de forma amplia. No tira URLs por ser 'solo fuente': las guarda para revisar."""
+    docs: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    if not isinstance(result, dict):
+        return docs
+
+    def add_doc(title: Any, url: Any, doc_type: Any = "", claim: Any = "") -> None:
+        u = str(url or "").strip().rstrip(".,);]")
+        if not u.startswith("http"):
+            return
+        key = _canonical_url_key(u) if "_canonical_url_key" in globals() else u.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        typ, is_pdf, rank = _rrp_v158_url_type(u, doc_type)
+        docs.append({
+            "title": str(title or ("PDF/documento" if is_pdf else "Fuente detectada"))[:260],
+            "url": u,
+            "doc_type": typ,
+            "claim": str(claim or "")[:1200],
+            "is_pdf": int(is_pdf),
+            "source_rank": int(rank),
+        })
+
+    # Evidence items estructurados.
+    for e in result.get("evidence_items") or []:
+        if not isinstance(e, dict):
+            continue
+        add_doc(
+            e.get("title") or e.get("source") or e.get("name") or "Prueba/fuente",
+            e.get("url") or e.get("source_url") or e.get("link"),
+            e.get("evidence_type") or e.get("type") or e.get("kind"),
+            e.get("claim") or e.get("summary") or e.get("description"),
+        )
+
+    # Fuentes recuperadas por buscador.
+    for field in ["pdfs", "pdf_sources", "documents", "official_documents", "sources", "source_urls", "urls", "fallback_sources", "web_sources"]:
+        val = result.get(field)
+        if not val:
+            continue
+        if isinstance(val, str):
+            vals = re.findall(r"https?://[^\s)\]>'\"]+", val) or [val]
+        else:
+            vals = val if isinstance(val, (list, tuple, set)) else [val]
+        for s in vals:
+            if isinstance(s, dict):
+                add_doc(s.get("title") or s.get("name") or field, s.get("url") or s.get("link") or s.get("source_url"), s.get("type") or s.get("kind") or field, s.get("summary") or s.get("claim") or "")
+            else:
+                add_doc(field, s, field, "")
+
+    # URLs incrustadas en cualquier string del resultado.
+    try:
+        blob = json.dumps(result, ensure_ascii=False)
+    except Exception:
+        blob = str(result)
+    for u in re.findall(r"https?://[^\s)\]>'\"]+", blob):
+        add_doc("Fuente detectada en resultado", u, "source", "")
+
+    docs.sort(key=lambda d: (int(d.get("source_rank", 99)), 0 if int(d.get("is_pdf", 0)) else 1, str(d.get("title") or "")))
+    return docs
+
+
+# Sustituir los extractores v157 por los v158.
+def _rrp_v157_extract_documents(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return _rrp_v158_extract_documents(result)
+
+
+def _rrp_v157_save_documents(conn: sqlite3.Connection, result: Dict[str, Any], *, parent: str = "") -> int:
+    if conn is None or not isinstance(result, dict):
+        return 0
+    try:
+        _rrp_v158_ensure_document_tables(conn)
+    except Exception:
+        return 0
+    inst = _canonical_entity_name(result.get("institution") or "")
+    if not inst:
+        return 0
+    now = datetime.now(timezone.utc).isoformat()
+    result_key = _canonical_entity_key(inst)
+    count = 0
+    for d in _rrp_v158_extract_documents(result):
+        url = d.get("url") or ""
+        if not url:
+            continue
+        doc_id = hashlib.sha256(f"{result_key}|{url}".encode("utf-8")).hexdigest()[:24]
+        try:
+            cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(discovery_documents)").fetchall()}
+            if "is_pdf" in cols and "source_rank" in cols:
+                cur = conn.execute(
+                    """
+                    INSERT OR REPLACE INTO discovery_documents
+                    (doc_id, institution, title, url, doc_type, claim, parent, result_key, discovered_at, is_pdf, source_rank)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (doc_id, inst, d.get("title") or "Documento", url, d.get("doc_type") or "source", d.get("claim") or "", parent or "", result_key, now, int(d.get("is_pdf", 0)), int(d.get("source_rank", 99))),
+                )
+            else:
+                cur = conn.execute(
+                    """
+                    INSERT OR REPLACE INTO discovery_documents
+                    (doc_id, institution, title, url, doc_type, claim, parent, result_key, discovered_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (doc_id, inst, d.get("title") or "Documento", url, d.get("doc_type") or "source", d.get("claim") or "", parent or "", result_key, now),
+                )
+            count += int(cur.rowcount or 0)
+        except Exception:
+            pass
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    return count
+
+
+def _rrp_v157_document_rows_for_result(conn: sqlite3.Connection, result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    inst = _canonical_entity_name((result or {}).get("institution") or "")
+    docs = _rrp_v158_extract_documents(result)
+    if conn is not None and inst:
+        try:
+            _rrp_v158_ensure_document_tables(conn)
+            cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(discovery_documents)").fetchall()}
+            if "is_pdf" in cols and "source_rank" in cols:
+                rows = conn.execute(
+                    "SELECT title,url,doc_type,claim,discovered_at,is_pdf,source_rank FROM discovery_documents WHERE result_key=? ORDER BY source_rank ASC, is_pdf DESC, discovered_at DESC LIMIT 100",
+                    (_canonical_entity_key(inst),),
+                ).fetchall()
+                for title, url, typ, claim, dt, is_pdf, rank in rows:
+                    docs.append({"title": title or "Documento", "url": url or "", "doc_type": typ or "source", "claim": claim or "", "discovered_at": dt or "", "is_pdf": int(is_pdf or 0), "source_rank": int(rank or 99)})
+            else:
+                rows = conn.execute(
+                    "SELECT title,url,doc_type,claim,discovered_at FROM discovery_documents WHERE result_key=? ORDER BY discovered_at DESC LIMIT 100",
+                    (_canonical_entity_key(inst),),
+                ).fetchall()
+                for title, url, typ, claim, dt in rows:
+                    typ2, is_pdf, rank = _rrp_v158_url_type(url, typ)
+                    docs.append({"title": title or "Documento", "url": url or "", "doc_type": typ2, "claim": claim or "", "discovered_at": dt or "", "is_pdf": is_pdf, "source_rank": rank})
+        except Exception:
+            pass
+    out, seen = [], set()
+    for d in docs:
+        u = str(d.get("url") or "").strip()
+        if not u:
+            continue
+        key = _canonical_url_key(u) if "_canonical_url_key" in globals() else u.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(d)
+    out.sort(key=lambda d: (int(d.get("source_rank", 99)), 0 if int(d.get("is_pdf", 0)) else 1, str(d.get("title") or "")))
+    return out
+
+
+def _rrp_v158_table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    try:
+        return bool(conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone())
+    except Exception:
+        return False
+
+
+def _rrp_v158_count_table(conn: sqlite3.Connection, table: str) -> int:
+    try:
+        if not _rrp_v158_table_exists(conn, table):
+            return 0
+        return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+    except Exception:
+        return 0
+
+
+def _rrp_v158_reset_everything_to_xrpl(conn: sqlite3.Connection) -> Dict[str, int]:
+    """Borra descubrimientos/evidencias/cachés dinámicas. No toca comunidad, presupuesto ni configuración."""
+    _rrp_v158_prune_static_map_to_xrpl()
+    reset_tables = [
+        "dynamic_routes", "dynamic_nodes", "connection_proofs", "route_paths", "node_verifications",
+        "map_update_log", "institution_search_cache", "search_cache_aliases", "api_search_audit",
+        "sanitizer_quarantine", "discovery_documents", "discovered_wallets", "unknown_whales",
+        "wallet_links", "wallet_routes", "route_evidence", "document_cache", "pdf_cache",
+    ]
+    counts: Dict[str, int] = {}
+    for table in reset_tables:
+        try:
+            if _rrp_v158_table_exists(conn, table):
+                before = _rrp_v158_count_table(conn, table)
+                conn.execute(f"DELETE FROM {table}")
+                counts[table] = before
+        except Exception as e:
+            counts[table + "_err"] = 1
+    try:
+        conn.commit()
+    except Exception:
+        pass
+
+    # Limpiar estado visual antiguo de Streamlit.
+    for k in list(st.session_state.keys()):
+        ks = str(k)
+        if any(token in ks for token in [
+            "rrp_simple_", "disc_", "cascade", "focused", "selected_node", "node_focus",
+            "rrp_v", "cache_probe", "manual_rebuild", "route_focus",
+        ]):
+            try:
+                del st.session_state[k]
+            except Exception:
+                pass
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+    try:
+        _rrp_v158_ensure_document_tables(conn)
+    except Exception:
+        pass
+    return counts
+
+
+def _rrp_v158_counts_summary(conn: sqlite3.Connection) -> str:
+    tables = ["dynamic_nodes", "dynamic_routes", "connection_proofs", "route_paths", "discovery_documents", "institution_search_cache"]
+    return " · ".join(f"{t}: {_rrp_v158_count_table(conn, t)}" for t in tables)
+
+
+def _rrp_v158_render_reset_panel(conn: sqlite3.Connection) -> None:
+    """Panel siempre visible en Descubrimientos. Si la sesión admin falla, permite PIN admin."""
+    with st.container(border=True):
+        st.markdown("### 🧨 Reset limpio del radar")
+        st.warning("Borra todos los nodos/rutas/pruebas/cachés dinámicas y deja el mapa inicial con **solo XRPL**. Las rutas fijas quedan anuladas por código.")
+        st.caption("Datos actuales: " + _rrp_v158_counts_summary(conn))
+        c1, c2 = st.columns([1, 1])
+        confirm = c1.text_input("Para confirmar escribe: BORRAR", key="v158_reset_confirm", placeholder="BORRAR")
+        admin_pin = c2.text_input("PIN admin si la sesión no lo detecta", key="v158_reset_pin", type="password", placeholder="741258")
+        try:
+            is_admin = bool(_is_admin_session(conn) or _is_admin_unlimited_ai(conn))
+        except Exception:
+            is_admin = False
+        pin_ok = str(admin_pin or "") == str(globals().get("ADMIN_PASSWORD", "741258"))
+        if st.button("🧨 BORRAR TODO Y DEJAR SOLO XRPL", key="v158_reset_everything_xrpl", type="primary", use_container_width=True):
+            if str(confirm or "").strip().upper() != "BORRAR":
+                st.error("Escribe BORRAR para confirmar.")
+            elif not (is_admin or pin_ok):
+                st.error("Necesitas sesión admin o PIN admin para resetear.")
+            else:
+                counts = _rrp_v158_reset_everything_to_xrpl(conn)
+                st.success("Reset hecho. Borrado: " + ", ".join(f"{k}={v}" for k, v in counts.items() if v))
+                st.info("Ahora el mapa queda con XRPL como único núcleo. Empieza con una búsqueda documental normal.")
+                st.rerun()
+
+
+def _rrp_v156_render_result_clean(result: Dict[str, Any], conn: sqlite3.Connection, index: int = 0) -> None:
+    """Render limpio v158: PDFs/fuentes visibles y botón único para todos los nodos derivados."""
+    if not isinstance(result, dict):
+        return
+    name = _canonical_entity_name(result.get("institution") or result.get("query") or "")
+    conf = float(result.get("confidence", 0) or 0)
+    routes = _rrp_v156_result_routes(_rrp_v157_filter_document_routes(result))
+    docs = _rrp_v157_document_rows_for_result(conn, result)
+    source = result.get("_simple_source") or "manual"
+    parent = result.get("_simple_parent") or ""
+    icon = str(result.get("icon") or (NODES.get(name, {}) or {}).get("icon") or "🔎")
+    badge = "✅ rutas documentales" if routes else "👁 sin ruta documental guardable"
+    title_prefix = "🔍 Búsqueda" if source == "initial" else "🔗 Cascada"
+    parent_txt = f" · desde {parent}" if parent else ""
+    with st.container(border=True):
+        st.markdown(f"### {title_prefix} — {icon} {name} · {badge} · {conf:.0%}{parent_txt}")
+        st.write(str(result.get("summary") or "Sin resumen disponible."))
+        ev = result.get("evidence_items") or []
+        pdf_count = sum(1 for d in docs if int(d.get("is_pdf", 0)) == 1)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Pruebas", len(ev))
+        c2.metric("PDFs", pdf_count)
+        c3.metric("Fuentes guardadas", len(docs))
+        c4.metric("Rutas documentales", len(routes))
+
+        if docs:
+            with st.expander(f"📄 PDFs/fuentes detectadas y guardadas ({len(docs)})", expanded=True):
+                for j, d in enumerate(docs[:60], 1):
+                    title = html.escape(str(d.get("title") or "Documento/fuente"))
+                    typ = html.escape(str(d.get("doc_type") or "source"))
+                    claim = html.escape(str(d.get("claim") or ""))
+                    url = str(d.get("url") or "")
+                    badge_pdf = "📄 PDF" if int(d.get("is_pdf", 0)) else "🔗 Fuente"
+                    st.markdown(f"**{j}. {badge_pdf} · {title}** · `{typ}`")
+                    if claim:
+                        st.caption(claim[:850])
+                    if url.startswith("http"):
+                        st.markdown(f"[Abrir documento/fuente]({url})")
+        else:
+            st.info("No hay PDFs/fuentes guardadas todavía para esta búsqueda.")
+
+        if routes:
+            st.markdown("**🧭 Rutas documentales que se guardan en el mapa**")
+            for r in routes[:30]:
+                st.markdown(f"✅ `{r.get('src')}` → `{r.get('dst')}` · **{r.get('kind')}** · {float(r.get('confidence') or 0):.0%}")
+                if r.get("claim"):
+                    st.caption(str(r.get("claim"))[:500])
+        else:
+            reason = str(result.get("_v157_route_filter_reason") or "sin ruta documental suficiente")
+            st.info(f"No se dibuja ninguna línea todavía: {reason}. No se inventa conexión.")
+
+        if ev:
+            with st.expander("🧾 Pruebas detectadas", expanded=False):
+                for e in ev[:30]:
+                    if isinstance(e, dict):
+                        title = str(e.get("title") or e.get("source") or "Prueba")
+                        typ = str(e.get("evidence_type") or e.get("type") or "evidence")
+                        claim = str(e.get("claim") or e.get("summary") or "")
+                        url = str(e.get("url") or "")
+                        st.markdown(f"- **{title}** · `{typ}` — {claim[:700]}")
+                        if url.startswith("http"):
+                            st.caption(url)
+
+        derived = _rrp_v156_derived_nodes(result, limit=40)
+        if derived:
+            with st.expander(f"🧩 Nodos detectados para cascada ({len(derived)})", expanded=True):
+                st.caption("Botón único: se añaden todos a la cola. La cascada sigue hasta que no haya más nodos nuevos.")
+                for d in derived[:40]:
+                    st.markdown(f"- **{d.get('name')}** — {d.get('reason','')}")
+                if st.button("🚀 Investigar TODOS los nodos detectados", key=f"v158_enqueue_all_{index}_{_canonical_entity_key(name)}", use_container_width=True):
+                    added = _rrp_v157_enqueue_many(result, limit=40)
+                    st.success(f"Añadidos a cascada: {added}. Ahora pulsa 'Continuar cascada automática'.")
+                    st.rerun()
+
+
+def render_discovery_engine(conn: sqlite3.Connection) -> None:
+    _rrp_v158_prune_static_map_to_xrpl()
+    try:
+        _rrp_v158_ensure_document_tables(conn)
+    except Exception:
+        pass
+    st.subheader("Discovery Engine — XRPL como único núcleo")
+    st.caption("Sin rutas fijas y sin nodos heredados. Todo nodo/ruta nace de documentos, PDFs, fuentes oficiales o señales on-chain investigadas.")
+
+    _rrp_v158_render_reset_panel(conn)
+
+    st.markdown("### 🔎 Búsqueda documental normal")
+    st.caption("Busca una institución, documento, nodo o relación. Si salen 5 nodos, usa el botón único para investigarlos todos en cascada.")
+    q_default = str(st.session_state.get("rrp_simple_search_input", "") or "")
+    query = st.text_input("Buscar", value=q_default, key="rrp_simple_search_input", placeholder="Ej: xrpledger, RLUSD, Ripple CBDC Platform XRPL, SWIFT Ripple Treasury")
+    try:
+        _render_cache_first_status(conn, query, "discovery")
+    except Exception:
+        pass
+    c1, c2, c3 = st.columns([1.2, 1.2, 1])
+    use_cache = c1.checkbox("💾 Caché primero", value=True, key="v158_use_cache")
+    force_online = c2.checkbox("🌐 Buscar novedades", value=False, key="v158_force_online")
+    clear_flow = c3.checkbox("🧹 Nuevo flujo", value=False, key="v158_new_flow")
+    b1, b2 = st.columns(2)
+    if b1.button("🔎 Buscar y validar por documentos", key="v158_search_normal", use_container_width=True):
+        if not query.strip():
+            st.warning("Escribe algo para buscar.")
+        else:
+            if clear_flow:
+                st.session_state["rrp_simple_flow"] = []
+                st.session_state["rrp_simple_queue"] = []
+            with st.spinner(f"Investigando {query.strip()}..."):
+                _rrp_v156_run_and_store(conn, query.strip(), parent="", force_online=force_online, use_cache=use_cache, source="initial")
+            st.rerun()
+    if b2.button("🚀 Buscar + cascada automática hasta agotarse", key="v158_search_and_auto", use_container_width=True):
+        if not query.strip():
+            st.warning("Escribe algo para buscar.")
+        else:
+            if clear_flow:
+                st.session_state["rrp_simple_flow"] = []
+                st.session_state["rrp_simple_queue"] = []
+            with st.spinner(f"Investigando {query.strip()} y cascada..."):
+                _rrp_v156_run_and_store(conn, query.strip(), parent="", force_online=force_online, use_cache=use_cache, source="initial")
+                total = 0
+                for _ in range(5):
+                    n = _rrp_v157_run_auto_cascade(conn, max_steps=25)
+                    total += int(n or 0)
+                    if not list(st.session_state.get("rrp_simple_queue", []) or []):
+                        break
+            st.success(f"Búsqueda inicial + cascada procesada: {total} pasos.")
+            st.rerun()
+
+    _render_discovery_investigation_flow(conn)
+
+
 try:
-    _rrp_v157_prune_static_map_to_xrpl()
-    _rrp_v157_ensure_document_tables(get_conn())
+    _rrp_v158_prune_static_map_to_xrpl()
+    _rrp_v158_ensure_document_tables(get_conn())
 except Exception:
     pass
 
 
 if __name__ == "__main__":
-    _rrp_v157_prune_static_map_to_xrpl()
+    _rrp_v158_prune_static_map_to_xrpl()
     main()
