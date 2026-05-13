@@ -31337,6 +31337,567 @@ def _rrp_v166_pending_route_count(conn: sqlite3.Connection, focus_node: str) -> 
             n += 1
     return n
 
+
+
+# =============================================================================
+# v167 · SOURCE ROUTE EXPANSION + OFFICIAL EVIDENCE BUNDLING FIX
+# =============================================================================
+# Objetivo:
+# - No quedarse solo en 3 rutas XRPL básicas si hay fuentes oficiales adicionales.
+# - Convertir fuentes oficiales XRPL/Ripple/RLUSD en rutas técnicas claras.
+# - Agrupar varias fuentes por la misma ruta, en vez de crear duplicados o perder URLs.
+# - Mantener fuera fuentes secundarias/no oficiales como CoinMarketCap, Vercel, Oobit,
+#   Trustlines Network, wallets de terceros, etc. como contexto, no como ruta fuerte.
+# =============================================================================
+
+BUILD_ID = "v167_2026_05_13_SOURCE_ROUTE_EXPANSION"
+BUILD_NOTE = "fuentes oficiales a rutas · evidencias agrupadas · RLUSD/XRPL técnico"
+VERSION = "Route Path Intelligence v6.2.3 PRO — XRPL Core · Source Route Expansion v167"
+
+_RRP_V167_OFFICIAL_DOMAINS = (
+    "xrpl.org", "docs.xrpl.org", "developers.ripple.com", "docs.ripple.com",
+    "ripple.com", "engineering.ripple.com", "opensource.ripple.com",
+)
+
+_RRP_V167_CONTEXT_ONLY_DOMAINS = (
+    "coinmarketcap.com", "oobit.com", "rlusd.vercel.app", "vercel.app",
+    "trustlines.network", "blog.trustlines.network", "docs.trustlines.network",
+    "xrptoolkit.com", "dcentwallet.com", "userguide.dcentwallet.com",
+)
+
+
+def _rrp_v167_blob(d: Dict[str, Any]) -> str:
+    try:
+        raw = _rrp_v165_doc_blob(d)
+    except Exception:
+        raw = "\n".join(str((d or {}).get(k) or "") for k in ("title", "claim", "summary", "description", "url", "source_url", "doc_type", "source"))
+    return str(raw or "")
+
+
+def _rrp_v167_url(d: Dict[str, Any]) -> str:
+    try:
+        return _rrp_v165_url(d)
+    except Exception:
+        return str((d or {}).get("url") or (d or {}).get("source_url") or "")
+
+
+def _rrp_v167_is_context_only(url: str) -> bool:
+    u = str(url or "").lower()
+    return any(dom in u for dom in _RRP_V167_CONTEXT_ONLY_DOMAINS)
+
+
+def _rrp_v167_is_official(url: str, blob: str = "") -> bool:
+    u = str(url or "").lower()
+    b = str(blob or "").lower()
+    if _rrp_v167_is_context_only(u):
+        return False
+    if any(dom in u for dom in _RRP_V167_OFFICIAL_DOMAINS):
+        return True
+    # PDFs de Ripple a veces entran solo como título/claim sin dominio limpio.
+    return ("ripple" in b and "whitepaper" in b and ("rlusd" in b or "ripple usd" in b))
+
+
+def _rrp_v167_route_k(src: Any, dst: Any, kind: Any) -> str:
+    return _norm_key(f"{_rrp_v164_norm_node(src)}|{_rrp_v164_norm_node(dst)}|{str(kind or '').strip()}")
+
+
+def _rrp_v167_add_or_merge(routes_by_key: Dict[str, Dict[str, Any]], *, src: str, dst: str, kind: str, confidence: float, claim: str, url: str = "", source_title: str = "") -> None:
+    src = _rrp_v164_norm_node(src)
+    dst = _rrp_v164_norm_node(dst)
+    if not src or not dst or src == dst:
+        return
+    try:
+        if _rrp_v161_is_internal_node(src) or _rrp_v161_is_internal_node(dst):
+            return
+    except Exception:
+        pass
+    k = _rrp_v167_route_k(src, dst, kind)
+    r = routes_by_key.get(k)
+    if not r:
+        r = {
+            "src": src, "dst": dst, "kind": kind,
+            "confidence": float(confidence or 0),
+            "claim": str(claim or "")[:1800],
+            "url": url or "", "source_url": url or "",
+            "source_title": source_title or "",
+            "source_urls": [], "source_titles": [],
+            "status": "documented",
+        }
+        routes_by_key[k] = r
+    else:
+        r["confidence"] = max(float(r.get("confidence") or 0), float(confidence or 0))
+        if claim and str(claim) not in str(r.get("claim") or ""):
+            r["claim"] = (str(r.get("claim") or "") + "\n" + str(claim))[:2200]
+    if url and str(url).startswith("http") and url not in r.setdefault("source_urls", []):
+        r["source_urls"].append(url)
+        if not r.get("url"):
+            r["url"] = url
+            r["source_url"] = url
+    if source_title and source_title not in r.setdefault("source_titles", []):
+        r["source_titles"].append(source_title)
+        if not r.get("source_title"):
+            r["source_title"] = source_title
+
+
+def _rrp_v165_infer_routes_from_docs(docs: List[Dict[str, Any]], flow: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    """v167: inferencia oficial amplia pero segura.
+
+    Devuelve rutas técnicas directas cuando una fuente oficial valida claramente una
+    feature XRPL o una relación RLUSD↔XRPL. Las fuentes secundarias se ignoran para
+    autoguardado: quedan solo en documentos/contexto.
+    """
+    routes_by_key: Dict[str, Dict[str, Any]] = {}
+    for d in docs or []:
+        if not isinstance(d, dict):
+            continue
+        url = _rrp_v167_url(d)
+        blob = _rrp_v167_blob(d)
+        b = blob.lower()
+        u = str(url or "").lower()
+        title = str(d.get("title") or d.get("name") or "")
+        if not _rrp_v167_is_official(u, b):
+            continue
+
+        # DEX / AMM official route. engineering/open-source Ripple reports count as extra evidence.
+        if (
+            "decentralized-exchange" in u or "decentralised-exchange" in u or
+            "automated-market-makers" in u or "xls-30" in u or
+            " amm" in f" {b}" or "automated market maker" in b or
+            "decentralized exchange" in b or "decentralised exchange" in b or
+            "institutional defi" in b
+        ):
+            _rrp_v167_add_or_merge(
+                routes_by_key, src="XRPL", dst="DEX/AMM", kind="official_protocol_feature", confidence=0.88,
+                claim="Fuentes oficiales XRPL/Ripple describen DEX/AMM/AMM como funcionalidad técnica del XRP Ledger. Es ruta técnica de protocolo, no prueba de adopción institucional.",
+                url=url, source_title=title,
+            )
+
+        # Issued currencies / fungible tokens / token model.
+        if (
+            "fungible-tokens" in u or "issued-currencies" in u or "issued-currencies" in b or
+            "issued currencies" in b or "issued currency" in b or "fungible tokens" in b or
+            ("tokens" in u and "xrpl" in b)
+        ):
+            _rrp_v167_add_or_merge(
+                routes_by_key, src="XRPL", dst="Issued Currencies", kind="official_protocol_feature", confidence=0.86,
+                claim="Fuentes oficiales describen issued currencies/fungible tokens como funcionalidad del XRP Ledger.",
+                url=url, source_title=title,
+            )
+
+        # Trustlines official route. Evitar Trustlines Network: no es la feature XRPL.
+        if (
+            "trustline" in b or "trust line" in b or "authorized trust" in b or
+            "freeze a trust" in b or "trust-line" in u or "trustlines" in u
+        ) and "trustlines.network" not in u:
+            _rrp_v167_add_or_merge(
+                routes_by_key, src="XRPL", dst="Trustlines", kind="official_protocol_feature", confidence=0.86,
+                claim="Fuentes oficiales XRPL/Ripple describen trust lines como mecanismo técnico del ledger para tokens/issued currencies.",
+                url=url, source_title=title,
+            )
+            # Relación técnica interna: issued currencies se materializan vía trust lines.
+            _rrp_v167_add_or_merge(
+                routes_by_key, src="Issued Currencies", dst="Trustlines", kind="technical_protocol_dependency", confidence=0.82,
+                claim="La documentación del XRP Ledger vincula las issued currencies/tokens con trust lines. Es dependencia técnica, no adopción institucional.",
+                url=url, source_title=title,
+            )
+
+        # RLUSD official sources. Exigir fuente Ripple/docs/whitepaper. Si la metadata no contiene XRPL
+        # pero el documento oficial es conocido por RLUSD, se guarda como técnica con lectura prudente.
+        is_official_rlusd = (
+            ("rlusd" in b or "ripple usd" in b or "ripple-usd" in u) and
+            ("ripple.com" in u or "docs.ripple.com" in u or "whitepaper" in b)
+        )
+        mentions_xrpl = ("xrpl" in b or "xrp ledger" in b or "on the xrpl" in b or "xrp-ledger" in u)
+        if is_official_rlusd and (mentions_xrpl or "whitepaper" in b or "ripple usd launches globally" in b):
+            _rrp_v167_add_or_merge(
+                routes_by_key, src="RLUSD", dst="XRPL", kind="official_stablecoin_on_xrpl", confidence=0.88,
+                claim="Fuente oficial de Ripple/docs/whitepaper sobre RLUSD indica relación técnica con XRP Ledger/XRPL. No prueba adopción bancaria concreta.",
+                url=url, source_title=title,
+            )
+            _rrp_v167_add_or_merge(
+                routes_by_key, src="RLUSD", dst="Issued Currencies", kind="official_issuer_documentation", confidence=0.82,
+                claim="RLUSD se trata como token/stablecoin emitido en el entorno XRPL; ruta técnica hacia issued currencies. No implica uso institucional.",
+                url=url, source_title=title,
+            )
+            _rrp_v167_add_or_merge(
+                routes_by_key, src="RLUSD", dst="Trustlines", kind="technical_protocol_dependency", confidence=0.78,
+                claim="Si RLUSD se emite en XRPL como token/issued currency, su vigilancia on-chain pasa por trust lines. Ruta técnica/deductiva, no prueba bancaria.",
+                url=url, source_title=title,
+            )
+            if "ethereum" in b:
+                _rrp_v167_add_or_merge(
+                    routes_by_key, src="RLUSD", dst="Ethereum", kind="official_multichain_issuance", confidence=0.78,
+                    claim="Fuente oficial de Ripple/docs menciona RLUSD también en Ethereum. Ruta técnica multired, no conexión institucional.",
+                    url=url, source_title=title,
+                )
+
+    # Orden lógico para el UI: núcleo XRPL primero, luego RLUSD.
+    order = {"XRPL": 0, "Issued Currencies": 1, "RLUSD": 2, "Ethereum": 3}
+    out = list(routes_by_key.values())
+    out.sort(key=lambda r: (order.get(str(r.get("src")), 9), str(r.get("src")), str(r.get("dst")), str(r.get("kind"))))
+    return out
+
+
+_ORIG_RRP_V165_MERGE_ROUTES_V167 = globals().get("_rrp_v165_merge_routes")
+def _rrp_v165_merge_routes(base_routes: List[Dict[str, Any]], extra_routes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """v167: merge agrupando URLs/evidencias por misma ruta."""
+    routes_by_key: Dict[str, Dict[str, Any]] = {}
+    for r in list(base_routes or []) + list(extra_routes or []):
+        if not isinstance(r, dict):
+            continue
+        src = _rrp_v164_norm_node(r.get("src") or r.get("source") or r.get("from_node"))
+        dst = _rrp_v164_norm_node(r.get("dst") or r.get("target") or r.get("to_node"))
+        kind = str(r.get("kind") or r.get("route_type") or r.get("evidence_type") or "documented")
+        if not src or not dst or src == dst:
+            continue
+        rr = dict(r)
+        rr["src"], rr["dst"], rr["kind"] = src, dst, kind
+        if not _rrp_v165_is_good_route(rr):
+            continue
+        urls = []
+        try:
+            raw_urls = r.get("source_urls") or []
+            if isinstance(raw_urls, str):
+                raw_urls = json.loads(raw_urls) if raw_urls.strip().startswith("[") else [raw_urls]
+            urls = [str(u) for u in raw_urls if str(u).startswith("http")]
+        except Exception:
+            urls = []
+        u = str(r.get("url") or r.get("source_url") or "")
+        if u.startswith("http") and u not in urls:
+            urls.insert(0, u)
+        title = str(r.get("source_title") or r.get("title") or "")
+        _rrp_v167_add_or_merge(
+            routes_by_key, src=src, dst=dst, kind=kind, confidence=float(r.get("confidence") or 0),
+            claim=str(r.get("claim") or r.get("evidence") or r.get("summary") or ""),
+            url=urls[0] if urls else "", source_title=title,
+        )
+        # Añadir URLs adicionales al registro ya creado.
+        rec = routes_by_key.get(_rrp_v167_route_k(src, dst, kind))
+        if rec:
+            for x in urls[1:]:
+                if x not in rec.setdefault("source_urls", []):
+                    rec["source_urls"].append(x)
+    return list(routes_by_key.values())
+
+
+_ORIG_RRP_V165_PERSIST_ROUTES_V167 = globals().get("_rrp_v165_persist_routes_from_flow")
+def _rrp_v165_persist_routes_from_flow(conn: sqlite3.Connection, routes: List[Dict[str, Any]]) -> int:
+    """v167: persistir una fila por ruta y guardar TODAS las URLs de evidencia."""
+    if not routes:
+        return 0
+    try:
+        ensure_discovery_tables(conn)
+    except Exception:
+        pass
+    added = 0
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        route_cols = {str(x[1]) for x in conn.execute("PRAGMA table_info(dynamic_routes)").fetchall()}
+    except Exception:
+        route_cols = set()
+    try:
+        node_cols = {str(x[1]) for x in conn.execute("PRAGMA table_info(dynamic_nodes)").fetchall()}
+    except Exception:
+        node_cols = set()
+
+    # Nodos dinámicos creados por rutas documentales.
+    for n in sorted({_rrp_v164_norm_node(x) for r in routes for x in (r.get("src"), r.get("dst")) if x}):
+        if not n or n == "XRPL":
+            continue
+        try:
+            if _rrp_v161_is_internal_node(n):
+                continue
+        except Exception:
+            pass
+        try:
+            layer, icon = "Descubierto", "🔎"
+            if callable(globals().get("_infer_layer_icon_from_name")):
+                layer, icon = _infer_layer_icon_from_name(n)
+            elif callable(globals().get("_classify_entity")):
+                layer = _classify_entity(n)
+            data = {
+                "node_id": _canonical_entity_key(n), "node": n, "name": n, "node_name": n, "label": n,
+                "layer": layer or "Descubierto", "icon": icon or "🔎", "confidence": 0.70,
+                "summary": "Nodo creado automáticamente por ruta documental del protocolo v167.",
+                "source_url": "", "added_at": now, "created_at": now, "updated_at": now,
+                "source": "v167_document_route", "status": "documented",
+            }
+            use = [c for c in data if c in node_cols]
+            if use:
+                conn.execute(f"INSERT OR REPLACE INTO dynamic_nodes ({','.join(use)}) VALUES ({','.join('?' for _ in use)})", tuple(data[c] for c in use))
+        except Exception:
+            pass
+
+    if route_cols:
+        for r in routes:
+            try:
+                src = _rrp_v164_norm_node(r.get("src")); dst = _rrp_v164_norm_node(r.get("dst"))
+                if not src or not dst or src == dst:
+                    continue
+                try:
+                    if _rrp_v161_is_internal_node(src) or _rrp_v161_is_internal_node(dst):
+                        continue
+                except Exception:
+                    pass
+                kind = str(r.get("kind") or "documented")
+                claim = str(r.get("claim") or r.get("evidence") or r.get("summary") or "")[:2200]
+                urls = []
+                raw_urls = r.get("source_urls") or []
+                if isinstance(raw_urls, str):
+                    try:
+                        raw_urls = json.loads(raw_urls) if raw_urls.strip().startswith("[") else [raw_urls]
+                    except Exception:
+                        raw_urls = [raw_urls]
+                for u in raw_urls:
+                    u = str(u or "").strip()
+                    if u.startswith("http") and u not in urls:
+                        urls.append(u)
+                u0 = str(r.get("url") or r.get("source_url") or "").strip()
+                if u0.startswith("http") and u0 not in urls:
+                    urls.insert(0, u0)
+                route_id = hashlib.sha256(f"v167|{src}|{dst}|{kind}".encode("utf-8")).hexdigest()[:24]
+                label = f"{src} → {dst}"
+                data = {
+                    "route_id": route_id, "src": src, "dst": dst, "source": src, "target": dst,
+                    "from_node": src, "to_node": dst, "kind": kind, "route_type": kind, "type": kind,
+                    "signal_col": "documental_score", "label": label,
+                    "confidence": float(r.get("confidence") or 0.0), "evidence": claim,
+                    "claim": claim, "summary": claim,
+                    "source_urls": json.dumps(urls[:16], ensure_ascii=False),
+                    "source_url": urls[0] if urls else "", "status": "documented",
+                    "added_at": now, "created_at": now, "updated_at": now,
+                }
+                use = [c for c in data if c in route_cols]
+                if use:
+                    conn.execute(f"INSERT OR REPLACE INTO dynamic_routes ({','.join(use)}) VALUES ({','.join('?' for _ in use)})", tuple(data[c] for c in use))
+                    added += 1
+            except Exception:
+                pass
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    return added
+
+
+
+# =============================================================================
+# v168 · VERIFICATION LEGEND + NODE PANEL DEDUP FIX
+# =============================================================================
+# Objetivo:
+# - Una ruta ya verificada desde dynamic_routes no debe seguir mostrando
+#   "❌ Sin evidencia verificable" en la leyenda del nodo.
+# - El panel del nodo no debe duplicar la misma línea como:
+#      official_protocol_feature + verified
+# - Las pruebas sintéticas creadas desde una ruta documental guardada son válidas
+#   para la UI aunque no tengan URL directa, siempre que vengan de dynamic_routes
+#   y tengan tipo de ruta oficial/documental.
+# =============================================================================
+
+BUILD_ID = "v168_2026_05_13_VERIFICATION_LEGEND_DEDUP"
+BUILD_NOTE = "leyenda verificada sin falsos negativos · dedupe panel nodo · pruebas dynamic_routes"
+VERSION = "Route Path Intelligence v6.2.3 PRO — XRPL Core · Verification Legend v168"
+
+_RRP_V168_ROUTE_EVIDENCE_TYPES = {
+    "official_protocol_feature",
+    "protocol_feature",
+    "official_docs",
+    "official_document",
+    "official_stablecoin_on_xrpl",
+    "official_dependency",
+    "technical_dependency",
+    "dynamic_route_evidence",
+    "documented_route",
+    "verified_documentary",
+    "source_route_expansion",
+}
+
+# Añadir pesos a tipos que el protocolo v165-v167 usa en dynamic_routes.
+try:
+    EVIDENCE_SCORES.update({
+        "official_protocol_feature": 0.88,
+        "protocol_feature": 0.86,
+        "official_docs": 0.82,
+        "official_document": 0.86,
+        "developer_documentation": 0.84,
+        "official_stablecoin_on_xrpl": 0.88,
+        "official_dependency": 0.84,
+        "technical_dependency": 0.78,
+        "dynamic_route_evidence": 0.74,
+        "documented_route": 0.76,
+        "verified_documentary": 0.86,
+        "source_route_expansion": 0.80,
+    })
+    EVIDENCE_LABELS.update({
+        "official_protocol_feature": "Función oficial del protocolo",
+        "protocol_feature": "Función del protocolo",
+        "official_docs": "Documentación oficial",
+        "official_document": "Documento oficial",
+        "developer_documentation": "Documentación técnica",
+        "official_stablecoin_on_xrpl": "Stablecoin oficial en XRPL",
+        "official_dependency": "Dependencia técnica oficial",
+        "technical_dependency": "Dependencia técnica",
+        "dynamic_route_evidence": "Ruta documental guardada",
+        "documented_route": "Ruta documental",
+        "verified_documentary": "Documental verificada",
+        "source_route_expansion": "Ruta extraída de fuente oficial",
+    })
+except Exception:
+    pass
+
+
+def _rrp_v168_blob_mentions_pair(blob: str, a: Any, b: Any) -> bool:
+    """Comprueba si una prueba sintética de ruta representa este par concreto."""
+    s = str(blob or "")
+    try:
+        if _blob_mentions_any(s, _entity_search_terms(a)) and _blob_mentions_any(s, _entity_search_terms(b)):
+            return True
+    except Exception:
+        pass
+    ak = _norm_key(a); bk = _norm_key(b); ns = _norm_key(s)
+    if ak and bk and ak in ns and bk in ns:
+        return True
+    # Las pruebas creadas por dynamic_routes suelen traer el par en el título/label.
+    for sep in ("→", "↔", "->", "<->"):
+        if sep in s and ak and bk and ak in ns and bk in ns:
+            return True
+    return False
+
+
+_ORIG_PROOF_RELEVANT_V168 = globals().get("_proof_relevant_to_pair")
+def _proof_relevant_to_pair(proof: Dict[str, Any], node_a: str, node_b: str) -> bool:
+    ptype = str((proof or {}).get("type", "") or "").strip().lower()
+    if callable(_ORIG_PROOF_RELEVANT_V168):
+        try:
+            if _ORIG_PROOF_RELEVANT_V168(proof, node_a, node_b):
+                return True
+        except Exception:
+            pass
+    # Excepción controlada: evidencia que nace de una ruta documental YA guardada.
+    # No es una noticia externa sin URL; es el resumen de una ruta persistida en dynamic_routes.
+    if ptype in _RRP_V168_ROUTE_EVIDENCE_TYPES:
+        blob = _proof_text_blob(proof) if callable(globals().get("_proof_text_blob")) else " ".join(str((proof or {}).get(k, "")) for k in ("label", "title", "snippet"))
+        if _rrp_v168_blob_mentions_pair(blob, node_a, node_b):
+            return True
+    return False
+
+
+_ORIG_PROOF_QUALITY_MULT_V168 = globals().get("_proof_quality_multiplier")
+def _proof_quality_multiplier(proof: Dict[str, Any], node_a: Any = "", node_b: Any = "") -> float:
+    ptype = str((proof or {}).get("type", "") or "").strip().lower()
+    # Para pruebas derivadas de dynamic_routes sin URL, usar confianza documental controlada.
+    if ptype in _RRP_V168_ROUTE_EVIDENCE_TYPES:
+        blob = _proof_text_blob(proof) if callable(globals().get("_proof_text_blob")) else " ".join(str((proof or {}).get(k, "")) for k in ("label", "title", "snippet"))
+        if _rrp_v168_blob_mentions_pair(blob, node_a, node_b) or "ruta documental guardada" in str(blob).lower():
+            if ptype in {"official_protocol_feature", "official_stablecoin_on_xrpl"}:
+                return 1.0
+            if ptype in {"official_dependency", "official_docs", "official_document", "developer_documentation"}:
+                return 0.92
+            return 0.82
+    if callable(_ORIG_PROOF_QUALITY_MULT_V168):
+        try:
+            return _ORIG_PROOF_QUALITY_MULT_V168(proof, node_a, node_b)
+        except Exception:
+            return 0.0
+    return 0.0
+
+
+_ORIG_CAP_SCORE_V168 = globals().get("_cap_score_by_source_mix")
+def _cap_score_by_source_mix(score: float, proofs: List[Dict[str, Any]]) -> float:
+    try:
+        types = {str((p or {}).get("type", "") or "").strip().lower() for p in (proofs or []) if isinstance(p, dict)}
+        if types & _RRP_V168_ROUTE_EVIDENCE_TYPES:
+            # Si la ruta ya fue guardada como documental, no caparla a 32% por no tener URL.
+            if types & {"official_protocol_feature", "official_stablecoin_on_xrpl"}:
+                return min(float(score), 0.88)
+            if types & {"official_dependency", "official_docs", "official_document", "developer_documentation"}:
+                return min(float(score), 0.84)
+            return min(float(score), 0.76)
+    except Exception:
+        pass
+    if callable(_ORIG_CAP_SCORE_V168):
+        try:
+            return _ORIG_CAP_SCORE_V168(score, proofs)
+        except Exception:
+            pass
+    return float(score or 0.0)
+
+
+# Dedupe de rutas para la ficha del nodo. Evita que una ruta salga dos veces como
+# "official_protocol_feature" y como "verified" al mismo tiempo.
+def _rrp_v168_route_preference(kind: Any) -> int:
+    k = str(kind or "").strip().lower()
+    if k in {"official_protocol_feature", "official_stablecoin_on_xrpl", "official_dependency", "official_docs", "official_document"}:
+        return 100
+    if k in {"verified_documentary", "documented_route", "documented", "source_route_expansion"}:
+        return 90
+    if k == "verified":
+        return 70
+    if k in {"weak_evidence", "review", "candidate"}:
+        return 40
+    return 60
+
+
+def _rrp_v168_dedupe_routes_for_node_panel(routes: Any) -> List[Any]:
+    if not isinstance(routes, (list, tuple)):
+        return routes
+    best: Dict[Tuple[str, str], Any] = {}
+    best_score: Dict[Tuple[str, str], Tuple[int, float]] = {}
+    out_order: List[Tuple[str, str]] = []
+    for r in routes:
+        try:
+            src, dst, kind = str(r[0]), str(r[1]), str(r[2])
+            key = (_canonical_entity_key(src), _canonical_entity_key(dst))
+            pref = _rrp_v168_route_preference(kind)
+            conf = 0.0
+            # Algunas rutas guardan confianza en r[3], otras traen texto. Intento seguro.
+            try:
+                conf = float(r[3] or 0.0)
+            except Exception:
+                try:
+                    conf = float(r[4] or 0.0)
+                except Exception:
+                    conf = 0.0
+            score = (pref, conf)
+            if key not in best:
+                best[key] = r; best_score[key] = score; out_order.append(key)
+            else:
+                old = best[key]
+                old_kind = str(old[2] if len(old) > 2 else "")
+                # Si una ruta específica y una generic "verified" representan lo mismo,
+                # conservar la específica. El badge ya se encargará de marcarla verificada.
+                if score > best_score[key]:
+                    best[key] = r; best_score[key] = score
+        except Exception:
+            # conservar objetos raros sin romper
+            k = (str(len(out_order)), str(id(r)))
+            best[k] = r; best_score[k] = (0, 0.0); out_order.append(k)
+    return [best[k] for k in out_order if k in best]
+
+
+_ORIG_RENDER_NODE_INFO_PANEL_V168 = globals().get("render_node_info_panel")
+def render_node_info_panel(*args, **kwargs) -> None:
+    """v168: misma ficha, pero sin duplicados y sin falsos 'no verificado'."""
+    try:
+        # Firma dominante: (focus_node, row, conn, all_routes, all_nodes)
+        args = list(args)
+        if len(args) >= 4:
+            args[3] = _rrp_v168_dedupe_routes_for_node_panel(args[3])
+        elif "all_routes" in kwargs:
+            kwargs["all_routes"] = _rrp_v168_dedupe_routes_for_node_panel(kwargs.get("all_routes"))
+    except Exception:
+        pass
+    if callable(_ORIG_RENDER_NODE_INFO_PANEL_V168):
+        return _ORIG_RENDER_NODE_INFO_PANEL_V168(*args, **kwargs)
+    st.warning("Panel de nodo no disponible.")
+
+
+# Limpieza opcional: si ya existen filas antiguas generadas como kind='verified'
+# duplicando exactamente una ruta documental más específica, no las borra de la BD
+# porque pueden ser útiles como connection_proofs; solo el panel las deduplica.
+
+
+
 if __name__ == "__main__":
     _rrp_v158_prune_static_map_to_xrpl()
     main()
