@@ -29097,6 +29097,363 @@ except Exception:
     pass
 
 
+
+# =============================================================================
+# v162 · BALANCED DISCOVERY SEARCH
+# =============================================================================
+# Objetivo:
+# - No volver al ruido de rutas fijas ni falsos positivos.
+# - No bloquear la cascada cuando la fuente es oficial y el documento define
+#   claramente una funcionalidad/protocolo del nodo investigado.
+# - Separar dos carriles:
+#   1) RUTA AL MAPA: exige prueba documental clara.
+#   2) CASCADA: puede nacer de documentos oficiales/primarios aunque todavía no
+#      sea una relación institucional operativa.
+try:
+    VERSION = "Route Path Intelligence v6.2.3 PRO — XRPL Core · Balanced Discovery · v162"
+    BUILD_ID = "v162_2026_05_13_BALANCED_DISCOVERY_SEARCH_FIX"
+    BUILD_NOTE = "Buscador equilibrado: documentos oficiales generan cascada; mapa solo con rutas documentadas."
+except Exception:
+    pass
+
+RRP_V162_BUILD = "v162_2026_05_13_BALANCED_DISCOVERY_SEARCH_FIX"
+
+# En v161 algunos nodos públicos/protocolo quedaron bloqueados como motores internos.
+# En v162 se permite investigarlos cuando salen de documentación oficial.
+_RRP_V162_TRUE_INTERNAL_NODES: Set[str] = {
+    "Topology Engine", "Anomaly Engine", "Fingerprint Engine", "Clusters", "Public Gateway",
+}
+_RRP_V162_PROTOCOL_FEATURES: Set[str] = {
+    "DEX/AMM", "Trustlines", "Issued Currencies", "AMM", "Decentralized Exchange",
+    "Payment Channels", "Escrow", "Checks", "Clawback", "Credentials", "RLUSD",
+}
+try:
+    _RRP_V162_TRUE_INTERNAL_KEYS = {_canonical_entity_key(x) for x in _RRP_V162_TRUE_INTERNAL_NODES}
+    _RRP_V162_PROTOCOL_KEYS = {_canonical_entity_key(x) for x in _RRP_V162_PROTOCOL_FEATURES}
+except Exception:
+    _RRP_V162_TRUE_INTERNAL_KEYS = set()
+    _RRP_V162_PROTOCOL_KEYS = set()
+
+# Override: solo bloqueamos motores internos reales. Las features públicas pueden entrar en cascada.
+def _rrp_v161_is_internal_node(name: Any) -> bool:
+    try:
+        k = _canonical_entity_key(_canonical_entity_name(name))
+        return k in _RRP_V162_TRUE_INTERNAL_KEYS
+    except Exception:
+        return False
+
+
+def _rrp_v162_is_protocol_feature(name: Any) -> bool:
+    try:
+        k = _canonical_entity_key(_canonical_entity_name(name))
+        return k in _RRP_V162_PROTOCOL_KEYS
+    except Exception:
+        return False
+
+
+def _rrp_v161_entity_tokens(name: Any) -> List[str]:
+    """Alias más amplios para que las fuentes oficiales XRPL sí puedan validar cascada.
+
+    Ejemplo: si el destino es DEX/AMM, la fuente puede decir 'Decentralized Exchange',
+    'Automated Market Maker' o 'AMM', no necesariamente el literal 'DEX/AMM'.
+    """
+    canon = _canonical_entity_name(name)
+    raw = str(name or "")
+    candidates = [canon, raw]
+    aliases: List[str] = []
+    if canon == "XRPL":
+        aliases = ["XRPL", "XRP Ledger", "xrpl.org", "docs.xrpl.org", "XRP Ledger protocol"]
+    elif canon == "RLUSD":
+        aliases = ["RLUSD", "Ripple USD", "Ripple USD stablecoin", "RLUSD stablecoin"]
+    elif canon == "Treasury":
+        aliases = ["Treasury", "Ripple Treasury", "GTreasury", "G Treasury"]
+    elif canon == "Ripple CBDC Platform":
+        aliases = ["Ripple CBDC Platform", "CBDC Platform", "Ripple CBDC"]
+    elif canon == "Banco de la República":
+        aliases = ["Banco de la República", "Banco de la Republica", "BanRep", "Colombia"]
+    elif canon == "DEX/AMM":
+        aliases = [
+            "DEX/AMM", "DEX", "AMM", "decentralized exchange", "decentralised exchange",
+            "automated market maker", "automated market makers", "XLS-30", "liquidity pool",
+        ]
+    elif canon == "Trustlines":
+        aliases = ["Trustlines", "Trust Lines", "trust line", "trustline", "trust lines", "authorized trust line"]
+    elif canon == "Issued Currencies":
+        aliases = ["Issued Currencies", "issued currency", "fungible tokens", "tokenized assets", "IOU", "IOUs"]
+    elif canon == "Payment Channels":
+        aliases = ["Payment Channels", "payment channel", "PayChan"]
+    elif canon == "Escrow":
+        aliases = ["Escrow", "escrowed XRP", "time-based escrow", "conditional escrow"]
+    elif canon == "Clawback":
+        aliases = ["Clawback", "claw back", "token clawback"]
+    candidates.extend(aliases)
+    out: List[str] = []
+    for c in candidates:
+        c = str(c or "").strip()
+        if c and c.lower() not in {"source", "sources", "document", "documents"} and c not in out:
+            out.append(c)
+    return out
+
+
+def _rrp_v161_is_allowed_doc_type(kind: Any, status: Any = "") -> bool:
+    k = str(kind or "").strip().lower()
+    stt = str(status or "").strip().lower()
+    try:
+        allowed = set(_RRP_V157_DOC_ROUTE_TYPES)
+    except Exception:
+        allowed = set()
+    allowed.update({
+        "official", "official_source", "official_announcement", "official_partner", "primary_source",
+        "partner_page", "case_study", "partner_case_study", "press_release", "filing",
+        "regulatory_filing", "central_bank_pdf", "official_pdf", "official_document",
+        "technology_basis", "documented_product_platform", "documented_pilot", "pilot",
+        "official_docs", "official_protocol_feature", "protocol_feature", "protocol_documentation",
+        "developer_documentation", "technical_documentation",
+    })
+    return k in allowed or stt in {"map", "confirmed", "documented", "verified"}
+
+
+def _rrp_v162_official_xrpl_root_result(query: Any = "XRPL") -> Dict[str, Any]:
+    """Resultado semilla equilibrado para XRPL.
+
+    No inventa relaciones institucionales. Sí reconoce que la documentación oficial
+    de XRPL define features verificables y, por tanto, puede abrir cascada desde ellas.
+    """
+    return {
+        "institution": "XRPL",
+        "query": str(query or "XRPL"),
+        "icon": "💧",
+        "entity_type": "Público",
+        "layer": "Público",
+        "connected": True,
+        "confidence": 0.86,
+        "summary": (
+            "XRPL es el núcleo público del radar. La búsqueda inicial no debe crear relaciones "
+            "institucionales por defecto, pero la documentación oficial sí valida funcionalidades "
+            "del propio ledger como DEX/AMM, Trustlines e issued currencies. Esas funcionalidades "
+            "pueden abrir cascada documental sin afirmar uso operativo por bancos o entidades privadas."
+        ),
+        "evidence_items": [
+            {
+                "title": "XRPL official documentation",
+                "evidence_type": "official_docs",
+                "claim": "Documentación oficial del XRP Ledger; punto base para validar funcionalidades del protocolo.",
+                "url": "https://xrpl.org/docs",
+            },
+            {
+                "title": "XRPL Decentralized Exchange",
+                "evidence_type": "official_protocol_feature",
+                "claim": "La documentación oficial describe el decentralized exchange del XRP Ledger.",
+                "url": "https://xrpl.org/docs/concepts/tokens/decentralized-exchange",
+            },
+            {
+                "title": "XRPL Automated Market Makers",
+                "evidence_type": "official_protocol_feature",
+                "claim": "La documentación oficial describe los AMM como funcionalidad de liquidez del XRP Ledger.",
+                "url": "https://xrpl.org/docs/concepts/tokens/decentralized-exchange/automated-market-makers",
+            },
+            {
+                "title": "XRPL Fungible Tokens / Issued Currencies",
+                "evidence_type": "official_protocol_feature",
+                "claim": "La documentación oficial describe tokens fungibles/issued currencies mediante trust lines en XRP Ledger.",
+                "url": "https://xrpl.org/docs/concepts/tokens/fungible-tokens",
+            },
+        ],
+        "route_decisions": [
+            {
+                "to": "DEX/AMM",
+                "evidence_type": "official_protocol_feature",
+                "confidence": 0.86,
+                "claim": "La documentación oficial de XRP Ledger describe el decentralized exchange y AMM como funcionalidades del ledger. No prueba uso institucional; abre investigación de liquidez on-chain.",
+                "status": "documented",
+            },
+            {
+                "to": "Trustlines",
+                "evidence_type": "official_protocol_feature",
+                "confidence": 0.84,
+                "claim": "La documentación oficial de XRP Ledger describe issued currencies/fungible tokens mediante trust lines. No prueba uso institucional; abre investigación de emisores y líneas de confianza.",
+                "status": "documented",
+            },
+            {
+                "to": "Issued Currencies",
+                "evidence_type": "official_protocol_feature",
+                "confidence": 0.84,
+                "claim": "La documentación oficial de XRP Ledger valida las issued currencies/fungible tokens como parte del protocolo. Sirve para seguir cascada hacia emisores/tokens concretos.",
+                "status": "documented",
+            },
+        ],
+        "derived_nodes": [
+            {"name": "DEX/AMM", "reason": "Funcionalidad oficial del ledger; investigar liquidez, AMM y DEX."},
+            {"name": "Trustlines", "reason": "Funcionalidad oficial del ledger; investigar emisores y líneas de confianza."},
+            {"name": "Issued Currencies", "reason": "Funcionalidad oficial del ledger; investigar tokens emitidos y stablecoins."},
+            {"name": "RLUSD", "reason": "Token/stablecoin a investigar sobre XRPL solo con fuente explícita."},
+        ],
+        "sources": [
+            {"title": "XRPL official documentation", "url": "https://xrpl.org/docs", "type": "official_docs"},
+            {"title": "XRPL decentralized exchange", "url": "https://xrpl.org/docs/concepts/tokens/decentralized-exchange", "type": "official_protocol_feature"},
+            {"title": "XRPL AMM", "url": "https://xrpl.org/docs/concepts/tokens/decentralized-exchange/automated-market-makers", "type": "official_protocol_feature"},
+            {"title": "XRPL fungible tokens", "url": "https://xrpl.org/docs/concepts/tokens/fungible-tokens", "type": "official_protocol_feature"},
+        ],
+        "_v162_official_seed": True,
+    }
+
+# Compatibilidad: cualquier llamada vieja al root limpio ahora usa el semillero oficial equilibrado.
+def _rrp_v161_clean_xrpl_root_result(query: Any = "XRPL") -> Dict[str, Any]:
+    return _rrp_v162_official_xrpl_root_result(query)
+
+
+def _rrp_v161_route_is_strictly_documented(result: Dict[str, Any], rd: Dict[str, Any]) -> Tuple[bool, str]:
+    if not isinstance(result, dict) or not isinstance(rd, dict):
+        return False, "ruta mal formada"
+    src = _canonical_entity_name(result.get("institution") or result.get("query") or "")
+    dst = _rrp_v161_route_dst(rd)
+    if not src or not dst or src == dst:
+        return False, "origen/destino vacío o idéntico"
+    if _rrp_v161_is_internal_node(src) or _rrp_v161_is_internal_node(dst):
+        return False, "motor interno bloqueado"
+    kind = _rrp_v161_route_kind(rd)
+    if not _rrp_v161_is_allowed_doc_type(kind, rd.get("status")):
+        return False, f"tipo no documental: {kind}"
+    docs = _rrp_v158_extract_documents(result) if callable(globals().get("_rrp_v158_extract_documents")) else []
+    ev = result.get("evidence_items") or []
+    if not docs and not ev:
+        return False, "sin documentos ni pruebas"
+    blob = _rrp_v161_result_blob(result, rd)
+
+    # Regla equilibrada:
+    # - Instituciones: prueba debe mencionar origen y destino.
+    # - Features oficiales de XRPL: se acepta si el origen es XRPL, la fuente es oficial/primaria y
+    #   el destino aparece por alias en el documento/prueba.
+    if src == "XRPL" and _rrp_v162_is_protocol_feature(dst):
+        if not ("xrpl" in blob.lower() or "xrp ledger" in blob.lower() or "xrpl.org" in blob.lower()):
+            return False, "feature XRPL sin documento XRPL explícito"
+        if not _rrp_v161_name_in_blob(dst, blob):
+            return False, f"el documento XRPL no menciona la feature {dst}"
+        return True, "feature oficial del protocolo XRPL"
+
+    if not _rrp_v161_name_in_blob(src, blob):
+        return False, f"la prueba no menciona el origen {src}"
+    if not _rrp_v161_name_in_blob(dst, blob):
+        return False, f"la prueba no menciona el destino {dst}"
+    if src == "XRPL" or dst == "XRPL":
+        if not ("xrpl" in blob.lower() or "xrp ledger" in blob.lower() or "xrp-ledger" in blob.lower()):
+            return False, "relación XRPL sin mención explícita a XRPL/XRP Ledger"
+    return True, "documentada"
+
+
+def _rrp_v156_derived_nodes(result: Dict[str, Any], limit: int = 12) -> List[Dict[str, Any]]:
+    """Cascada equilibrada.
+
+    Permite cascada desde documentos oficiales hacia features/protocolos, pero sigue
+    evitando motores internos y duplicados.
+    """
+    out: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    if not isinstance(result, dict):
+        return out
+    src = _canonical_entity_name(result.get("institution") or result.get("query") or "")
+
+    # 1) Destinos de rutas documentales guardables.
+    for r in _rrp_v156_result_routes(result):
+        n = _canonical_entity_name(r.get("dst"))
+        if not n or n == src or _rrp_v161_is_internal_node(n):
+            continue
+        k = _canonical_entity_key(n)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append({"name": n, "reason": f"ruta documental detectada: {src} → {n}", "parent": src})
+
+    # 2) Derivados explícitos en resultados oficiales/primarios, aunque todavía no sean ruta mapa.
+    blob = _rrp_v161_result_blob(result)
+    for field in ("derived_nodes", "next_nodes", "entities", "nodes"):
+        val = result.get(field)
+        if not val:
+            continue
+        vals = val if isinstance(val, (list, tuple, set)) else [val]
+        for d in vals:
+            if isinstance(d, dict):
+                raw = d.get("node") or d.get("name") or d.get("target") or d.get("institution")
+                reason = d.get("reason") or d.get("type") or "nodo mencionado en documentos"
+            else:
+                raw = d
+                reason = "nodo mencionado en documentos"
+            n = _canonical_entity_name(raw)
+            if not n or n == src or _rrp_v161_is_internal_node(n):
+                continue
+            # Para features/protocolos oficiales permitimos cascada si el resultado es seed oficial XRPL.
+            if not result.get("_v162_official_seed") and not _rrp_v161_name_in_blob(n, blob):
+                continue
+            k = _canonical_entity_key(n)
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append({"name": n, "reason": str(reason), "parent": src})
+    return out[:limit]
+
+
+def _rrp_v156_run_and_store(conn: sqlite3.Connection, query: str, *, parent: str = "", force_online: bool = False, use_cache: bool = True, source: str = "initial") -> None:
+    qraw = str(query or "").strip()
+    if not qraw:
+        return
+    # XRPL ya no queda muerto: genera documentación oficial y cascada de features,
+    # pero no crea relaciones institucionales falsas.
+    if _rrp_v161_is_root_xrpl_query(qraw):
+        res = _rrp_v162_official_xrpl_root_result(qraw)
+        res["_simple_parent"] = parent or ""
+        try:
+            _rrp_v157_save_documents(conn, res, parent=parent)
+        except Exception:
+            pass
+        try:
+            _rrp_v161_apply_strict_routes_to_map(conn, res)
+        except Exception:
+            pass
+        _rrp_v156_record_result(res, source=source, parent=parent)
+        return
+    # Si ya se investigó esta entidad en este flujo, no repetir ni gastar API.
+    k = _rrp_v161_seen_key(qraw)
+    if k in _rrp_v161_get_done_keys() and not force_online:
+        return
+    if use_cache and not force_online:
+        cached = _rrp_v156_direct_cache_get(conn, qraw)
+        if isinstance(cached, dict):
+            cached = _rrp_v157_filter_document_routes(cached)
+            cached["_simple_parent"] = parent or cached.get("_simple_parent", "")
+            try:
+                _rrp_v157_save_documents(conn, cached, parent=parent)
+            except Exception:
+                pass
+            _rrp_v161_apply_strict_routes_to_map(conn, cached)
+            _rrp_v156_record_result(cached, source=source, parent=parent)
+            return
+    try:
+        res = _RRP_V156_BASE_SEARCH(qraw, conn=conn, force_online=force_online) if callable(_RRP_V156_BASE_SEARCH) else search_institution_connections(qraw, conn=conn, force_online=force_online)
+    except Exception as e:
+        res = {"institution": _canonical_entity_name(qraw), "query": qraw, "connected": False, "confidence": 0.0, "summary": f"No pude completar la búsqueda: {type(e).__name__}: {e}", "evidence_items": [], "route_decisions": [], "sources": []}
+    res = _rrp_v156_finalize_normal(res, qraw)
+    res = _rrp_v157_filter_document_routes(res)
+    res["_simple_parent"] = parent or ""
+    try:
+        _rrp_v157_save_documents(conn, res, parent=parent)
+    except Exception:
+        pass
+    _rrp_v161_apply_strict_routes_to_map(conn, res)
+    _rrp_v156_record_result(res, source=source, parent=parent)
+
+# Mensaje UX actualizado.
+_ORIG_RRP_V156_RENDER_RESULT_CLEAN_V162 = globals().get("_rrp_v156_render_result_clean")
+def _rrp_v156_render_result_clean(result: Dict[str, Any], conn: sqlite3.Connection, index: int = 0) -> None:
+    if isinstance(result, dict) and result.get("_v162_official_seed"):
+        with st.container(border=True):
+            st.markdown("### 🔍 Búsqueda — 💧 XRPL · ✅ documentación oficial base · 86%")
+            st.write(str(result.get("summary") or ""))
+            st.info("Lectura correcta: estas líneas son features/documentación del protocolo, no relaciones institucionales operativas. Sirven para abrir cascada limpia desde XRPL.")
+        # Render completo antiguo debajo para fuentes, rutas y botón único.
+    if callable(_ORIG_RRP_V156_RENDER_RESULT_CLEAN_V162):
+        return _ORIG_RRP_V156_RENDER_RESULT_CLEAN_V162(result, conn, index)
+
+
 if __name__ == "__main__":
     _rrp_v158_prune_static_map_to_xrpl()
     main()
