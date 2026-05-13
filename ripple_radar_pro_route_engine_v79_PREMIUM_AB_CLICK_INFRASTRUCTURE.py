@@ -36790,19 +36790,43 @@ def _infer_layer_icon_from_name(name: Any, fallback_layer: str = "Descubierto", 
 
 
 _ORIG_FORCED_LAYER_ICON_V186 = globals().get("_forced_layer_icon_for_node_name")
-def _forced_layer_icon_for_node_name(name: Any) -> Tuple[str, str, str]:
+
+def _forced_layer_icon_reason_for_node_name(name: Any) -> str:
+    """Razón humana de clasificación dinámica, separada para no romper callers antiguos."""
     try:
         layer, icon, reason = _rrp_v186_node_type(name)
         if layer and layer != "Descubierto":
-            return layer, icon, reason
+            return str(reason or "clasificación dinámica por ontología")
+    except Exception:
+        pass
+    return ""
+
+def _forced_layer_icon_for_node_name(name: Any) -> Tuple[str, str]:
+    """Compatibilidad fuerte: esta función SIEMPRE devuelve exactamente 2 valores.
+
+    Varias partes antiguas del archivo hacen:
+        layer, icon = _forced_layer_icon_for_node_name(name)
+    En v188 se había cambiado accidentalmente a 3 valores (layer, icon, reason),
+    lo que rompía reclassify_all_dynamic_nodes() en Streamlit Cloud.
+    La razón queda disponible en _forced_layer_icon_reason_for_node_name().
+    """
+    try:
+        layer, icon, reason = _rrp_v186_node_type(name)
+        if layer and layer != "Descubierto":
+            return layer, icon
     except Exception:
         pass
     if callable(_ORIG_FORCED_LAYER_ICON_V186):
         try:
-            return _ORIG_FORCED_LAYER_ICON_V186(name)
+            res = _ORIG_FORCED_LAYER_ICON_V186(name)
+            if isinstance(res, (list, tuple)):
+                if len(res) >= 2:
+                    return str(res[0] or ""), str(res[1] or "")
+                if len(res) == 1:
+                    return str(res[0] or ""), "🔎"
         except Exception:
             pass
-    return "", "", ""
+    return "", ""
 
 
 # Evitar que las funciones de wallet devuelvan el cajón genérico cuando sí hay dirección.
