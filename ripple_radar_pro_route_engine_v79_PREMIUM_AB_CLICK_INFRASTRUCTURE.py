@@ -30998,6 +30998,345 @@ def _rrp_v164_render_unified_flow(conn: sqlite3.Connection) -> None:
 def _render_discovery_investigation_flow(conn: sqlite3.Connection, root_result: Optional[Dict[str, Any]] = None) -> None:
     _rrp_v164_render_unified_flow(conn)
 
+
+
+# =============================================================================
+# v166 · VERIFY ALL PENDING + MAP NOTICES + PAIR AUTO-SYNC FIX
+# =============================================================================
+# Objetivo:
+# - Al pulsar "Verificar pendientes" en un nodo, verificar TODAS las rutas guardadas
+#   pendientes de ese nodo, no solo una.
+# - Usar las pruebas/fuentes ya guardadas en dynamic_routes para crear connection_proofs
+#   sin gastar API cuando la ruta ya tiene evidencia documental.
+# - La verificación se guarda por pair_key canónico: si XRPL↔RLUSD se verifica desde XRPL,
+#   también aparece verificada al abrir RLUSD.
+# - Añadir avisos de mapa para rutas documentales guardadas que aún no están verificadas
+#   en connection_proofs.
+# =============================================================================
+
+BUILD_ID = "v166_2026_05_13_VERIFY_ALL_PENDING_MAP_NOTICES"
+BUILD_NOTE = "verificar todos pendientes · pruebas dinámicas a connection_proofs · avisos mapa"
+VERSION = "Route Path Intelligence v6.2.3 PRO — XRPL Core · Verify All Pending v166"
+
+
+def _rrp_v166_table_cols(conn: sqlite3.Connection, table: str) -> Set[str]:
+    try:
+        return {str(r[1]) for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    except Exception:
+        return set()
+
+
+def _rrp_v166_json_urls(raw: Any) -> List[str]:
+    urls: List[str] = []
+    if raw is None:
+        return urls
+    s = str(raw or "").strip()
+    if not s:
+        return urls
+    # dynamic_routes.source_urls suele ser JSON, pero en bases antiguas puede venir como texto.
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, list):
+            for u in parsed:
+                cu = _canonical_source_url(str(u or "")) if callable(globals().get("_canonical_source_url")) else str(u or "")
+                if cu.startswith("http") and cu not in urls:
+                    urls.append(cu)
+        elif isinstance(parsed, dict):
+            for u in parsed.values():
+                cu = _canonical_source_url(str(u or "")) if callable(globals().get("_canonical_source_url")) else str(u or "")
+                if cu.startswith("http") and cu not in urls:
+                    urls.append(cu)
+    except Exception:
+        pass
+    try:
+        for u in _rrp_extract_urls_from_text(s, limit=12):
+            cu = _canonical_source_url(str(u or "")) if callable(globals().get("_canonical_source_url")) else str(u or "")
+            if cu.startswith("http") and cu not in urls:
+                urls.append(cu)
+    except Exception:
+        pass
+    return urls[:12]
+
+
+def _rrp_v166_route_rows_for_node(conn: sqlite3.Connection, focus_node: str) -> List[Dict[str, Any]]:
+    """Devuelve rutas dinámicas directas donde participa focus_node, adaptándose a columnas antiguas."""
+    rows: List[Dict[str, Any]] = []
+    cols = _rrp_v166_table_cols(conn, "dynamic_routes")
+    if not cols:
+        return rows
+    select = [
+        "route_id" if "route_id" in cols else "NULL AS route_id",
+        "src" if "src" in cols else ("source" if "source" in cols else "NULL AS src"),
+        "dst" if "dst" in cols else ("target" if "target" in cols else "NULL AS dst"),
+        "kind" if "kind" in cols else ("route_type" if "route_type" in cols else "NULL AS kind"),
+        "confidence" if "confidence" in cols else "0.0 AS confidence",
+        "evidence" if "evidence" in cols else ("claim" if "claim" in cols else "NULL AS evidence"),
+        "source_url" if "source_url" in cols else "NULL AS source_url",
+        "source_urls" if "source_urls" in cols else "NULL AS source_urls",
+        "label" if "label" in cols else "NULL AS label",
+    ]
+    try:
+        # Si existen src/dst, filtra en SQL; si no, carga y filtra después.
+        if "src" in cols and "dst" in cols:
+            q = "SELECT " + ",".join(select) + " FROM dynamic_routes WHERE src=? OR dst=?"
+            raw_rows = conn.execute(q, (focus_node, focus_node)).fetchall()
+        else:
+            q = "SELECT " + ",".join(select) + " FROM dynamic_routes"
+            raw_rows = conn.execute(q).fetchall()
+    except Exception:
+        return rows
+    fkey = _canonical_entity_key(focus_node)
+    for r in raw_rows:
+        try:
+            route_id, src, dst, kind, conf, ev, source_url, source_urls, label = r
+            src = _rrp_v164_norm_node(src) if callable(globals().get("_rrp_v164_norm_node")) else str(src or "").strip()
+            dst = _rrp_v164_norm_node(dst) if callable(globals().get("_rrp_v164_norm_node")) else str(dst or "").strip()
+            if not src or not dst or src == dst:
+                continue
+            if _canonical_entity_key(src) != fkey and _canonical_entity_key(dst) != fkey:
+                continue
+            urls = []
+            if str(source_url or "").strip().startswith("http"):
+                urls.append(_canonical_source_url(str(source_url).strip()) if callable(globals().get("_canonical_source_url")) else str(source_url).strip())
+            for u in _rrp_v166_json_urls(source_urls):
+                if u not in urls:
+                    urls.append(u)
+            rows.append({
+                "route_id": route_id, "src": src, "dst": dst, "kind": str(kind or "documented"),
+                "confidence": float(conf or 0.0), "evidence": str(ev or "").strip(),
+                "urls": urls[:12], "label": str(label or f"{src} → {dst}"),
+            })
+        except Exception:
+            continue
+    return rows
+
+
+def _rrp_v166_has_pair_proof(conn: sqlite3.Connection, a: str, b: str) -> bool:
+    try:
+        return bool(_connection_proof_row(conn, a, b))
+    except Exception:
+        pass
+    try:
+        pk = _canonical_pair_key(a, b)
+        row = conn.execute("SELECT 1 FROM connection_proofs WHERE pair_key=? AND COALESCE(sanitizer_status,'active')!='quarantined' LIMIT 1", (pk,)).fetchone()
+        return bool(row)
+    except Exception:
+        return False
+
+
+def _rrp_v166_make_route_proofs(src: str, dst: str, meta: Dict[str, Any]) -> List[Dict[str, Any]]:
+    kind = str(meta.get("kind") or "documented_route")
+    ev = str(meta.get("evidence") or "").strip()
+    urls = list(meta.get("urls") or [])
+    title = str(meta.get("label") or f"{src} → {dst}")
+    if not ev:
+        ev = f"Ruta documental guardada en el mapa: {src} ↔ {dst}. Requiere lectura de fuente, pero no es 0% ni ausencia de evidencia."
+    label = f"{src} ↔ {dst} · {kind} — {ev}"
+    # Una prueba por URL permite que el panel muestre 'prueba 1/2'. Si no hay URL,
+    # guardamos igualmente la evidencia del tramo para no obligar a gastar API.
+    proofs: List[Dict[str, Any]] = []
+    if urls:
+        for i, u in enumerate(urls[:6], 1):
+            proofs.append({
+                "type": kind or "dynamic_route_evidence",
+                "icon": "🧾",
+                "label": label[:900],
+                "url": u,
+                "source_url": u,
+                "title": title,
+                "internet": True,
+                "onchain": False,
+            })
+    else:
+        proofs.append({
+            "type": kind or "dynamic_route_evidence",
+            "icon": "🧾",
+            "label": label[:900],
+            "title": title,
+            "internet": True,
+            "onchain": False,
+        })
+    return proofs
+
+
+def _rrp_v166_seed_connection_proof_from_route(conn: sqlite3.Connection, src: str, dst: str, meta: Dict[str, Any]) -> bool:
+    """Crea/actualiza connection_proofs a partir de una ruta ya guardada en dynamic_routes.
+
+    Es canónico por par: verificar desde XRPL verifica también al abrir el otro nodo.
+    """
+    try:
+        ensure_discovery_tables(conn)
+    except Exception:
+        pass
+    try:
+        proofs = _rrp_v166_make_route_proofs(src, dst, meta)
+        try:
+            clean = _dedupe_and_filter_proofs(src, dst, proofs, max_items=6)
+        except Exception:
+            clean = proofs
+        if not clean:
+            clean = proofs
+        raw_conf = float(meta.get("confidence") or 0.0)
+        try:
+            score = max(raw_conf, float(_combine_evidence_score(clean) or 0.0))
+        except Exception:
+            score = raw_conf or 0.55
+        # Las rutas documentales/protocolo ya guardadas no deben quedar como 0%.
+        if str(meta.get("kind") or "") in globals().get("_RRP_V165_ROUTE_TYPES_STRONG", set()):
+            score = max(score, raw_conf, 0.72)
+        result_data = {
+            "node_a": src, "node_b": dst,
+            "proofs": clean,
+            "wallets_a": [], "wallets_b": [], "active_wallets": [],
+            "cert_label": "✅ Documental guardada",
+            "cert_color": "#3CFF9B",
+            "calibrated_score": float(score or 0.0),
+            "has_onchain": False,
+            "has_internet": True,
+            "source": "dynamic_routes_v166",
+        }
+        proof_id = _canonical_pair_proof_id(src, dst)
+        pair_key = _canonical_pair_key(src, dst)
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute("""
+            INSERT OR REPLACE INTO connection_proofs
+            (proof_id, node_a, node_b, node_a_key, node_b_key, pair_key, proof_type, proof_data, onchain, confidence, validated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            proof_id, src, dst, _canonical_entity_key(src), _canonical_entity_key(dst), pair_key,
+            str(meta.get("kind") or "dynamic_route_evidence"),
+            json.dumps(result_data, ensure_ascii=False),
+            0, float(score or 0.0), now,
+        ))
+        conn.commit()
+        return True
+    except Exception:
+        return False
+
+
+def _rrp_v166_seed_all_dynamic_pending_for_node(conn: sqlite3.Connection, focus_node: str) -> Tuple[int, List[str]]:
+    """Verifica en connection_proofs TODAS las rutas dinámicas pendientes del nodo."""
+    count = 0
+    peers: List[str] = []
+    for r in _rrp_v166_route_rows_for_node(conn, focus_node):
+        src, dst = r.get("src"), r.get("dst")
+        if not src or not dst:
+            continue
+        peer = dst if _canonical_entity_key(src) == _canonical_entity_key(focus_node) else src
+        if peer and peer not in peers:
+            peers.append(peer)
+        if _rrp_v166_has_pair_proof(conn, src, dst):
+            continue
+        # Solo autoverificar si hay evidencia/URL/confianza de ruta; si no, queda para internet.
+        if r.get("evidence") or r.get("urls") or float(r.get("confidence") or 0) > 0:
+            if _rrp_v166_seed_connection_proof_from_route(conn, src, dst, r):
+                count += 1
+    return count, peers
+
+
+_ORIG_VALIDATE_NODE_FAST_V166 = globals().get("validate_node_fast")
+def validate_node_fast(focus_node: str, peers: List[str], conn: sqlite3.Connection, progress_cb: Optional[Any] = None) -> None:
+    """v166: verificar pendientes significa todas las rutas pendientes del nodo.
+
+    Primero convierte las rutas ya guardadas en pruebas verificadas sin gastar API.
+    Después solo llama al verificador online/on-chain para lo que siga sin prueba.
+    """
+    peers = list(peers or [])
+    def _progress(value: float, text: str) -> None:
+        if progress_cb is None:
+            return
+        try:
+            progress_cb(value, text)
+        except Exception:
+            pass
+    try:
+        _progress(0.04, "Sincronizando rutas guardadas con pruebas verificadas…")
+        seeded, route_peers = _rrp_v166_seed_all_dynamic_pending_for_node(conn, focus_node)
+        for p in route_peers:
+            if p and p not in peers:
+                peers.append(p)
+        _progress(0.18, f"Rutas documentales convertidas en pruebas: {seeded}")
+    except Exception:
+        pass
+    # Filtra los que ya quedaron verificados por el seed anterior.
+    remaining = []
+    for p in peers:
+        if not p:
+            continue
+        try:
+            if _rrp_v166_has_pair_proof(conn, focus_node, p):
+                continue
+        except Exception:
+            pass
+        if p not in remaining:
+            remaining.append(p)
+    if remaining and callable(_ORIG_VALIDATE_NODE_FAST_V166):
+        return _ORIG_VALIDATE_NODE_FAST_V166(focus_node, remaining, conn, progress_cb=progress_cb)
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    _progress(1.0, "Todas las rutas pendientes del nodo quedaron sincronizadas")
+    return None
+
+
+# Añadir notificaciones de mapa para rutas dinámicas guardadas aún no verificadas.
+_ORIG_BUILD_MAP_NODE_NOTIFICATIONS_V166 = globals().get("_build_map_node_notifications")
+def _build_map_node_notifications(all_routes: List, all_nodes: Dict, conn: Optional[sqlite3.Connection] = None) -> Dict[str, Dict[str, Any]]:
+    payload = _ORIG_BUILD_MAP_NODE_NOTIFICATIONS_V166(all_routes, all_nodes, conn) if callable(_ORIG_BUILD_MAP_NODE_NOTIFICATIONS_V166) else {}
+    if conn is None:
+        return payload or {}
+    def ensure(n: str) -> Dict[str, Any]:
+        n = _canonical_display_node(n) if callable(globals().get("_canonical_display_node")) else str(n or "").strip()
+        item = payload.setdefault(n, {"badge": "", "color": "", "title": "", "hover": "", "priority": 0})
+        return item
+    # Pares ya verificados.
+    verified_pairs: Set[str] = set()
+    try:
+        for a, b, pk in conn.execute("SELECT node_a,node_b,pair_key FROM connection_proofs WHERE COALESCE(sanitizer_status,'active')!='quarantined'").fetchall():
+            if pk:
+                verified_pairs.add(str(pk))
+            verified_pairs.add(_canonical_pair_key(a, b))
+    except Exception:
+        pass
+    # Rutas dinámicas no verificadas => aviso ⚠️ en ambos nodos.
+    try:
+        cols = _rrp_v166_table_cols(conn, "dynamic_routes")
+        if {"src", "dst"}.issubset(cols):
+            select = "src,dst," + ("kind" if "kind" in cols else "route_type") + "," + ("confidence" if "confidence" in cols else "0")
+            for src, dst, kind, conf in conn.execute(f"SELECT {select} FROM dynamic_routes").fetchall():
+                src = _canonical_display_node(src); dst = _canonical_display_node(dst)
+                if not src or not dst or src not in all_nodes or dst not in all_nodes:
+                    continue
+                pk = _canonical_pair_key(src, dst)
+                if pk in verified_pairs:
+                    continue
+                line = f"{src} ↔ {dst} · {kind or 'documented'} · pendiente de verificar"
+                for n in (src, dst):
+                    old = payload.get(n, {})
+                    hover = str(old.get("hover") or f"<b>{html.escape(n)}</b><br>")
+                    if line not in hover:
+                        hover += "<br><b>⚠️ Rutas guardadas pendientes de verificar</b><br>" + html.escape(line)
+                    payload[n] = {
+                        "badge": "⚠️" if not str(old.get("badge") or "").startswith("⚠️") else old.get("badge"),
+                        "color": "#F97316",
+                        "title": "Rutas guardadas pendientes de verificar",
+                        "hover": hover,
+                        "priority": max(int(old.get("priority") or 0), 4),
+                    }
+    except Exception:
+        pass
+    return payload or {}
+
+
+# Estado compacto para el panel de verificación: muestra cuántas rutas guardadas faltan.
+def _rrp_v166_pending_route_count(conn: sqlite3.Connection, focus_node: str) -> int:
+    n = 0
+    for r in _rrp_v166_route_rows_for_node(conn, focus_node):
+        if not _rrp_v166_has_pair_proof(conn, r.get("src"), r.get("dst")):
+            n += 1
+    return n
+
 if __name__ == "__main__":
     _rrp_v158_prune_static_map_to_xrpl()
     main()
