@@ -31898,6 +31898,290 @@ def render_node_info_panel(*args, **kwargs) -> None:
 
 
 
+# =============================================================================
+# v169 · EVIDENCE CROSSCHECK + STATUS CONSISTENCY FIX
+# =============================================================================
+# Objetivo:
+# - El panel del nodo NO puede mostrar "❌ Sin evidencia verificable" si la
+#   misma pareja ya está verificada abajo en connection_proofs.
+# - Los tipos técnicos/deductivos oficiales deben tener peso real en el scoring,
+#   no peso 0.00.
+# - Diferenciar visualmente tres estados:
+#     1) Evidencia documental directa/técnica confirmada.
+#     2) Dependencia técnica/deductiva documentada.
+#     3) Sin evidencia real.
+# - Hacer que el sistema cruce correctamente dynamic_routes ↔ connection_proofs
+#   usando pair_key canónico.
+# =============================================================================
+
+BUILD_ID = "v169_2026_05_13_EVIDENCE_CROSSCHECK_STATUS_FIX"
+BUILD_NOTE = "cruce correcto de pruebas · dependencias técnicas con peso · sin falsos 'no evidencia'"
+VERSION = "Route Path Intelligence v6.2.3 PRO — XRPL Core · Evidence Crosscheck v169"
+
+# Tipos nuevos que venían de la expansión de fuentes pero no estaban puntuando.
+_RRP_V169_TECHNICAL_TYPES = {
+    "technical_protocol_dependency",
+    "technical_protocol_feature",
+    "technical_dependency",
+    "official_dependency",
+    "official_protocol_feature",
+    "official_stablecoin_on_xrpl",
+    "official_docs",
+    "official_document",
+    "developer_documentation",
+    "dynamic_route_evidence",
+    "documented_route",
+    "verified_documentary",
+    "source_route_expansion",
+}
+
+try:
+    _RRP_V168_ROUTE_EVIDENCE_TYPES.update(_RRP_V169_TECHNICAL_TYPES)
+except Exception:
+    pass
+
+try:
+    EVIDENCE_SCORES.update({
+        "technical_protocol_dependency": 0.82,
+        "technical_protocol_feature": 0.84,
+        "technical_dependency": 0.78,
+        "official_dependency": 0.84,
+        "official_protocol_feature": 0.88,
+        "official_stablecoin_on_xrpl": 0.88,
+        "official_docs": 0.82,
+        "official_document": 0.86,
+        "developer_documentation": 0.84,
+        "dynamic_route_evidence": 0.76,
+        "documented_route": 0.76,
+        "verified_documentary": 0.86,
+        "source_route_expansion": 0.80,
+    })
+    EVIDENCE_LABELS.update({
+        "technical_protocol_dependency": "Dependencia técnica del protocolo",
+        "technical_protocol_feature": "Función técnica del protocolo",
+        "technical_dependency": "Dependencia técnica",
+        "official_dependency": "Dependencia técnica oficial",
+        "official_protocol_feature": "Función oficial del protocolo",
+        "official_stablecoin_on_xrpl": "Stablecoin oficial en XRPL",
+        "official_docs": "Documentación oficial",
+        "official_document": "Documento oficial",
+        "developer_documentation": "Documentación técnica",
+        "dynamic_route_evidence": "Ruta documental guardada",
+        "documented_route": "Ruta documental",
+        "verified_documentary": "Documental verificada",
+        "source_route_expansion": "Ruta extraída de fuente oficial",
+    })
+except Exception:
+    pass
+
+
+def _rrp_v169_pair_in_text(blob: Any, node_a: Any, node_b: Any) -> bool:
+    """Comprueba par A↔B con alias y con texto canónico dentro de pruebas sintéticas."""
+    s = str(blob or "")
+    if not str(node_a or "").strip() or not str(node_b or "").strip():
+        return False
+    try:
+        if _blob_mentions_any(s, _entity_search_terms(node_a)) and _blob_mentions_any(s, _entity_search_terms(node_b)):
+            return True
+    except Exception:
+        pass
+    ns = _norm_key(s)
+    ak = _norm_key(_canonical_entity_name(node_a) if callable(globals().get("_canonical_entity_name")) else node_a)
+    bk = _norm_key(_canonical_entity_name(node_b) if callable(globals().get("_canonical_entity_name")) else node_b)
+    return bool(ak and bk and ak in ns and bk in ns)
+
+
+_ORIG_PROOF_RELEVANT_V169 = globals().get("_proof_relevant_to_pair")
+def _proof_relevant_to_pair(proof: Dict[str, Any], node_a: str, node_b: str) -> bool:
+    """v169: acepta evidencias de rutas técnicas guardadas si representan este par."""
+    ptype = str((proof or {}).get("type", "") or "").strip().lower()
+    blob = _proof_text_blob(proof) if callable(globals().get("_proof_text_blob")) else " ".join(
+        str((proof or {}).get(k, "")) for k in ("label", "title", "snippet", "claim", "evidence")
+    )
+    if ptype in _RRP_V169_TECHNICAL_TYPES:
+        # Para pruebas creadas desde dynamic_routes el propio label contiene A↔B.
+        if _rrp_v169_pair_in_text(blob, node_a, node_b):
+            return True
+        # Fallback: si el proof trae node_a/node_b explícitos.
+        pa = (proof or {}).get("node_a") or (proof or {}).get("src") or (proof or {}).get("source")
+        pb = (proof or {}).get("node_b") or (proof or {}).get("dst") or (proof or {}).get("target")
+        if pa and pb and _canonical_pair_key(pa, pb) == _canonical_pair_key(node_a, node_b):
+            return True
+    if callable(_ORIG_PROOF_RELEVANT_V169):
+        try:
+            return bool(_ORIG_PROOF_RELEVANT_V169(proof, node_a, node_b))
+        except Exception:
+            return False
+    return False
+
+
+_ORIG_PROOF_QUALITY_MULT_V169 = globals().get("_proof_quality_multiplier")
+def _proof_quality_multiplier(proof: Dict[str, Any], node_a: Any = "", node_b: Any = "") -> float:
+    """v169: las dependencias técnicas oficiales no pesan 0.00.
+
+    Cuando _combine_evidence_score llama sin node_a/node_b, aun así debe poder
+    puntuar una prueba ya filtrada y guardada en connection_proofs.
+    """
+    ptype = str((proof or {}).get("type", "") or "").strip().lower()
+    if ptype in _RRP_V169_TECHNICAL_TYPES:
+        # Si se proporcionó par, exigir que el texto represente ese par.
+        if str(node_a or "").strip() and str(node_b or "").strip():
+            blob = _proof_text_blob(proof) if callable(globals().get("_proof_text_blob")) else " ".join(
+                str((proof or {}).get(k, "")) for k in ("label", "title", "snippet", "claim", "evidence")
+            )
+            if not _rrp_v169_pair_in_text(blob, node_a, node_b):
+                return 0.0
+        if ptype in {"official_protocol_feature", "official_stablecoin_on_xrpl"}:
+            return 1.0
+        if ptype in {"technical_protocol_dependency", "technical_protocol_feature", "official_dependency", "official_docs", "official_document", "developer_documentation"}:
+            return 0.94
+        return 0.86
+    if callable(_ORIG_PROOF_QUALITY_MULT_V169):
+        try:
+            return float(_ORIG_PROOF_QUALITY_MULT_V169(proof, node_a, node_b) or 0.0)
+        except Exception:
+            return 0.0
+    return 0.0
+
+
+_ORIG_CAP_SCORE_V169 = globals().get("_cap_score_by_source_mix")
+def _cap_score_by_source_mix(score: float, proofs: List[Dict[str, Any]]) -> float:
+    """v169: no capar rutas técnicas oficiales a 0/32% por carecer de URL externa."""
+    try:
+        types = {str((p or {}).get("type", "") or "").strip().lower() for p in (proofs or []) if isinstance(p, dict)}
+        if types & _RRP_V169_TECHNICAL_TYPES:
+            if types & {"official_protocol_feature", "official_stablecoin_on_xrpl"}:
+                return min(float(score or 0.0), 0.90)
+            if types & {"technical_protocol_dependency", "technical_protocol_feature", "official_dependency", "official_docs", "official_document", "developer_documentation"}:
+                return min(float(score or 0.0), 0.84)
+            return min(float(score or 0.0), 0.78)
+    except Exception:
+        pass
+    if callable(_ORIG_CAP_SCORE_V169):
+        try:
+            return float(_ORIG_CAP_SCORE_V169(score, proofs) or 0.0)
+        except Exception:
+            pass
+    return float(score or 0.0)
+
+
+def _rrp_v169_connection_score(conn: Optional[sqlite3.Connection], node_a: Any, node_b: Any) -> Tuple[float, str, int]:
+    """Devuelve score real cruzando connection_proofs. Nunca usa solo etiqueta visual."""
+    if conn is None:
+        return 0.0, "", 0
+    try:
+        row = _connection_proof_row(conn, str(node_a), str(node_b))
+        if not row:
+            return 0.0, "", 0
+        pdata_str, _onchain, raw_conf, *_ = row
+        pj = json.loads(pdata_str or "{}")
+        proofs = pj.get("proofs") or []
+        try:
+            clean = _dedupe_and_filter_proofs(str(node_a), str(node_b), proofs, max_items=8)
+        except Exception:
+            clean = proofs if isinstance(proofs, list) else []
+        try:
+            score = max(float(raw_conf or 0.0), float(_combine_evidence_score(clean) or 0.0), float(pj.get("calibrated_score") or 0.0))
+        except Exception:
+            score = max(float(raw_conf or 0.0), float(pj.get("calibrated_score") or 0.0))
+        ptypes = sorted({str((p or {}).get("type", "") or "").strip().lower() for p in clean if isinstance(p, dict)})
+        main_type = ptypes[0] if ptypes else str(pj.get("proof_type") or "")
+        return float(score or 0.0), main_type, len(clean)
+    except Exception:
+        return 0.0, "", 0
+
+
+# Re-seed más limpio: añade node_a/node_b a cada proof para que el filtro de par no dependa solo del texto.
+_ORIG_RRP_V166_MAKE_ROUTE_PROOFS_V169 = globals().get("_rrp_v166_make_route_proofs")
+def _rrp_v166_make_route_proofs(src: str, dst: str, meta: Dict[str, Any]) -> List[Dict[str, Any]]:
+    proofs = _ORIG_RRP_V166_MAKE_ROUTE_PROOFS_V169(src, dst, meta) if callable(_ORIG_RRP_V166_MAKE_ROUTE_PROOFS_V169) else []
+    fixed = []
+    for p in proofs or []:
+        if isinstance(p, dict):
+            q = dict(p)
+            q["node_a"] = src
+            q["node_b"] = dst
+            if not q.get("type"):
+                q["type"] = str((meta or {}).get("kind") or "dynamic_route_evidence")
+            fixed.append(q)
+    return fixed
+
+
+# Reparador de filas ya guardadas con type técnico pero sin node_a/node_b en cada proof.
+def _rrp_v169_repair_existing_connection_proofs(conn: Optional[sqlite3.Connection]) -> int:
+    if conn is None:
+        return 0
+    changed = 0
+    try:
+        ensure_discovery_tables(conn)
+        rows = conn.execute(
+            "SELECT proof_id,node_a,node_b,proof_data,confidence FROM connection_proofs WHERE COALESCE(sanitizer_status,'active')!='quarantined'"
+        ).fetchall()
+        for pid, a, b, pdata, conf in rows:
+            try:
+                pj = json.loads(pdata or "{}")
+                proofs = pj.get("proofs") or []
+                if not isinstance(proofs, list):
+                    continue
+                touched = False
+                for p in proofs:
+                    if not isinstance(p, dict):
+                        continue
+                    ptype = str(p.get("type", "") or "").strip().lower()
+                    if ptype in _RRP_V169_TECHNICAL_TYPES:
+                        if not p.get("node_a"):
+                            p["node_a"] = a; touched = True
+                        if not p.get("node_b"):
+                            p["node_b"] = b; touched = True
+                if touched:
+                    # Recalcular score mínimo razonable para que no vuelva a mostrar peso 0.00.
+                    try:
+                        clean = _dedupe_and_filter_proofs(a, b, proofs, max_items=8)
+                        score = max(float(conf or 0.0), float(_combine_evidence_score(clean) or 0.0), float(pj.get("calibrated_score") or 0.0))
+                    except Exception:
+                        score = max(float(conf or 0.0), float(pj.get("calibrated_score") or 0.0), 0.55)
+                    pj["proofs"] = proofs
+                    pj["calibrated_score"] = float(score or 0.0)
+                    conn.execute("UPDATE connection_proofs SET proof_data=?, confidence=? WHERE proof_id=?", (json.dumps(pj, ensure_ascii=False), float(score or 0.0), pid))
+                    changed += 1
+            except Exception:
+                continue
+        if changed:
+            conn.commit()
+    except Exception:
+        pass
+    return changed
+
+
+# Mejorar la ficha del nodo sin reescribir todo: antes de renderizar repara y deduplica.
+_ORIG_RENDER_NODE_INFO_PANEL_V169 = globals().get("render_node_info_panel")
+def render_node_info_panel(*args, **kwargs) -> None:
+    try:
+        conn = kwargs.get("conn")
+        # Firma dominante original: (focus_node, row, conn, all_routes, all_nodes)
+        if conn is None and len(args) >= 3 and hasattr(args[2], "execute"):
+            conn = args[2]
+        if conn is not None:
+            _rrp_v169_repair_existing_connection_proofs(conn)
+        # Dedupe rutas igual que v168.
+        args = list(args)
+        if len(args) >= 4:
+            args[3] = _rrp_v168_dedupe_routes_for_node_panel(args[3]) if callable(globals().get("_rrp_v168_dedupe_routes_for_node_panel")) else args[3]
+        elif "all_routes" in kwargs and callable(globals().get("_rrp_v168_dedupe_routes_for_node_panel")):
+            kwargs["all_routes"] = _rrp_v168_dedupe_routes_for_node_panel(kwargs.get("all_routes"))
+    except Exception:
+        pass
+    if callable(_ORIG_RENDER_NODE_INFO_PANEL_V169):
+        return _ORIG_RENDER_NODE_INFO_PANEL_V169(*args, **kwargs)
+    st.warning("Panel de nodo no disponible.")
+
+
+try:
+    _rrp_v169_repair_existing_connection_proofs(get_conn())
+except Exception:
+    pass
+
+
 if __name__ == "__main__":
     _rrp_v158_prune_static_map_to_xrpl()
     main()
