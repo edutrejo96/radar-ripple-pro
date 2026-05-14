@@ -42104,6 +42104,538 @@ def _rrp_v203_process_full_search(conn: sqlite3.Connection, query: str, *, force
     return stats if isinstance(stats, dict) else {"processed": 0, "remaining": 0, "added": 0}
 
 
-# Ejecutar main al final real: v203 y v204 ya están cargados.
+
+
+# =============================================================================
+# v205 · DEX + reevaluación universal de conexiones/pruebas/señales
+# -----------------------------------------------------------------------------
+# Objetivos:
+# - DEX se trata como DEX/AMM, feature pública XRPL, no como nodo desconocido.
+# - En cada cambio de versión, se ejecuta una migración ligera que repara pruebas
+#   derivables de rutas guardadas y sincroniza vigilancia / Route A→B.
+# - Añade un botón claro para reevaluar TODAS las conexiones sin pruebas o sin
+#   señal viva: documentos, rutas, connection_proofs, targets on-chain y A→B.
+# =============================================================================
+try:
+    VERSION = "Route Path Intelligence v6.2.3 PRO — Universal Search + DEX + Recheck All v205"
+    BUILD_ID = "v205_2026_05_14_DEX_REEVALUATE_ALL_FIX"
+    BUILD_NOTE = "DEX se integra como feature XRPL; cada versión migra pruebas ligeras y permite reevaluar conexiones sin pruebas/señal viva."
+except Exception:
+    pass
+
+RRP_V205_DEX_NODE = "DEX/AMM"
+RRP_V205_CORE_NODE = globals().get("RRP_V202_CORE", "XRPL / XRP")
+RRP_V205_DEX_URLS = [
+    "https://xrpl.org/docs/concepts/tokens/decentralized-exchange",
+    "https://xrpl.org/docs/concepts/tokens/decentralized-exchange/automated-market-makers",
+    "https://xrpl.org/docs/references/http-websocket-apis/public-api-methods/path-and-order-book-methods/book_offers",
+]
+RRP_V205_DEX_EVIDENCE = (
+    "La documentación oficial de XRP Ledger describe el Decentralized Exchange, "
+    "book_offers y AMM como funcionalidades públicas del ledger. Es ruta técnica "
+    "observable, no adopción institucional por sí sola."
+)
+
+try:
+    if isinstance(globals().get("ENTITY_CANONICAL_ALIASES"), dict):
+        ENTITY_CANONICAL_ALIASES.update({
+            "dex": "DEX/AMM",
+            "xrpl dex": "DEX/AMM",
+            "xrp ledger dex": "DEX/AMM",
+            "decentralized exchange": "DEX/AMM",
+            "decentralised exchange": "DEX/AMM",
+            "amm": "DEX/AMM",
+            "automated market maker": "DEX/AMM",
+            "automated market makers": "DEX/AMM",
+            "book offers": "DEX/AMM",
+            "book_offers": "DEX/AMM",
+        })
+except Exception:
+    pass
+
+
+def _rrp_v205_norm(x: Any) -> str:
+    try:
+        return _norm_key(x)
+    except Exception:
+        return str(x or "").strip().lower()
+
+
+def _rrp_v205_is_dex(x: Any) -> bool:
+    k = _rrp_v205_norm(x)
+    kc = k.replace(" ", "")
+    return k in {"dex", "dex amm", "dex/amm", "xrpl dex", "decentralized exchange", "decentralised exchange", "amm", "automated market maker", "automated market makers", "book offers", "book_offers"} or kc in {"dexamm", "xrpldex", "bookoffers"}
+
+
+_RRP_V205_PREV_CANON_NODE = globals().get("_rrp_v200_canonical_node_name")
+def _rrp_v200_canonical_node_name(name: Any) -> str:
+    raw = str(name or "").strip()
+    if not raw:
+        return ""
+    if _rrp_v205_is_dex(raw):
+        return RRP_V205_DEX_NODE
+    if callable(_RRP_V205_PREV_CANON_NODE):
+        try:
+            out = str(_RRP_V205_PREV_CANON_NODE(raw) or raw).strip()
+            return RRP_V205_DEX_NODE if _rrp_v205_is_dex(out) else out
+        except Exception:
+            pass
+    return raw
+
+
+_RRP_V205_PREV_CATEGORY_FOR_NODE = globals().get("_rrp_v191_category_for_node")
+def _rrp_v191_category_for_node(name: Any, meta: Optional[Dict[str, Any]] = None) -> str:
+    n = _rrp_v200_canonical_node_name(name or (meta or {}).get("name") or "")
+    if n == RRP_V205_DEX_NODE:
+        return "Observabilidad XRPL"
+    if callable(_RRP_V205_PREV_CATEGORY_FOR_NODE):
+        try:
+            return _RRP_V205_PREV_CATEGORY_FOR_NODE(name, meta)
+        except Exception:
+            pass
+    return "Por investigar"
+
+try:
+    if isinstance(globals().get("RRP_V191_CATEGORY_META"), dict):
+        RRP_V191_CATEGORY_META.setdefault("Observabilidad XRPL", {"label": "📡 Observabilidad XRPL", "color": "#22D3EE", "icon": "📡"})
+except Exception:
+    pass
+
+
+def _rrp_v205_cols(conn: sqlite3.Connection, table: str) -> Set[str]:
+    try:
+        return {str(r[1]) for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    except Exception:
+        return set()
+
+
+def _rrp_v205_table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    try:
+        return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone() is not None
+    except Exception:
+        return False
+
+
+def _rrp_v205_pair_key(a: Any, b: Any) -> str:
+    try:
+        return _canonical_pair_key(str(a or ""), str(b or ""))
+    except Exception:
+        aa = _rrp_v205_norm(a); bb = _rrp_v205_norm(b)
+        return "::".join(sorted([aa, bb]))
+
+
+def _rrp_v205_pair_id(a: Any, b: Any) -> str:
+    try:
+        return _canonical_pair_proof_id(str(a or ""), str(b or ""))
+    except Exception:
+        return hashlib.sha256(_rrp_v205_pair_key(a, b).encode()).hexdigest()[:16]
+
+
+def _rrp_v205_has_proof(conn: sqlite3.Connection, a: Any, b: Any) -> bool:
+    if not _rrp_v205_table_exists(conn, "connection_proofs"):
+        return False
+    pk = _rrp_v205_pair_key(a, b)
+    try:
+        row = conn.execute("SELECT 1 FROM connection_proofs WHERE pair_key=? LIMIT 1", (pk,)).fetchone()
+        if row:
+            return True
+    except Exception:
+        pass
+    try:
+        ka = _canonical_entity_key(a); kb = _canonical_entity_key(b)
+        row = conn.execute("SELECT 1 FROM connection_proofs WHERE (node_a_key=? AND node_b_key=?) OR (node_a_key=? AND node_b_key=?) LIMIT 1", (ka, kb, kb, ka)).fetchone()
+        return bool(row)
+    except Exception:
+        return False
+
+
+def _rrp_v205_upsert_node(conn: sqlite3.Connection, name: Any, layer: str = "Observabilidad XRPL", icon: str = "📡", confidence: float = 0.80, summary: str = "") -> None:
+    n = _rrp_v200_canonical_node_name(name)
+    if not n:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        if callable(globals().get("_register_dynamic_node")):
+            _register_dynamic_node(conn, n, layer, icon, confidence, "", summary or f"Nodo clasificado automáticamente: {n}", now)
+            return
+    except Exception:
+        pass
+    try:
+        ensure_discovery_tables(conn)
+        conn.execute("""
+            INSERT OR REPLACE INTO dynamic_nodes(node_id,name,layer,icon,confidence,source_url,summary,added_at)
+            VALUES(?,?,?,?,?,?,?,?)
+        """, (hashlib.sha256(_rrp_v205_norm(n).encode()).hexdigest()[:12], n, layer, icon, float(confidence or 0), "", summary or f"Nodo clasificado automáticamente: {n}", now))
+    except Exception:
+        pass
+
+
+def _rrp_v205_upsert_route(conn: sqlite3.Connection, src: Any, dst: Any, kind: str, confidence: float, evidence: str, urls: List[str]) -> bool:
+    s = _rrp_v200_canonical_node_name(src); d = _rrp_v200_canonical_node_name(dst)
+    if not s or not d or s == d:
+        return False
+    now = datetime.now(timezone.utc).isoformat()
+    source_urls = "\n".join([u for u in urls if u])
+    label = f"{s} → {d}"
+    try:
+        if callable(globals().get("_register_dynamic_route")):
+            return bool(_register_dynamic_route(conn, s, d, kind, "public_xrpl_score", label, float(confidence or 0), evidence, source_urls, now))
+    except Exception:
+        pass
+    try:
+        ensure_discovery_tables(conn)
+        rid = hashlib.sha256(f"{_rrp_v205_norm(s)}>{_rrp_v205_norm(d)}>{kind}".encode()).hexdigest()[:12]
+        conn.execute("""
+            INSERT OR REPLACE INTO dynamic_routes(route_id,src,dst,kind,signal_col,label,confidence,evidence,source_urls,added_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?)
+        """, (rid, s, d, kind, "public_xrpl_score", label, float(confidence or 0), evidence, source_urls, now))
+        return True
+    except Exception:
+        return False
+
+
+def _rrp_v205_upsert_proof_from_route(conn: sqlite3.Connection, src: Any, dst: Any, kind: str, confidence: float, evidence: str, urls: Any) -> bool:
+    s = _rrp_v200_canonical_node_name(src); d = _rrp_v200_canonical_node_name(dst)
+    if not s or not d or s == d:
+        return False
+    if _rrp_v205_has_proof(conn, s, d):
+        return False
+    url_list = []
+    if isinstance(urls, str):
+        for part in re.split(r"[\n, ]+", urls):
+            p = str(part or "").strip()
+            if p.startswith("http") and p not in url_list:
+                url_list.append(p)
+    elif isinstance(urls, (list, tuple, set)):
+        url_list = [str(u).strip() for u in urls if str(u).strip().startswith("http")]
+    # Si no hay URL, solo crear prueba para tipos técnicos oficiales muy claros; si no, queda pendiente.
+    k = str(kind or "").lower()
+    officialish = any(x in k for x in ["official", "protocol", "dependency", "documented", "stablecoin", "issuer"])
+    if not url_list and not officialish:
+        return False
+    now = datetime.now(timezone.utc).isoformat()
+    conf = max(0.01, min(1.0, float(confidence or 0.0)))
+    proof_type = kind or "dynamic_route_evidence"
+    proofs = [{
+        "type": proof_type,
+        "label": f"{s} ↔ {d} · {proof_type}",
+        "url": url_list[0] if url_list else "",
+        "sources": url_list[:8],
+        "snippet": str(evidence or f"Ruta guardada {s} → {d}")[:1200],
+        "internet": bool(url_list),
+        "onchain": False,
+    }]
+    pdata = {
+        "node_a": s, "node_b": d,
+        "proofs": proofs,
+        "cert_label": "✅ Evidencia documental guardada" if conf >= 0.70 else "🟠 Evidencia documental pendiente de refuerzo",
+        "cert_color": "#22C55E" if conf >= 0.70 else "#F59E0B",
+        "calibrated_score": conf,
+        "has_onchain": False,
+        "has_internet": bool(url_list),
+        "from_dynamic_route": True,
+        "needs_recheck_if_no_url": not bool(url_list),
+    }
+    try:
+        conn.execute("""
+            INSERT OR REPLACE INTO connection_proofs
+            (proof_id,node_a,node_b,node_a_key,node_b_key,pair_key,proof_type,proof_data,onchain,confidence,validated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)
+        """, (_rrp_v205_pair_id(s, d), s, d, _canonical_entity_key(s), _canonical_entity_key(d), _rrp_v205_pair_key(s, d), proof_type, json.dumps(pdata, ensure_ascii=False), 0, conf, now))
+        return True
+    except Exception:
+        return False
+
+
+def _rrp_v205_seed_dex_core(conn: sqlite3.Connection) -> Dict[str, int]:
+    stats = {"nodes": 0, "routes": 0, "proofs": 0}
+    try:
+        ensure_discovery_tables(conn)
+    except Exception:
+        pass
+    before = _rrp_v205_has_proof(conn, RRP_V205_CORE_NODE, RRP_V205_DEX_NODE)
+    _rrp_v205_upsert_node(conn, RRP_V205_CORE_NODE, "Core XRPL", "💧", 0.99, "Núcleo visual XRPL / XRP.")
+    _rrp_v205_upsert_node(conn, RRP_V205_DEX_NODE, "Observabilidad XRPL", "🌊", 0.86, "DEX/AMM oficial del XRP Ledger; punto observable por book_offers y AMM.")
+    stats["nodes"] += 2
+    if _rrp_v205_upsert_route(conn, RRP_V205_CORE_NODE, RRP_V205_DEX_NODE, "official_protocol_feature", 0.86, RRP_V205_DEX_EVIDENCE, RRP_V205_DEX_URLS):
+        stats["routes"] += 1
+    if _rrp_v205_upsert_proof_from_route(conn, RRP_V205_CORE_NODE, RRP_V205_DEX_NODE, "official_protocol_feature", 0.86, RRP_V205_DEX_EVIDENCE, RRP_V205_DEX_URLS):
+        stats["proofs"] += 1
+    # También reparar la ruta histórica XRPL -> DEX/AMM para mapas que todavía no hayan fusionado el núcleo.
+    if _rrp_v205_upsert_route(conn, "XRPL", RRP_V205_DEX_NODE, "official_protocol_feature", 0.86, RRP_V205_DEX_EVIDENCE, RRP_V205_DEX_URLS):
+        stats["routes"] += 1
+    if not before and _rrp_v205_upsert_proof_from_route(conn, "XRPL", RRP_V205_DEX_NODE, "official_protocol_feature", 0.86, RRP_V205_DEX_EVIDENCE, RRP_V205_DEX_URLS):
+        stats["proofs"] += 1
+    try:
+        if callable(globals().get("_rrp_v171_seed_watch_targets_from_routes")):
+            _rrp_v171_seed_watch_targets_from_routes(conn)
+        if callable(globals().get("_rrp_v175_persist_watch_paths")):
+            _rrp_v175_persist_watch_paths(conn)
+        conn.commit()
+    except Exception:
+        pass
+    return stats
+
+
+def _rrp_v205_routes_without_proof(conn: sqlite3.Connection, limit: int = 10000) -> List[Dict[str, Any]]:
+    out = []
+    if not _rrp_v205_table_exists(conn, "dynamic_routes"):
+        return out
+    try:
+        cols = _rrp_v205_cols(conn, "dynamic_routes")
+        q = "SELECT route_id,src,dst,kind,confidence,evidence,source_urls FROM dynamic_routes WHERE COALESCE(sanitizer_status,'active')!='quarantined'" if "sanitizer_status" in cols else "SELECT route_id,src,dst,kind,confidence,evidence,source_urls FROM dynamic_routes"
+        for rid, src, dst, kind, conf, ev, urls in conn.execute(q).fetchall():
+            if not _rrp_v205_has_proof(conn, src, dst):
+                out.append({"route_id": rid, "src": src, "dst": dst, "kind": kind, "confidence": float(conf or 0), "evidence": ev or "", "source_urls": urls or ""})
+                if len(out) >= limit:
+                    break
+    except Exception:
+        pass
+    return out
+
+
+def _rrp_v205_targets_without_live_signal(conn: sqlite3.Connection, limit: int = 10000) -> List[Dict[str, Any]]:
+    out = []
+    if not _rrp_v205_table_exists(conn, "onchain_watch_targets"):
+        return out
+    try:
+        q = "SELECT target_id,src,dst,watch_type,subject,status,COALESCE(last_signal,0),COALESCE(last_checked,'') FROM onchain_watch_targets WHERE COALESCE(status,'active') NOT IN ('ignore','archived')"
+        for tid, src, dst, wt, subj, status, sig, last_checked in conn.execute(q).fetchall():
+            if float(sig or 0) <= 0.0001 or not str(last_checked or "").strip():
+                out.append({"target_id": tid, "src": src, "dst": dst, "watch_type": wt, "subject": subj, "status": status, "last_signal": float(sig or 0), "last_checked": last_checked})
+                if len(out) >= limit:
+                    break
+    except Exception:
+        pass
+    return out
+
+
+def _rrp_v205_build_recheck_queries(rows: List[Dict[str, Any]], max_rows: int = 50) -> List[str]:
+    queries = []
+    for r in rows[:max_rows]:
+        a = str(r.get("src") or "").strip(); b = str(r.get("dst") or "").strip()
+        if not a or not b:
+            continue
+        # Consultas públicas/indexadas; no material privado ni robado.
+        qs = [
+            f'"{a}" "{b}" site:ripple.com OR site:xrpl.org OR site:docs.ripple.com',
+            f'"{a}" "{b}" "XRP Ledger" OR XRPL filetype:pdf',
+            f'"{a}" "{b}" Ripple official partner documentation',
+        ]
+        for q in qs:
+            if q not in queries:
+                queries.append(q)
+    return queries
+
+
+def _rrp_v205_reevaluate_all_unproven(conn: sqlite3.Connection, *, force_online: bool = False) -> Dict[str, Any]:
+    stats = {"seeded_dex": {}, "routes_without_proof": 0, "proofs_created": 0, "watch_targets": 0, "watch_checked": 0, "searches_launched": 0, "errors": []}
+    try:
+        stats["seeded_dex"] = _rrp_v205_seed_dex_core(conn)
+    except Exception as exc:
+        stats["errors"].append(f"seed_dex: {exc}")
+    # 1) Convertir rutas con evidencia/fuentes en proofs verificables.
+    rows = _rrp_v205_routes_without_proof(conn)
+    stats["routes_without_proof"] = len(rows)
+    for r in rows:
+        try:
+            if _rrp_v205_upsert_proof_from_route(conn, r.get("src"), r.get("dst"), r.get("kind"), r.get("confidence"), r.get("evidence"), r.get("source_urls")):
+                stats["proofs_created"] += 1
+        except Exception as exc:
+            stats["errors"].append(f"proof {r.get('src')}->{r.get('dst')}: {exc}")
+    # 2) Sembrar targets desde rutas y paths.
+    try:
+        if callable(globals().get("_rrp_v171_seed_watch_targets_from_routes")):
+            s = _rrp_v171_seed_watch_targets_from_routes(conn) or {}
+            stats["watch_targets"] += int(s.get("created", 0) or s.get("targets", 0) or 0) if isinstance(s, dict) else 0
+        if callable(globals().get("_rrp_v184_seed_live_watch_from_paths")):
+            _rrp_v184_seed_live_watch_from_paths(conn)
+        if callable(globals().get("_rrp_v175_persist_watch_paths")):
+            _rrp_v175_persist_watch_paths(conn)
+    except Exception as exc:
+        stats["errors"].append(f"watch_seed: {exc}")
+    # 3) Ejecutar vigilancia real si existe scanner.
+    try:
+        if callable(globals().get("_rrp_v171_run_watch_cycle")):
+            out = _rrp_v171_run_watch_cycle(conn, force=True) or {}
+            if isinstance(out, dict):
+                stats["watch_checked"] = int(out.get("checked", 0) or out.get("targets_checked", 0) or 0)
+    except Exception as exc:
+        stats["errors"].append(f"watch_cycle: {exc}")
+    # 4) Opcional: si usuario/admin lo pide, lanzar búsquedas documentales de refuerzo para lo que siga sin proof.
+    if force_online:
+        remaining = _rrp_v205_routes_without_proof(conn)
+        is_admin = False
+        try:
+            is_admin = bool(_rrp_v204_admin_unlimited(conn)) if callable(globals().get("_rrp_v204_admin_unlimited")) else bool(st.session_state.get("admin_authenticated"))
+        except Exception:
+            is_admin = bool(st.session_state.get("admin_authenticated"))
+        max_queries = 999999 if is_admin else 10
+        for q in _rrp_v205_build_recheck_queries(remaining, max_rows=max_queries):
+            try:
+                if callable(globals().get("_rrp_v156_run_and_store")):
+                    _rrp_v156_run_and_store(conn, q, parent="reevaluacion_sin_pruebas", force_online=True, use_cache=False, source="recheck")
+                    stats["searches_launched"] += 1
+            except Exception as exc:
+                stats["errors"].append(f"search {q[:60]}: {exc}")
+    try:
+        if callable(globals().get("_rrp_v164_store_deductive_paths")):
+            _rrp_v164_store_deductive_paths(conn)
+        if callable(globals().get("_rrp_v175_persist_watch_paths")):
+            _rrp_v175_persist_watch_paths(conn)
+        conn.commit()
+    except Exception:
+        pass
+    return stats
+
+
+def _rrp_v205_migration(conn: sqlite3.Connection) -> None:
+    """Migración ligera por BUILD_ID: no llama a API; solo repara pruebas derivables y DEX."""
+    try:
+        conn.execute("CREATE TABLE IF NOT EXISTS rrp_app_meta(key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)")
+        current = str(globals().get("BUILD_ID") or "v205")
+        prev = conn.execute("SELECT value FROM rrp_app_meta WHERE key='last_migrated_build'").fetchone()
+        if prev and str(prev[0] or "") == current:
+            return
+        _rrp_v205_seed_dex_core(conn)
+        # Reparar proofs derivables sin gastar API, máximo razonable para no bloquear arranque.
+        for r in _rrp_v205_routes_without_proof(conn, limit=250):
+            _rrp_v205_upsert_proof_from_route(conn, r.get("src"), r.get("dst"), r.get("kind"), r.get("confidence"), r.get("evidence"), r.get("source_urls"))
+        try:
+            if callable(globals().get("_rrp_v171_seed_watch_targets_from_routes")):
+                _rrp_v171_seed_watch_targets_from_routes(conn)
+            if callable(globals().get("_rrp_v175_persist_watch_paths")):
+                _rrp_v175_persist_watch_paths(conn)
+        except Exception:
+            pass
+        conn.execute("INSERT OR REPLACE INTO rrp_app_meta(key,value,updated_at) VALUES('last_migrated_build',?,?,?)".replace("?,?,?", "?,?"), (current, datetime.now(timezone.utc).isoformat()))
+        conn.commit()
+    except Exception:
+        # Jamás romper la app por una migración.
+        pass
+
+
+# Corregir el SQL de meta con una función segura explícita por si SQLite no acepta el replace anterior en algún entorno.
+def _rrp_v205_set_migrated(conn: sqlite3.Connection) -> None:
+    try:
+        conn.execute("CREATE TABLE IF NOT EXISTS rrp_app_meta(key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)")
+        conn.execute("INSERT OR REPLACE INTO rrp_app_meta(key,value,updated_at) VALUES(?,?,?)", ("last_migrated_build", str(globals().get("BUILD_ID") or "v205"), datetime.now(timezone.utc).isoformat()))
+        conn.commit()
+    except Exception:
+        pass
+
+# Reparar la función anterior para evitar cualquier rareza en esa línea.
+def _rrp_v205_migration(conn: sqlite3.Connection) -> None:
+    try:
+        conn.execute("CREATE TABLE IF NOT EXISTS rrp_app_meta(key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)")
+        current = str(globals().get("BUILD_ID") or "v205")
+        prev = conn.execute("SELECT value FROM rrp_app_meta WHERE key='last_migrated_build'").fetchone()
+        if prev and str(prev[0] or "") == current:
+            return
+        _rrp_v205_seed_dex_core(conn)
+        for r in _rrp_v205_routes_without_proof(conn, limit=250):
+            _rrp_v205_upsert_proof_from_route(conn, r.get("src"), r.get("dst"), r.get("kind"), r.get("confidence"), r.get("evidence"), r.get("source_urls"))
+        try:
+            if callable(globals().get("_rrp_v171_seed_watch_targets_from_routes")):
+                _rrp_v171_seed_watch_targets_from_routes(conn)
+            if callable(globals().get("_rrp_v175_persist_watch_paths")):
+                _rrp_v175_persist_watch_paths(conn)
+        except Exception:
+            pass
+        _rrp_v205_set_migrated(conn)
+    except Exception:
+        pass
+
+
+_ORIG_GET_CONN_V205 = globals().get("get_conn")
+def get_conn(*args, **kwargs):
+    conn = _ORIG_GET_CONN_V205(*args, **kwargs) if callable(_ORIG_GET_CONN_V205) else sqlite3.connect(DB_PATH, check_same_thread=False)
+    try:
+        # Solo una vez por sesión para no ralentizar; el BUILD_ID en DB controla el cambio real.
+        if not st.session_state.get("rrp_v205_migration_checked"):
+            _rrp_v205_migration(conn)
+            st.session_state["rrp_v205_migration_checked"] = True
+    except Exception:
+        pass
+    return conn
+
+
+def _rrp_v205_render_recheck_panel(conn: sqlite3.Connection) -> None:
+    try:
+        no_proof = _rrp_v205_routes_without_proof(conn, limit=10000)
+        no_live = _rrp_v205_targets_without_live_signal(conn, limit=10000)
+    except Exception:
+        no_proof, no_live = [], []
+    if not no_proof and not no_live:
+        with st.expander("🔬 Reevaluación de conexiones / señales", expanded=False):
+            st.success("Todas las rutas guardadas tienen prueba cruzada o no hay targets vivos pendientes de escaneo.")
+        return
+    with st.expander("🔬 Conexiones sin pruebas o sin señales en vivo", expanded=False):
+        st.markdown(
+            "Estas conexiones existen en mapa / Route A→B / vigilancia, pero alguna parte aún no tiene prueba cruzada o señal on-chain viva. "
+            "Puedes reevaluarlo todo: documentos, rutas, pruebas, targets y señales en vivo."
+        )
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Rutas sin prueba cruzada", len(no_proof))
+        c2.metric("Targets sin señal/escaneo", len(no_live))
+        c3.metric("DEX integrado", "sí")
+        if no_proof:
+            st.caption("Ejemplos sin prueba cruzada: " + " · ".join([f"{r.get('src')} ↔ {r.get('dst')}" for r in no_proof[:8]]))
+        if no_live:
+            st.caption("Ejemplos sin señal viva: " + " · ".join([f"{r.get('src')} ↔ {r.get('dst')}" for r in no_live[:8]]))
+        force = st.checkbox("🌐 Buscar también nuevas pruebas online para las que sigan sin prueba", value=False, key="v205_force_online_recheck")
+        if st.button("🔬 No hay pruebas o señales en vivo para estas conexiones: reevaluar todo", key="v205_recheck_all_unproven", use_container_width=True):
+            with st.spinner("Reevaluando rutas, pruebas, mapa, Route A→B y señales on-chain..."):
+                stats = _rrp_v205_reevaluate_all_unproven(conn, force_online=force)
+            st.success(
+                f"Reevaluación completada · proofs creados: {stats.get('proofs_created',0)} · "
+                f"watch checked: {stats.get('watch_checked',0)} · búsquedas lanzadas: {stats.get('searches_launched',0)}"
+            )
+            if stats.get("errors"):
+                st.warning("Algunas partes no se pudieron reevaluar: " + " | ".join([str(e) for e in stats.get("errors", [])[:5]]))
+            st.rerun()
+
+
+_ORIG_RENDER_DISCOVERY_V205 = globals().get("render_discovery_engine")
+def render_discovery_engine(conn: sqlite3.Connection) -> None:
+    try:
+        _rrp_v205_migration(conn)
+    except Exception:
+        pass
+    if callable(_ORIG_RENDER_DISCOVERY_V205):
+        _ORIG_RENDER_DISCOVERY_V205(conn)
+    else:
+        st.subheader("Discovery Engine")
+    try:
+        _rrp_v205_render_recheck_panel(conn)
+    except Exception as exc:
+        st.warning(f"Panel de reevaluación no disponible: {type(exc).__name__}: {exc}")
+
+
+# Reforzar la búsqueda universal con DEX explícito.
+_ORIG_RRP_V204_UNIVERSAL_QUERIES_V205 = globals().get("_rrp_v204_universal_expanded_queries")
+def _rrp_v204_universal_expanded_queries(query: Any) -> List[str]:
+    base = []
+    if callable(_ORIG_RRP_V204_UNIVERSAL_QUERIES_V205):
+        try:
+            base = list(_ORIG_RRP_V204_UNIVERSAL_QUERIES_V205(query) or [])
+        except Exception:
+            base = []
+    q = str(query or "").strip()
+    if q:
+        quoted = f'"{q}"'
+        extras = [
+            f'{quoted} "XRP Ledger" DEX AMM book_offers official documentation',
+            f'{quoted} "decentralized exchange" XRPL site:xrpl.org',
+            f'{quoted} "automated market maker" XRPL site:xrpl.org OR site:ripple.com',
+            f'{quoted} "trustline" OR "issued currencies" OR DEX OR AMM "XRP Ledger" filetype:pdf',
+        ]
+        for e in extras:
+            if e not in base:
+                base.append(e)
+    return base
+
+
+# Ejecutar main al final real: v205 ya está cargado.
 if __name__ == "__main__":
     main()
