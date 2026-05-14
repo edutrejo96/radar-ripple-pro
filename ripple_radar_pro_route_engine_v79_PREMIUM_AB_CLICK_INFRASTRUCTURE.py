@@ -40214,6 +40214,300 @@ def _rrp_v171_render_real_watch_panel(conn: sqlite3.Connection) -> None:
     if callable(_ORIG_RRP_V171_RENDER_REAL_WATCH_PANEL_V198):
         return _ORIG_RRP_V171_RENDER_REAL_WATCH_PANEL_V198(conn)
 
+
+# =============================================================================
+# v199 · CASCADE_QUEUE_REQUEST_KEY_FIX
+# -----------------------------------------------------------------------------
+# Problema corregido:
+# La cascada podía quedarse mostrando el mismo hilo pendiente aunque el usuario
+# pulsara “Continuar cascada completa”. Ocurría cuando el hilo solicitado, por
+# ejemplo “Ripple Payments ODL”, se resolvía/canonizaba como otro nodo, por
+# ejemplo “Ripple Payments”. El flujo guardaba el resultado canónico, pero la
+# cola seguía creyendo que “Ripple Payments ODL” no se había investigado.
+#
+# Regla nueva:
+# - Una rama queda consumida por la CLAVE SOLICITADA, aunque la respuesta se
+#   normalice a otra entidad.
+# - La vista de cascada no re-encola candidatos ya solicitados/procesados.
+# - El botón “Continuar cascada completa” procesa todas las ramas y al volver
+#   debe mostrar “cascada agotada” si no queda nada nuevo.
+# =============================================================================
+
+BUILD_ID = "v199_2026_05_14_CASCADE_QUEUE_REQUEST_KEY_FIX"
+BUILD_NOTE = "La cascada consume hilos por clave solicitada; no repite pendientes tras continuar"
+
+
+def _rrp_v199_key(name: Any) -> str:
+    try:
+        return _canonical_entity_key(_canonical_entity_name(name))
+    except Exception:
+        return _canonical_entity_key(name)
+
+
+def _rrp_v199_mark_processed(name: Any) -> None:
+    k = _rrp_v199_key(name)
+    if not k:
+        return
+    keys = set(st.session_state.get("rrp_simple_seen_keys", set()) or set())
+    keys.add(k)
+    st.session_state["rrp_simple_seen_keys"] = keys
+    req = set(st.session_state.get("rrp_simple_processed_request_keys", set()) or set())
+    req.add(k)
+    st.session_state["rrp_simple_processed_request_keys"] = req
+
+
+_ORIG_RRP_V161_GET_DONE_KEYS_V199 = globals().get("_rrp_v161_get_done_keys")
+def _rrp_v161_get_done_keys() -> Set[str]:
+    keys: Set[str] = set()
+    try:
+        if callable(_ORIG_RRP_V161_GET_DONE_KEYS_V199):
+            keys.update(set(_ORIG_RRP_V161_GET_DONE_KEYS_V199() or set()))
+    except Exception:
+        pass
+    try:
+        keys.update(set(st.session_state.get("rrp_simple_seen_keys", set()) or set()))
+        keys.update(set(st.session_state.get("rrp_simple_processed_request_keys", set()) or set()))
+    except Exception:
+        pass
+    for x in st.session_state.get("rrp_simple_flow", []) or []:
+        if not isinstance(x, dict):
+            continue
+        for field in ("institution", "query", "_simple_requested_name", "_simple_query", "_simple_original_query"):
+            v = x.get(field)
+            if v:
+                keys.add(_rrp_v199_key(v))
+        rk = x.get("_simple_requested_key")
+        if rk:
+            keys.add(str(rk))
+    return {k for k in keys if k}
+
+
+_ORIG_RRP_V156_RUN_AND_STORE_V199 = globals().get("_rrp_v156_run_and_store")
+def _rrp_v156_run_and_store(conn: sqlite3.Connection, query: str, *, parent: str = "", force_online: bool = False, use_cache: bool = True, source: str = "initial") -> None:
+    # Marcar la clave solicitada antes y después. Así, si la IA/caché devuelve
+    # una entidad canonizada distinta, no queda la rama original colgada.
+    req_name = _canonical_entity_name(query)
+    req_key = _rrp_v199_key(req_name)
+    if source == "cascade":
+        _rrp_v199_mark_processed(req_name)
+    if callable(_ORIG_RRP_V156_RUN_AND_STORE_V199):
+        _ORIG_RRP_V156_RUN_AND_STORE_V199(conn, query, parent=parent, force_online=force_online, use_cache=use_cache, source=source)
+    else:
+        return
+    try:
+        flow = list(st.session_state.get("rrp_simple_flow", []) or [])
+        if flow:
+            # Etiquetar el resultado más reciente de esa fuente con la solicitud real.
+            for i in range(len(flow) - 1, -1, -1):
+                if isinstance(flow[i], dict) and str(flow[i].get("_simple_source") or "") == source:
+                    flow[i]["_simple_requested_name"] = req_name
+                    flow[i]["_simple_requested_key"] = req_key
+                    if parent:
+                        flow[i]["_simple_parent"] = parent
+                    break
+            st.session_state["rrp_simple_flow"] = flow[-120:]
+    except Exception:
+        pass
+    _rrp_v199_mark_processed(req_name)
+
+
+def _rrp_v199_queue_signature(q: List[Dict[str, Any]]) -> str:
+    try:
+        return json.dumps([
+            {"name": _rrp_v199_key(x.get("name")), "parent": _rrp_v199_key(x.get("parent"))}
+            for x in q if isinstance(x, dict)
+        ], ensure_ascii=False, sort_keys=True)
+    except Exception:
+        return str(q)
+
+
+_ORIG_RRP_V164_CLEAN_QUEUE_V199 = globals().get("_rrp_v164_clean_queue")
+def _rrp_v164_clean_queue() -> List[Dict[str, Any]]:
+    q = list(st.session_state.get("rrp_simple_queue", []) or [])
+    done = _rrp_v161_get_done_keys()
+    clean: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for x in q:
+        if not isinstance(x, dict):
+            continue
+        n = _canonical_entity_name(x.get("name") or "")
+        k = _rrp_v199_key(n)
+        if not n or not k or k in done or k in seen:
+            continue
+        try:
+            if callable(globals().get("_rrp_v161_is_internal_node")) and _rrp_v161_is_internal_node(n):
+                continue
+            if callable(globals().get("_rrp_v164_is_cascade_entity")) and not _rrp_v164_is_cascade_entity(n):
+                continue
+        except Exception:
+            pass
+        seen.add(k)
+        xx = dict(x)
+        xx["name"] = n
+        clean.append(xx)
+    st.session_state["rrp_simple_queue"] = clean[:300]
+    return clean[:300]
+
+
+_ORIG_RRP_V164_ENQUEUE_CANDIDATES_V199 = globals().get("_rrp_v164_enqueue_candidates")
+def _rrp_v164_enqueue_candidates(candidates: List[Dict[str, Any]]) -> int:
+    q = list(st.session_state.get("rrp_simple_queue", []) or [])
+    done = _rrp_v161_get_done_keys()
+    queued = {_rrp_v199_key(x.get("name")) for x in q if isinstance(x, dict)}
+    added = 0
+    for c in candidates or []:
+        if not isinstance(c, dict):
+            continue
+        n = _canonical_entity_name(c.get("name") or "")
+        k = _rrp_v199_key(n)
+        if not n or not k or k in done or k in queued:
+            continue
+        try:
+            if callable(globals().get("_rrp_v161_is_internal_node")) and _rrp_v161_is_internal_node(n):
+                continue
+            if callable(globals().get("_rrp_v164_is_cascade_entity")) and not _rrp_v164_is_cascade_entity(n):
+                continue
+        except Exception:
+            pass
+        q.append({
+            "name": n,
+            "parent": c.get("parent") or "",
+            "reason": c.get("reason") or "Nodo detectado en cascada",
+            "depth": int(c.get("depth") or 1),
+        })
+        queued.add(k)
+        added += 1
+    st.session_state["rrp_simple_queue"] = q[:300]
+    return added
+
+
+def _rrp_v157_run_auto_cascade(conn: sqlite3.Connection, max_steps: int = 25) -> int:
+    processed = 0
+    q = _rrp_v164_clean_queue()
+    new_q: List[Dict[str, Any]] = []
+    steps = max(1, int(max_steps or 25))
+    while q and processed < steps:
+        item = q.pop(0)
+        if not isinstance(item, dict):
+            continue
+        name = _canonical_entity_name(item.get("name") or "")
+        parent = _canonical_entity_name(item.get("parent") or "")
+        k = _rrp_v199_key(name)
+        if not name or k in _rrp_v161_get_done_keys():
+            continue
+        try:
+            if callable(globals().get("_rrp_v161_is_internal_node")) and _rrp_v161_is_internal_node(name):
+                _rrp_v199_mark_processed(name)
+                continue
+        except Exception:
+            pass
+        try:
+            _rrp_v156_run_and_store(conn, name, parent=parent, force_online=False, use_cache=True, source="cascade")
+            processed += 1
+        except Exception as exc:
+            # No dejar el hilo bloqueando eternamente si la búsqueda falla en runtime.
+            _rrp_v199_mark_processed(name)
+            try:
+                st.warning(f"Rama descartada por error temporal: {name} · {type(exc).__name__}: {exc}")
+            except Exception:
+                pass
+    # Reponer solo lo que quede real y no procesado.
+    done = _rrp_v161_get_done_keys()
+    seen: Set[str] = set()
+    for item in q:
+        if not isinstance(item, dict):
+            continue
+        n = _canonical_entity_name(item.get("name") or "")
+        k = _rrp_v199_key(n)
+        if not n or not k or k in done or k in seen:
+            continue
+        seen.add(k)
+        new_q.append(item)
+    st.session_state["rrp_simple_queue"] = new_q[:300]
+    return processed
+
+
+def _rrp_v173_run_until_exhausted(conn: sqlite3.Connection, max_total: int = 120) -> Dict[str, Any]:
+    processed = 0
+    loops = 0
+    added_total = 0
+    seen_signatures: Set[str] = set()
+    try:
+        admin_unlimited = bool(_is_admin_unlimited_ai(conn) or _is_admin_session(conn))
+    except Exception:
+        admin_unlimited = bool(st.session_state.get("admin_authenticated"))
+    normal_limit = int(max_total or 120)
+    while True:
+        if (not admin_unlimited) and processed >= normal_limit:
+            break
+        loops += 1
+        try:
+            data = _rrp_v164_collect_flow(conn) if callable(globals().get("_rrp_v164_collect_flow")) else {"candidates": []}
+            added_total += int(_rrp_v164_enqueue_candidates(data.get("candidates") or []) or 0)
+        except Exception:
+            pass
+        q = _rrp_v164_clean_queue()
+        if not q:
+            break
+        sig = _rrp_v199_queue_signature(q)
+        if sig in seen_signatures:
+            # Cola repetida sin progreso: marcar como stale para que la UI no se quede igual.
+            for item in q:
+                if isinstance(item, dict):
+                    _rrp_v199_mark_processed(item.get("name"))
+            st.session_state["rrp_simple_queue"] = []
+            break
+        seen_signatures.add(sig)
+        batch = len(q) if admin_unlimited else min(len(q), max(1, normal_limit - processed))
+        n = _rrp_v157_run_auto_cascade(conn, max_steps=batch)
+        if n <= 0:
+            # Si no se ha podido procesar nada, no dejar el mismo hilo fantasma.
+            q_now = _rrp_v164_clean_queue()
+            for item in q_now:
+                if isinstance(item, dict):
+                    _rrp_v199_mark_processed(item.get("name"))
+            st.session_state["rrp_simple_queue"] = []
+            break
+        processed += n
+    try:
+        data = _rrp_v164_collect_flow(conn)
+        routes = data.get("routes") or []
+        if callable(globals().get("_rrp_v165_persist_routes_from_flow")):
+            _rrp_v165_persist_routes_from_flow(conn, routes)
+        if callable(globals().get("_rrp_v165_compute_current_deductive_paths")) and callable(globals().get("_rrp_v165_store_current_paths")):
+            _rrp_v165_store_current_paths(conn, _rrp_v165_compute_current_deductive_paths(routes))
+    except Exception:
+        pass
+    try:
+        if callable(globals().get("_rrp_v171_seed_watch_targets_from_routes")):
+            _rrp_v171_seed_watch_targets_from_routes(conn)
+    except Exception:
+        pass
+    remaining = len(_rrp_v164_clean_queue())
+    return {"processed": processed, "loops": loops, "added": added_total, "remaining": remaining, "admin_unlimited": admin_unlimited}
+
+
+def _rrp_v173_pending_threads(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    try:
+        data = _rrp_v164_collect_flow(conn)
+        _rrp_v164_enqueue_candidates(data.get("candidates") or [])
+    except Exception:
+        pass
+    q = _rrp_v164_clean_queue()
+    out: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for x in q:
+        if not isinstance(x, dict):
+            continue
+        n = _canonical_entity_name(x.get("name") or "")
+        k = _rrp_v199_key(n)
+        if not n or not k or k in seen:
+            continue
+        seen.add(k)
+        out.append({"name": n, "parent": x.get("parent") or "", "reason": x.get("reason") or ""})
+    return out
+
+
 # Ejecutar main al final real del archivo, con todos los parches cargados.
 if __name__ == "__main__":
     main()
