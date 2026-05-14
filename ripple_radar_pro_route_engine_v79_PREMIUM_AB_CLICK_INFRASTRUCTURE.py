@@ -39558,6 +39558,480 @@ try:
 except Exception:
     pass
 
+
+
+# =============================================================================
+# v196 · MAP HOVER CONFIDENCE CROSSCHECK FIX
+# -----------------------------------------------------------------------------
+# Problema:
+# - El mapa podía decir "Verificado / con prueba" en el hover del nodo pero mostrar
+#   "Confianza: 0%" porque estaba leyendo meta.confidence de dynamic_nodes, no la
+#   confianza real guardada en connection_proofs/dynamic_routes/route_paths/watch.
+# - Las líneas también podían aparecer documentadas sin enseñar la confianza real
+#   de la ruta guardada.
+# Solución:
+# - Al renderizar el mapa, cruzar el hover con la evidencia real de SQLite.
+# - Si una línea/nodo tiene pruebas o rutas guardadas, mostrar "Confianza documental".
+# - Si algo está verificado pero no tiene score recalculable, no mostrar 0%; mostrar
+#   "pendiente de recalcular".
+# =============================================================================
+try:
+    VERSION = "Route Path Intelligence v6.2.3 PRO — Universal Ripple/XRPL Ecosystem · v196"
+    BUILD_ID = "v196_2026_05_14_MAP_HOVER_CONFIDENCE_CROSSCHECK_FIX"
+    BUILD_NOTE = "Hover del mapa cruza pruebas/rutas: verificado no puede salir con confianza 0%."
+except Exception:
+    pass
+
+
+def _rrp_v196_pair_key(a: Any, b: Any) -> str:
+    try:
+        return _canonical_pair_key(a, b)
+    except Exception:
+        aa = _norm_key(a)
+        bb = _norm_key(b)
+        return "|".join(sorted([aa, bb]))
+
+
+def _rrp_v196_pair_display_key(a: Any, b: Any) -> str:
+    return f"{str(a or '').strip()}|{str(b or '').strip()}"
+
+
+def _rrp_v196_conf_maps(conn: Optional[sqlite3.Connection]) -> Tuple[Dict[str, float], Dict[str, float], Dict[str, List[str]]]:
+    """Devuelve (pair_conf, node_conf, pair_urls) usando todas las tablas relevantes.
+
+    pair_conf usa claves canónicas y direccionales para que A↔B se reconozca desde
+    ambos extremos. node_conf es el máximo score relacionado con el nodo.
+    """
+    pair_conf: Dict[str, float] = {}
+    node_conf: Dict[str, float] = {}
+    pair_urls: Dict[str, List[str]] = {}
+    if conn is None:
+        return pair_conf, node_conf, pair_urls
+
+    def add(a: Any, b: Any, conf: Any, urls: Optional[List[str]] = None) -> None:
+        a = str(a or '').strip(); b = str(b or '').strip()
+        if not a or not b:
+            return
+        try:
+            c = float(conf or 0.0)
+        except Exception:
+            c = 0.0
+        if c <= 0:
+            return
+        keys = [_rrp_v196_pair_key(a, b), _rrp_v196_pair_display_key(a, b), _rrp_v196_pair_display_key(b, a)]
+        for k in keys:
+            pair_conf[k] = max(float(pair_conf.get(k, 0.0) or 0.0), c)
+            if urls:
+                old = pair_urls.get(k, [])
+                for u in urls:
+                    u = str(u or '').strip().replace('https:///', 'https://').replace('http:///', 'http://')
+                    if u.startswith('http') and u not in old:
+                        old.append(u)
+                pair_urls[k] = old[:8]
+        for n in (a, b):
+            node_conf[n] = max(float(node_conf.get(n, 0.0) or 0.0), c)
+            try:
+                canon = _canonical_entity_name(n)
+                if canon:
+                    node_conf[canon] = max(float(node_conf.get(canon, 0.0) or 0.0), c)
+            except Exception:
+                pass
+
+    try:
+        rows = conn.execute("SELECT node_a,node_b,proof_data,confidence FROM connection_proofs WHERE COALESCE(sanitizer_status,'active')!='quarantined'").fetchall()
+        for a,b,pdata,conf in rows:
+            urls=[]; c=float(conf or 0.0)
+            try:
+                pj=json.loads(pdata or '{}')
+                c=max(c, float(pj.get('calibrated_score') or pj.get('confidence') or 0.0))
+                for pr in pj.get('proofs') or []:
+                    if isinstance(pr, dict):
+                        u=str(pr.get('url') or pr.get('source_url') or '').strip()
+                        if u.startswith('http') and u not in urls:
+                            urls.append(u)
+                for u in pj.get('source_urls') or []:
+                    if str(u).startswith('http') and str(u) not in urls:
+                        urls.append(str(u))
+            except Exception:
+                pass
+            add(a,b,c,urls)
+    except Exception:
+        pass
+
+    try:
+        if _rrp_v156_table_exists(conn, 'dynamic_routes') if callable(globals().get('_rrp_v156_table_exists')) else True:
+            for a,b,conf,urls in conn.execute("SELECT src,dst,confidence,source_urls FROM dynamic_routes WHERE COALESCE(sanitizer_status,'active')!='quarantined'").fetchall():
+                us=[]
+                for u in re.findall(r"https?://[^\s,;<>'\"\)\]]+", str(urls or '').replace('https:///', 'https://')):
+                    u=u.strip().rstrip('.,)];')
+                    if u not in us:
+                        us.append(u)
+                add(a,b,conf,us)
+    except Exception:
+        pass
+
+    try:
+        if _rrp_v156_table_exists(conn, 'route_paths') if callable(globals().get('_rrp_v156_table_exists')) else True:
+            for a,h,b,conf in conn.execute("SELECT origin,public_hop,destination,confidence FROM route_paths").fetchall():
+                # El path A→hop→B no es una línea directa A→B; aun así da confianza al nodo y a cada tramo visible.
+                add(a,h,conf,[])
+                add(h,b,conf,[])
+    except Exception:
+        pass
+
+    try:
+        if _rrp_v156_table_exists(conn, 'onchain_watch_targets') if callable(globals().get('_rrp_v156_table_exists')) else True:
+            for a,b,subj,conf,last_sig in conn.execute("SELECT src,dst,subject,confidence,last_signal FROM onchain_watch_targets WHERE COALESCE(status,'active')!='ignore'").fetchall():
+                c=max(float(conf or 0.0), float(last_sig or 0.0))
+                add(a,b,c,[])
+                if subj:
+                    add(a,subj,c,[])
+                    add(subj,b,c,[])
+    except Exception:
+        pass
+
+    return pair_conf, node_conf, pair_urls
+
+
+def _rrp_v196_line_conf(pair_conf: Dict[str, float], src: str, dst: str) -> float:
+    return float(pair_conf.get(_rrp_v196_pair_key(src, dst)) or pair_conf.get(_rrp_v196_pair_display_key(src, dst)) or pair_conf.get(_rrp_v196_pair_display_key(dst, src)) or 0.0)
+
+
+def _rrp_v196_fix_hovertexts(fig: go.Figure, conn: Optional[sqlite3.Connection]) -> go.Figure:
+    pair_conf, node_conf, pair_urls = _rrp_v196_conf_maps(conn)
+
+    def clean_name(x: str) -> str:
+        try:
+            return html.unescape(re.sub(r"<[^>]+>", "", str(x or ''))).strip()
+        except Exception:
+            return str(x or '').strip()
+
+    def node_score(name: str) -> float:
+        vals = [node_conf.get(name, 0.0)]
+        try:
+            vals.append(node_conf.get(_canonical_entity_name(name), 0.0))
+        except Exception:
+            pass
+        return max(float(v or 0.0) for v in vals)
+
+    try:
+        for tr in list(fig.data or []):
+            hv = getattr(tr, 'hovertext', None)
+            if hv is None:
+                continue
+            # Node trace: hovertext is list/tuple.
+            if isinstance(hv, (list, tuple)):
+                new=[]
+                for item in hv:
+                    s=str(item or '')
+                    m=re.search(r"<b>(.*?)</b>", s, flags=re.I|re.S)
+                    if not m:
+                        new.append(s); continue
+                    nm=clean_name(m.group(1))
+                    score=node_score(nm)
+                    if score > 0:
+                        # Sustituye cualquier Confianza: 0% o Confianza: X% por confianza cruzada real.
+                        if re.search(r"Confianza:\s*\d+%", s):
+                            s=re.sub(r"Confianza:\s*\d+%", f"Confianza documental cruzada: {score*100:.0f}%", s)
+                        elif "Confianza documental cruzada" not in s:
+                            s=s.replace("<i>Click", f"Confianza documental cruzada: {score*100:.0f}%<br><i>Click")
+                    else:
+                        # Si está verificado pero no hay score, no mostrar 0%: eso parece falso negativo.
+                        if "Verificado / con prueba" in s and re.search(r"Confianza:\s*0%", s):
+                            s=re.sub(r"Confianza:\s*0%", "Confianza: prueba guardada · score pendiente de recalcular", s)
+                    new.append(s)
+                tr.hovertext = tuple(new) if isinstance(hv, tuple) else new
+                continue
+
+            # Line trace: hovertext is string.
+            s=str(hv or '')
+            m=re.search(r"<b>(.*?)\s*(?:→|&rarr;|-&gt;)\s*(.*?)</b>", s, flags=re.I|re.S)
+            if not m:
+                continue
+            src=clean_name(m.group(1)); dst=clean_name(m.group(2))
+            conf=_rrp_v196_line_conf(pair_conf, src, dst)
+            if conf > 0:
+                if re.search(r"Confianza(?: documental)?[^<]*:\s*\d+%", s):
+                    s=re.sub(r"Confianza(?: documental)?[^<]*:\s*\d+%", f"Confianza documental cruzada: {conf*100:.0f}%", s)
+                else:
+                    s += f"<br>Confianza documental cruzada: {conf*100:.0f}%"
+                urls = pair_urls.get(_rrp_v196_pair_key(src,dst)) or pair_urls.get(_rrp_v196_pair_display_key(src,dst)) or []
+                if urls and "Fuente 1" not in s:
+                    s += "<br>Fuentes: " + " · ".join([f"<a href='{html.escape(u)}' target='_blank'>Fuente {i+1}</a>" for i,u in enumerate(urls[:3])])
+                if "Estado visual: documented" in s and "Verificado / documentado" not in s:
+                    s = s.replace("Estado visual: documented", "Estado visual: Verificado / documentado")
+            else:
+                if "Verificado" in s and re.search(r"Confianza:\s*0%", s):
+                    s=re.sub(r"Confianza:\s*0%", "Confianza: prueba guardada · score pendiente de recalcular", s)
+            tr.hovertext=s
+    except Exception:
+        pass
+    return fig
+
+
+_ORIG_MAKE_MAP_V196 = globals().get('make_map')
+def make_map(*args, **kwargs):
+    conn = kwargs.get('conn')
+    if conn is None:
+        # En la firma actual conn es el tercer/ cuarto argumento nombrado; si viene posicional, buscar sqlite.Connection.
+        for a in args:
+            try:
+                if isinstance(a, sqlite3.Connection):
+                    conn = a; break
+            except Exception:
+                pass
+    fig = _ORIG_MAKE_MAP_V196(*args, **kwargs) if callable(_ORIG_MAKE_MAP_V196) else go.Figure()
+    return _rrp_v196_fix_hovertexts(fig, conn)
+
+
+
+# =============================================================================
+# v197 · Route A→B live volume metrics
+# -----------------------------------------------------------------------------
+# Motivo:
+# Una ruta podía mostrar "Señal vivo 33%" pero la ficha no enseñaba los números
+# que alimentaban esa señal: volumen RLUSD/activo, XRP nativo, pagos, trustlines,
+# ofertas DEX, pools AMM, cuentas únicas, grandes transferencias, etc.
+# Esta capa separa definitivamente:
+#   - confianza documental
+#   - señal on-chain normalizada
+#   - métricas brutas observadas
+# =============================================================================
+try:
+    VERSION = "Route Path Intelligence v6.2.3 PRO — Universal Ripple/XRPL Ecosystem · v197"
+    BUILD_ID = "v197_2026_05_14_ROUTE_AB_LIVE_VOLUME_METRICS_FIX"
+    BUILD_NOTE = "Route A→B muestra métricas vivas reales: volúmenes, pagos, trustlines, DEX/AMM, cuentas y grandes transferencias."
+except Exception:
+    pass
+
+
+def _rrp_v197_num(x: Any, decimals: int = 2) -> float:
+    try:
+        if x is None or x == "":
+            return 0.0
+        return float(x)
+    except Exception:
+        return 0.0
+
+
+def _rrp_v197_fmt_amount(x: Any, suffix: str = "", decimals: int = 2) -> str:
+    v = _rrp_v197_num(x)
+    try:
+        if abs(v) >= 1_000_000_000:
+            s = f"{v/1_000_000_000:.2f}B"
+        elif abs(v) >= 1_000_000:
+            s = f"{v/1_000_000:.2f}M"
+        elif abs(v) >= 1_000:
+            s = f"{v:,.0f}"
+        else:
+            s = f"{v:,.{decimals}f}"
+        return (s + (" " + suffix if suffix else "")).strip()
+    except Exception:
+        return f"0 {suffix}".strip()
+
+
+def _rrp_v197_extract_native_xrp_from_tx(tx: Dict[str, Any]) -> float:
+    """Suma XRP nativo entregado en una TX si existe. IOUs no se convierten a XRP."""
+    try:
+        meta = tx.get("meta") or tx.get("metaData") or {}
+        field = _delivered_amount_field(tx, meta) if callable(globals().get("_delivered_amount_field")) else tx.get("Amount")
+        if isinstance(field, str):
+            return max(0.0, min(float(int(field) / 1_000_000), float(globals().get("_MAX_TX_XRP", 1_000_000_000))))
+    except Exception:
+        return 0.0
+    return 0.0
+
+
+def _rrp_v197_iou_profile_from_tx(tx: Dict[str, Any]) -> Tuple[str, float]:
+    """Devuelve (currency, value) para IOU entregado si lo hay."""
+    try:
+        meta = tx.get("meta") or tx.get("metaData") or {}
+        field = _delivered_amount_field(tx, meta) if callable(globals().get("_delivered_amount_field")) else tx.get("Amount")
+        if isinstance(field, dict):
+            cur = str(field.get("currency") or "IOU")
+            val = abs(float(field.get("value") or 0.0))
+            return cur, val
+    except Exception:
+        pass
+    return "", 0.0
+
+
+_ORIG_RRP_V171_FETCH_LIVE_WATCH_METRICS_V197 = globals().get("_rrp_v171_fetch_live_watch_metrics")
+def _rrp_v171_fetch_live_watch_metrics() -> Dict[str, Any]:
+    """Amplía el snapshot vivo con métricas brutas que la ficha A→B puede mostrar."""
+    metrics = _ORIG_RRP_V171_FETCH_LIVE_WATCH_METRICS_V197() if callable(_ORIG_RRP_V171_FETCH_LIVE_WATCH_METRICS_V197) else {}
+    if not isinstance(metrics, dict):
+        metrics = {}
+
+    # Añadir métricas de XRP nativo/IOUs desde el issuer observable cuando sea posible.
+    # No atribuye esas métricas a bancos o privados: solo al borde público observado.
+    try:
+        txs = fetch_issuer_transactions(limit_pages=1, per_page=120) if callable(globals().get("fetch_issuer_transactions")) else []
+        xrp_volume = 0.0
+        xrp_payments = 0
+        xrp_max = 0.0
+        iou_by_cur: Dict[str, float] = {}
+        payment_count = 0
+        for tx in txs or []:
+            try:
+                cls = classify_tx(tx) if callable(globals().get("classify_tx")) else {}
+                is_payment = bool(cls.get("payment", 0)) if isinstance(cls, dict) else str(tx.get("TransactionType")) == "Payment"
+                if is_payment:
+                    payment_count += 1
+                xv = _rrp_v197_extract_native_xrp_from_tx(tx)
+                if xv > 0:
+                    xrp_volume += xv
+                    xrp_payments += 1
+                    xrp_max = max(xrp_max, xv)
+                cur, val = _rrp_v197_iou_profile_from_tx(tx)
+                if cur and val > 0:
+                    iou_by_cur[cur] = iou_by_cur.get(cur, 0.0) + val
+            except Exception:
+                continue
+        metrics.setdefault("xrp_payment_volume", float(xrp_volume))
+        metrics.setdefault("xrp_payment_count", int(xrp_payments))
+        metrics.setdefault("xrp_max_payment", float(xrp_max))
+        metrics.setdefault("iou_volume_by_currency", iou_by_cur)
+        metrics.setdefault("payment_count", max(int(metrics.get("payment_count") or 0), int(payment_count)))
+    except Exception as exc:
+        metrics.setdefault("xrp_volume_error", str(exc))
+    return metrics
+
+
+def _rrp_v197_metric_bits(metrics: Dict[str, Any], watch_type: str = "") -> List[str]:
+    if not isinstance(metrics, dict):
+        return []
+    wt = str(watch_type or "").lower()
+    bits: List[str] = []
+
+    def add(label: str, value: Any, suffix: str = "", decimals: int = 2, show_zero: bool = False):
+        v = _rrp_v197_num(value)
+        if v or show_zero:
+            bits.append(f"{label}: {_rrp_v197_fmt_amount(v, suffix, decimals)}")
+
+    # Métricas comunes / pagos.
+    add("Pagos observados", metrics.get("payment_count"), "", 0)
+    add("Cuentas únicas", metrics.get("rlusd_unique_accounts"), "", 0)
+    add("Grandes transferencias", metrics.get("rlusd_large_count"), "", 0)
+
+    # Volúmenes. XRP nativo separado de IOUs.
+    add("Volumen XRP nativo", metrics.get("xrp_payment_volume"), "XRP", 2)
+    add("Mayor pago XRP", metrics.get("xrp_max_payment"), "XRP", 2)
+    add("Volumen RLUSD", metrics.get("rlusd_volume"), "RLUSD", 2)
+
+    # Otros IOUs detectados si existen.
+    ious = metrics.get("iou_volume_by_currency") or {}
+    if isinstance(ious, dict):
+        for cur, val in list(ious.items())[:5]:
+            if str(cur).upper() != "RLUSD" and _rrp_v197_num(val) > 0:
+                bits.append(f"Volumen {str(cur)[:12]}: {_rrp_v197_fmt_amount(val, str(cur)[:12], 2)}")
+
+    # Trustlines / issued currencies.
+    add("TrustSet", metrics.get("trustline_count"), "", 0)
+    add("RippleState", metrics.get("ripple_state_events"), "", 0)
+
+    # DEX / AMM / liquidez.
+    add("Ofertas DEX", metrics.get("dex_offer_count") or metrics.get("offer_count"), "", 0)
+    add("Pools AMM", metrics.get("amm_pool_count"), "", 0)
+    add("AMM TX", metrics.get("amm_tx_count"), "", 0)
+    add("Profundidad book", metrics.get("book_depth_xrp"), "XRP", 0)
+    add("TVL AMM aprox.", metrics.get("amm_tvl_xrp"), "XRP", 0)
+
+    # Si hay señal pero pocas métricas, explicar qué falta.
+    if not bits:
+        bits.append("Sin métricas brutas todavía: ejecuta Vigilar/Actualizar XRPL para llenar volumen, pagos y cuentas.")
+    return bits
+
+
+def _rrp_v197_live_metrics_block_from_signal_json(signal_json: Any, fallback_summary: str = "", watch_type: str = "") -> str:
+    try:
+        sj = json.loads(signal_json or "{}") if isinstance(signal_json, str) else (signal_json or {})
+    except Exception:
+        sj = {}
+    metrics = sj.get("metrics") if isinstance(sj, dict) else {}
+    observed_at = sj.get("observed_at") if isinstance(sj, dict) else ""
+    bits = _rrp_v197_metric_bits(metrics or {}, watch_type)
+    prefix = "📊 Métricas vivas del borde público observado"
+    if observed_at:
+        prefix += f" ({str(observed_at)[:19]})"
+    txt = prefix + ": " + " · ".join(bits)
+    if fallback_summary:
+        txt += " · Resumen scanner: " + str(fallback_summary)[:280]
+    return txt[:1400]
+
+
+_ORIG_RRP_V175_ROUTE_PATH_ROWS_FROM_WATCH_V197 = globals().get("_rrp_v175_route_path_rows_from_watch")
+def _rrp_v175_route_path_rows_from_watch(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    rows = _ORIG_RRP_V175_ROUTE_PATH_ROWS_FROM_WATCH_V197(conn) if callable(_ORIG_RRP_V175_ROUTE_PATH_ROWS_FROM_WATCH_V197) else []
+    if not rows:
+        return rows
+    # Indexar señales recientes por target_id.
+    sigs: Dict[str, Tuple[str, str, str, float]] = {}
+    try:
+        _rrp_v171_ensure_watch_tables(conn)
+        q = """
+            SELECT t.target_id, t.watch_type, t.last_summary, s.signal_json, COALESCE(s.observed_at,t.last_checked,''), COALESCE(t.last_signal,0)
+            FROM onchain_watch_targets t
+            LEFT JOIN onchain_watch_signals s ON s.signal_id=(
+                SELECT signal_id FROM onchain_watch_signals ss WHERE ss.target_id=t.target_id ORDER BY observed_at DESC LIMIT 1
+            )
+        """
+        for tid, wt, last_summary, sj, obs, sig in conn.execute(q).fetchall():
+            sigs[str(tid or "")] = (str(wt or ""), str(last_summary or ""), str(sj or "{}"), float(sig or 0.0))
+    except Exception:
+        sigs = {}
+
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        rr = dict(r)
+        tid = str(rr.get("watch_target_id") or "")
+        wt, summary, sj, sig = sigs.get(tid, ("", "", "{}", float(rr.get("live_signal") or 0.0)))
+        block = _rrp_v197_live_metrics_block_from_signal_json(sj, summary, wt)
+        # Evitar duplicar el mismo bloque si la fila ya venía de otro override.
+        for col in ("evidence", "explanation", "deduction_note"):
+            cur = str(rr.get(col) or "")
+            if "📊 Métricas vivas" not in cur:
+                rr[col] = (cur + "\n" + block).strip()[:2500]
+        out.append(rr)
+    return out
+
+
+_ORIG_RRP_BUILD_PREMIUM_ROUTE_PAYLOAD_V197 = globals().get("_rrp_build_premium_route_payload")
+def _rrp_build_premium_route_payload(chart: pd.DataFrame) -> List[Dict[str, Any]]:
+    payload = _ORIG_RRP_BUILD_PREMIUM_ROUTE_PAYLOAD_V197(chart) if callable(_ORIG_RRP_BUILD_PREMIUM_ROUTE_PAYLOAD_V197) else []
+    # Último pase: si la ficha tiene señal viva >0 pero no incluye bloque métrico, mostrar aviso útil.
+    for r in payload:
+        try:
+            live = _rrp_v197_num(r.get("live_score"))
+            text = str(r.get("explanation") or "") + " " + str(r.get("evidence") or "")
+            if live > 0 and "Métricas vivas" not in text:
+                addon = (
+                    "📊 Métricas vivas: señal on-chain calculada, pero esta fila no trae todavía el JSON bruto del scanner. "
+                    "Pulsa Vigilar ahora / Actualizar XRPL para rellenar volumen XRP, volumen del activo, pagos, trustlines, DEX/AMM y cuentas únicas."
+                )
+                r["explanation"] = (str(r.get("explanation") or "") + "\n" + addon).strip()
+        except Exception:
+            pass
+    return payload
+
+
+def _rrp_v197_render_live_metrics_help() -> None:
+    try:
+        st.info(
+            "📊 v197: Route A→B ya separa confianza documental, señal on-chain y métricas brutas. "
+            "Si una línea tiene señal viva, la ficha debe enseñar pagos, volumen RLUSD/activo, XRP nativo, trustlines, DEX/AMM, cuentas únicas y grandes transferencias cuando el scanner los tenga. "
+            "Si aparece señal pero no números, ejecuta Vigilar/Actualizar XRPL para llenar el JSON vivo."
+        )
+    except Exception:
+        pass
+
+# Mostrar ayuda una sola vez en el panel de vigilancia si existe.
+_ORIG_RRP_V171_RENDER_REAL_WATCH_PANEL_V197 = globals().get("_rrp_v171_render_real_watch_panel")
+def _rrp_v171_render_real_watch_panel(conn: sqlite3.Connection) -> None:
+    _rrp_v197_render_live_metrics_help()
+    if callable(_ORIG_RRP_V171_RENDER_REAL_WATCH_PANEL_V197):
+        return _ORIG_RRP_V171_RENDER_REAL_WATCH_PANEL_V197(conn)
+
 # Ejecutar main al final real del archivo, con todos los parches cargados.
 if __name__ == "__main__":
     main()
