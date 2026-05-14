@@ -41010,6 +41010,483 @@ def _rrp_v201_render_deductive_evidence_panel(conn: Optional[sqlite3.Connection]
         )
 
 
+
+# =============================================================================
+# v202 · Core XRPL/XRP unificado + mapa deductivo simplificado
+# =============================================================================
+# Objetivo:
+# - Visualmente XRPL y XRP son un único núcleo: "XRPL / XRP".
+# - Internamente se conservan rutas documentales; el mapa no debe mostrar XRP como
+#   nodo desconocido ni como caja separada.
+# - El mapa deductivo debe leerse como carriles simples:
+#   Entidad/Rail → Conector documentado → Núcleo XRPL/XRP.
+# - Si SWIFT → Treasury y Treasury → XRP/XRPL existen, se muestra:
+#   SWIFT → Treasury → XRPL/XRP, sin afirmar SWIFT → XRPL directo.
+
+RRP_V202_CORE = "XRPL / XRP"
+_RRP_V202_CORE_ALIASES = {
+    "xrpl", "xrp ledger", "xrp ledger network", "ripple ledger", "ripple ledger network",
+    "xrp", "xrp token", "xrp native", "native xrp", "xrp native asset", "activo nativo xrp",
+    "xrpl xrp", "xrpl xrp nativo", "xrpl / xrp", "xrpl/xrp",
+}
+
+
+def _rrp_v202_key(x: Any) -> str:
+    try:
+        return _norm_key(x)
+    except Exception:
+        return str(x or "").strip().lower()
+
+
+def _rrp_v202_is_core_alias(x: Any) -> bool:
+    k = _rrp_v202_key(x)
+    kc = k.replace(" ", "")
+    return k in {_rrp_v202_key(a) for a in _RRP_V202_CORE_ALIASES} or kc in { _rrp_v202_key(a).replace(' ', '') for a in _RRP_V202_CORE_ALIASES }
+
+
+_RRP_V202_PREV_CANON_NODE = globals().get("_rrp_v200_canonical_node_name")
+def _rrp_v200_canonical_node_name(name: Any) -> str:
+    raw = str(name or "").strip()
+    if not raw:
+        return ""
+    if _rrp_v202_is_core_alias(raw):
+        return RRP_V202_CORE
+    if callable(_RRP_V202_PREV_CANON_NODE):
+        try:
+            out = _RRP_V202_PREV_CANON_NODE(raw)
+            if _rrp_v202_is_core_alias(out):
+                return RRP_V202_CORE
+            return str(out or raw).strip()
+        except Exception:
+            pass
+    return raw
+
+
+_RRP_V202_PREV_CATEGORY_FOR_NODE = globals().get("_rrp_v191_category_for_node")
+def _rrp_v191_category_for_node(name: Any, meta: Optional[Dict[str, Any]] = None) -> str:
+    try:
+        n = _rrp_v200_canonical_node_name(name or (meta or {}).get("name") or "")
+        if n == RRP_V202_CORE:
+            return "Core XRPL"
+    except Exception:
+        pass
+    if callable(_RRP_V202_PREV_CATEGORY_FOR_NODE):
+        return _RRP_V202_PREV_CATEGORY_FOR_NODE(name, meta)
+    return "Por investigar"
+
+
+try:
+    if isinstance(RRP_V191_CATEGORY_META, dict):
+        RRP_V191_CATEGORY_META.setdefault("Core XRPL", {"label": "💧 Core XRPL / XRP", "color": "#3CFF9B", "icon": "💧"})
+        RRP_V191_CATEGORY_META["Core XRPL"]["label"] = "💧 Core XRPL / XRP"
+except Exception:
+    pass
+
+
+_RRP_V202_PREV_NODE_STATUSES = globals().get("_rrp_v191_node_statuses")
+def _rrp_v191_node_statuses(conn: Optional[sqlite3.Connection]) -> Dict[str, str]:
+    out = {}
+    if callable(_RRP_V202_PREV_NODE_STATUSES):
+        try:
+            out = dict(_RRP_V202_PREV_NODE_STATUSES(conn) or {})
+        except Exception:
+            out = {}
+    # Fusionar aliases de núcleo.
+    core_status = "core"
+    for k in list(out.keys()):
+        if _rrp_v202_is_core_alias(k):
+            core_status = "core"
+            out.pop(k, None)
+    out[RRP_V202_CORE] = core_status
+    return out
+
+
+_RRP_V202_PREV_LOAD_DYNAMIC = globals().get("load_dynamic_map_elements")
+def load_dynamic_map_elements(conn: Optional[sqlite3.Connection] = None):
+    """v202: normaliza XRPL/XRP en un solo nodo visual y elimina self-loops del núcleo."""
+    try:
+        dyn_nodes, dyn_routes, extra = _RRP_V202_PREV_LOAD_DYNAMIC(conn) if callable(_RRP_V202_PREV_LOAD_DYNAMIC) else ({}, [], [])
+    except Exception:
+        dyn_nodes, dyn_routes, extra = ({}, [], [])
+
+    new_nodes: Dict[str, Dict[str, Any]] = {}
+    for raw_name, meta in dict(dyn_nodes or {}).items():
+        nm = _rrp_v200_canonical_node_name(raw_name)
+        if not nm:
+            continue
+        m = dict(meta or {})
+        if nm == RRP_V202_CORE:
+            m.update({"name": RRP_V202_CORE, "layer": "Público", "icon": "💧", "confidence": max(float(m.get("confidence") or 0.0), 1.0), "summary": "Núcleo público unificado: XRP Ledger + activo nativo XRP."})
+        new_nodes[nm] = {**new_nodes.get(nm, {}), **m}
+
+    # Asegurar núcleo.
+    new_nodes.setdefault(RRP_V202_CORE, {"name": RRP_V202_CORE, "layer": "Público", "icon": "💧", "confidence": 1.0, "summary": "Núcleo público unificado: XRP Ledger + activo nativo XRP."})
+
+    new_routes: List[Any] = []
+    seen: Set[str] = set()
+    for r in list(dyn_routes or []):
+        if not isinstance(r, (list, tuple)) or len(r) < 2:
+            continue
+        rr = list(r)
+        src = _rrp_v200_canonical_node_name(rr[0])
+        dst = _rrp_v200_canonical_node_name(rr[1])
+        if not src or not dst or src == dst:
+            continue
+        rr[0], rr[1] = src, dst
+        kind = str(rr[2] if len(rr) > 2 else "")
+        key = f"{_canonical_pair_key(src, dst)}::{kind}"
+        if key in seen:
+            continue
+        seen.add(key)
+        # Asegurar endpoints.
+        for nm in (src, dst):
+            if nm not in new_nodes:
+                new_nodes[nm] = {"name": nm, "layer": "Descubierto", "icon": "🔎", "confidence": 0.0}
+        new_routes.append(tuple(rr) if isinstance(r, tuple) else rr)
+    return new_nodes, new_routes, extra
+
+
+def _rrp_v202_route_conf(route: Any) -> float:
+    try:
+        if isinstance(route, dict):
+            c = route.get("confidence")
+        elif isinstance(route, (list, tuple)) and len(route) > 5:
+            c = route[5]
+        else:
+            c = 0
+        c = float(c or 0.0)
+        return c * 100.0 if c <= 1.0 else c
+    except Exception:
+        return 0.0
+
+
+def _rrp_v202_route_evidence(route: Any) -> str:
+    try:
+        if isinstance(route, dict):
+            return str(route.get("evidence") or route.get("label") or "")
+        if isinstance(route, (list, tuple)):
+            parts = []
+            for idx in (4, 6, 7):
+                if len(route) > idx and route[idx]:
+                    parts.append(str(route[idx]))
+            return " · ".join(parts)
+    except Exception:
+        pass
+    return ""
+
+
+def _rrp_v202_route_kind(route: Any) -> str:
+    try:
+        if isinstance(route, dict):
+            return str(route.get("kind") or "")
+        if isinstance(route, (list, tuple)) and len(route) > 2:
+            return str(route[2] or "")
+    except Exception:
+        pass
+    return ""
+
+
+def _rrp_v202_fetch_dynamic_routes(conn: Optional[sqlite3.Connection]) -> List[Dict[str, Any]]:
+    """Rutas documentales dinámicas usadas para construir caminos deductivos simples."""
+    rows: List[Dict[str, Any]] = []
+    if conn is None:
+        return rows
+    try:
+        ensure_discovery_tables(conn)
+    except Exception:
+        pass
+    try:
+        q = """
+        SELECT src,dst,kind,confidence,label,evidence,source_urls,added_at
+        FROM dynamic_routes
+        WHERE COALESCE(sanitizer_status,'active')!='quarantined'
+        """
+        for src, dst, kind, conf, label, evidence, urls, day in conn.execute(q).fetchall():
+            s = _rrp_v200_canonical_node_name(src)
+            d = _rrp_v200_canonical_node_name(dst)
+            if not s or not d or s == d:
+                continue
+            rows.append({"src": s, "dst": d, "kind": str(kind or ""), "confidence": float(conf or 0.0), "label": str(label or ""), "evidence": str(evidence or label or ""), "source_urls": str(urls or ""), "day": str(day or "")})
+    except Exception:
+        pass
+    return rows
+
+
+def _rrp_v202_build_simple_deductive_paths(conn: Optional[sqlite3.Connection], max_depth: int = 3, limit: int = 120) -> List[Dict[str, Any]]:
+    """Construye caminos simples hacia XRPL/XRP desde route_paths + dynamic_routes.
+
+    Carriles: origen externo → conector/intermediario → núcleo XRPL/XRP.
+    No convierte el origen en conexión directa al núcleo; solo muestra el camino.
+    """
+    paths: List[Dict[str, Any]] = []
+    seen: Set[Tuple[str, str, str]] = set()
+
+    def add_path(origin: Any, hop: Any, dest: Any, conf: float, evidence: str = "", ptype: str = "deductive_path", day: str = ""):
+        o = _rrp_v200_canonical_node_name(origin)
+        h = _rrp_v200_canonical_node_name(hop)
+        d = _rrp_v200_canonical_node_name(dest)
+        if not o or not h or not d:
+            return
+        if o == RRP_V202_CORE:
+            return
+        if d != RRP_V202_CORE:
+            d = RRP_V202_CORE if _rrp_v202_is_core_alias(d) else d
+        if h == o:
+            h = "Conector documentado"
+        if h == d and d == RRP_V202_CORE:
+            h = "Borde público XRPL/XRP"
+        key = (_canonical_entity_key(o), _canonical_entity_key(h), _canonical_entity_key(d))
+        if key in seen:
+            return
+        seen.add(key)
+        c = float(conf or 0.0)
+        c = c * 100 if c <= 1.0 else c
+        paths.append({"origin": o, "hop": h, "destination": d, "confidence": max(0.0, min(100.0, c)), "path_type": ptype, "evidence": str(evidence or ""), "day": str(day or "")})
+
+    # 1) route_paths ya guardados.
+    try:
+        for p in _rrp_v201_fetch_route_paths(conn, 300):
+            d = _rrp_v200_canonical_node_name(p.get("destination"))
+            h = _rrp_v200_canonical_node_name(p.get("hop"))
+            o = _rrp_v200_canonical_node_name(p.get("origin"))
+            # Priorizar caminos que terminan en núcleo o pasan por núcleo.
+            if d == RRP_V202_CORE or h == RRP_V202_CORE or _rrp_v202_is_core_alias(d) or _rrp_v202_is_core_alias(h):
+                add_path(o, h if h != RRP_V202_CORE else "Borde público XRPL/XRP", RRP_V202_CORE, p.get("confidence", 0), p.get("evidence") or p.get("explanation"), p.get("path_type") or "route_path", p.get("day"))
+    except Exception:
+        pass
+
+    # 2) Construcción deductiva desde dynamic_routes.
+    routes = _rrp_v202_fetch_dynamic_routes(conn)
+    # Grafo no dirigido para visualizar "camino documental", pero guardando evidencia del tramo.
+    adj: Dict[str, List[Tuple[str, Dict[str, Any]]]] = defaultdict(list)
+    for r in routes:
+        s, d = r["src"], r["dst"]
+        adj[s].append((d, r))
+        adj[d].append((s, r))
+
+    for start in list(adj.keys()):
+        if start == RRP_V202_CORE:
+            continue
+        # BFS hasta núcleo.
+        q = deque([(start, [], 100.0)])
+        visited = {start}
+        found = None
+        while q:
+            node, chain, cmin = q.popleft()
+            if len(chain) >= max_depth:
+                continue
+            for nxt, edge in adj.get(node, []):
+                if nxt in visited and nxt != RRP_V202_CORE:
+                    continue
+                ec = _rrp_v202_route_conf(edge)
+                nc = min(cmin, ec if ec > 0 else 50.0)
+                nchain = chain + [(node, nxt, edge)]
+                if nxt == RRP_V202_CORE:
+                    found = (nchain, nc)
+                    q.clear()
+                    break
+                visited.add(nxt)
+                q.append((nxt, nchain, nc))
+        if found:
+            chain, cmin = found
+            # hop = primer nodo intermedio si existe; si es directo, "Borde público".
+            if len(chain) == 1:
+                hop = "Borde público XRPL/XRP"
+            else:
+                hop = chain[0][1]
+            evs = []
+            for a,b,e in chain[:3]:
+                ev = _rrp_v202_route_evidence(e)
+                if ev:
+                    evs.append(f"{a}↔{b}: {ev[:180]}")
+            add_path(start, hop, RRP_V202_CORE, cmin, " | ".join(evs), "deductive_from_routes", chain[-1][2].get("day") if chain else "")
+
+    paths.sort(key=lambda p: (float(p.get("confidence") or 0.0), p.get("origin", "")), reverse=True)
+    return paths[:limit]
+
+
+# Reemplazar el mapa por uno más limpio y legible.
+def _rrp_v201_make_deductive_map(conn: Optional[sqlite3.Connection]) -> go.Figure:
+    paths = _rrp_v202_build_simple_deductive_paths(conn, max_depth=3, limit=100)
+    fig = go.Figure()
+    n = max(1, len(paths))
+    y_top = max(4.2, n * 0.42 + 1.2)
+    fig.update_layout(
+        title="🧠 Mapa deductivo simple · camino hacia XRPL / XRP",
+        paper_bgcolor="#07111F", plot_bgcolor="#07111F", font=dict(color="#E2E8F0"),
+        height=max(620, min(1100, int(260 + n * 28))), margin=dict(l=25, r=25, t=70, b=40),
+        xaxis=dict(visible=False, range=[-0.8, 2.8]), yaxis=dict(visible=False, range=[-0.7, y_top + 0.6]),
+        showlegend=False,
+    )
+    lanes = [(0, "Entidad / nodo descubierto"), (1, "Conector documentado"), (2, "Núcleo XRPL / XRP")]
+    for xc, label in lanes:
+        fig.add_shape(type="rect", x0=xc-0.34, x1=xc+0.34, y0=-0.45, y1=y_top,
+                      line=dict(color="rgba(56,189,248,0.42)", width=1.1),
+                      fillcolor="rgba(15,23,42,0.38)", layer="below")
+        fig.add_annotation(x=xc, y=y_top + 0.25, text=f"<b>{html.escape(label)}</b>", showarrow=False,
+                           font=dict(size=12, color="#E2E8F0"), bgcolor="rgba(7,17,31,.9)", bordercolor="rgba(148,163,184,.4)")
+    if not paths:
+        fig.add_annotation(x=1, y=y_top/2, text="Sin caminos deductivos todavía.<br>Busca una entidad y guarda rutas documentales.", showarrow=False, font=dict(size=14, color="#94A3B8"))
+        return fig
+
+    edge_x=[]; edge_y=[]
+    node_x=[]; node_y=[]; node_text=[]; node_color=[]; node_size=[]; hover=[]
+    for i, p in enumerate(paths):
+        y = y_top - 0.55 - i * 0.42
+        o = str(p.get("origin") or "?")
+        h = str(p.get("hop") or "Conector documentado")
+        d = RRP_V202_CORE
+        conf = float(p.get("confidence") or 0.0)
+        ev = html.escape(str(p.get("evidence") or "")[:520])
+        line_color = "rgba(34,197,94,.72)" if conf >= 80 else "rgba(56,189,248,.62)" if conf >= 60 else "rgba(245,158,11,.58)"
+        # two segments; repeated as separate trace for per-line color.
+        fig.add_trace(go.Scatter(x=[0,1,None,1,2], y=[y,y,None,y,y], mode="lines",
+                                 line=dict(color=line_color, width=2.8), hoverinfo="skip", showlegend=False))
+        for x, name, col, sz in [(0,o,"#F59E0B",16),(1,h,"#38BDF8",15),(2,d,"#3CFF9B",20)]:
+            node_x.append(x); node_y.append(y); node_text.append(name); node_color.append(col); node_size.append(sz)
+            hover.append(f"<b>{html.escape(name)}</b><br>Camino: {html.escape(o)} → {html.escape(h)} → {html.escape(d)}<br>Confianza deductiva: {conf:.0f}%<br>{ev}")
+    fig.add_trace(go.Scatter(
+        x=node_x, y=node_y, mode="markers+text",
+        marker=dict(size=node_size, color=node_color, line=dict(color="#E2E8F0", width=1.2)),
+        text=[f"<b>{html.escape(t)}</b>" for t in node_text], textposition="middle right",
+        hovertext=hover, hoverinfo="text", showlegend=False,
+    ))
+    fig.add_annotation(xref="paper", yref="paper", x=0, y=1.08, xanchor="left", showarrow=False,
+                       text=("<b>Lectura:</b> no son conexiones directas. Es: entidad → conector documentado → núcleo XRPL/XRP. "
+                             "Cada tramo debe reforzarse con documentos o huella pública."),
+                       bgcolor="rgba(15,23,42,.88)", bordercolor="rgba(34,197,94,.35)", font=dict(size=12, color="#E2E8F0"), borderpad=6)
+    return fig
+
+
+# Mapa principal más estable y con núcleo unificado.
+def make_map(row: pd.Series,
+             title: str = "Mapa dinámico: nodos clasificados por categoría y estado",
+             watched: Optional[pd.DataFrame] = None,
+             conn: Optional[sqlite3.Connection] = None,
+             focus_node: Optional[str] = None,
+             route_filter: str = "all") -> go.Figure:
+    fig = go.Figure()
+    try:
+        dyn_nodes, dyn_routes, _ = load_dynamic_map_elements(conn) if conn is not None else ({}, [], [])
+    except Exception:
+        dyn_nodes, dyn_routes = ({}, [])
+    all_nodes: Dict[str, Dict[str, Any]] = {RRP_V202_CORE: {"name": RRP_V202_CORE, "pos": (0, 0), "layer": "Público", "icon": "💧", "confidence": 1.0, "summary": "Núcleo público: XRP Ledger + activo nativo XRP."}}
+    all_nodes.update(dict(dyn_nodes or {}))
+    # rutas filtradas
+    routes=[]
+    for r in list(dyn_routes or []):
+        if not isinstance(r, (list, tuple)) or len(r) < 2:
+            continue
+        src = _rrp_v200_canonical_node_name(r[0]); dst = _rrp_v200_canonical_node_name(r[1])
+        if not src or not dst or src == dst:
+            continue
+        rr = list(r); rr[0]=src; rr[1]=dst
+        group = _rrp_v191_route_kind_group(rr[2] if len(rr)>2 else "")
+        if route_filter == "confirmed" and group != "documented":
+            continue
+        if route_filter == "watch" and group not in {"watch", "documented"}:
+            continue
+        for nm in (src,dst):
+            all_nodes.setdefault(nm, {"name": nm, "layer": "Descubierto", "icon": "🔎", "confidence": 0.0})
+        routes.append(tuple(rr))
+    # Focus node
+    if focus_node:
+        f = _rrp_v200_canonical_node_name(focus_node)
+        keep = {f}
+        for r in routes:
+            if r[0] == f or r[1] == f:
+                keep.update([r[0],r[1]])
+        routes = [r for r in routes if r[0] in keep and r[1] in keep]
+        all_nodes = {k:v for k,v in all_nodes.items() if k in keep or k == RRP_V202_CORE}
+    all_nodes = _rrp_v191_reposition_nodes_for_category_map(all_nodes, conn)
+    statuses = _rrp_v191_node_statuses(conn)
+    cats=[]
+    for meta in all_nodes.values():
+        c = str(meta.get("rrp_category") or _rrp_v191_category_for_node(meta.get("name"), meta))
+        if c not in cats: cats.append(c)
+    box_layout = _rrp_v191_box_layout(cats)
+    # cajas
+    for cat, box in box_layout.items():
+        m = RRP_V191_CATEGORY_META.get(cat, {"label": cat, "color":"#94A3B8"})
+        col = m.get("color", "#94A3B8")
+        fig.add_shape(type="rect", x0=box["x0"], x1=box["x1"], y0=box["y0"], y1=box["y1"],
+                      line=dict(color=col, width=1.6), fillcolor="rgba(15,23,42,0.22)", layer="below")
+        fig.add_annotation(x=box["x0"], y=box["y1"]+0.13, xanchor="left", showarrow=False,
+                           text=f"<b>{html.escape(str(m.get('label', cat)))}</b>",
+                           bgcolor="rgba(7,17,31,.92)", bordercolor=col, font=dict(size=10, color="#FFFFFF"), borderpad=3)
+    # edges
+    edge_seen=set()
+    for r in routes:
+        src,dst = r[0],r[1]
+        if src not in all_nodes or dst not in all_nodes:
+            continue
+        key=_canonical_pair_key(src,dst)+"::"+str(r[2] if len(r)>2 else "")
+        if key in edge_seen: continue
+        edge_seen.add(key)
+        x0,y0=all_nodes[src]["pos"]; x1,y1=all_nodes[dst]["pos"]
+        group=_rrp_v191_route_kind_group(r[2] if len(r)>2 else "")
+        conf=_rrp_v202_route_conf(r)
+        color="#22C55E" if group=="documented" else "#38BDF8" if group=="watch" else "#94A3B8"
+        width=2.0+min(5.0, max(0.0, conf)/22.0)
+        ev=html.escape(_rrp_v202_route_evidence(r)[:500])
+        fig.add_trace(go.Scatter(x=[x0,x1],y=[y0,y1],mode="lines",line=dict(color=color,width=width),
+                                 hovertext=f"<b>{html.escape(src)} → {html.escape(dst)}</b><br>Tipo: {html.escape(str(r[2] if len(r)>2 else ''))}<br>Confianza: {conf:.0f}%<br>{ev}",
+                                 hoverinfo="text",showlegend=False))
+    # nodes
+    xs=[];ys=[];texts=[];hov=[];cols=[];sizes=[];line_cols=[];line_w=[]
+    for name, meta in all_nodes.items():
+        x,y=meta.get("pos", (0,0)); xs.append(x); ys.append(y)
+        cat=str(meta.get("rrp_category") or _rrp_v191_category_for_node(name, meta))
+        status=statuses.get(name) or ("core" if name==RRP_V202_CORE else "pending")
+        col=RRP_V191_CATEGORY_META.get(cat,{}).get("color", "#64748B")
+        cols.append(col); sizes.append(38 if name==RRP_V202_CORE else 28)
+        line_cols.append(RRP_V191_STATUS_COLORS.get(status, "#94A3B8")); line_w.append(5 if status in {"core","verified","watch"} else 3)
+        label = "XRPL / XRP" if name==RRP_V202_CORE else name
+        texts.append(f"<b>{html.escape(label)}</b>")
+        conf=float(meta.get("confidence") or 0.0); conf=conf*100 if conf<=1 else conf
+        hov.append(f"<b>{html.escape(label)}</b><br>Categoría: {html.escape(cat)}<br>Estado: {_rrp_v191_status_label(status)}<br>Confianza: {conf:.0f}%<br>{html.escape(str(meta.get('summary') or '')[:380])}")
+    fig.add_trace(go.Scatter(x=xs,y=ys,mode="markers+text",marker=dict(size=sizes,color=cols,line=dict(color=line_cols,width=line_w)),
+                             text=texts,textposition="middle center",textfont=dict(size=9,color="#FFFFFF"),
+                             hovertext=hov,hoverinfo="text",customdata=list(all_nodes.keys()),showlegend=False))
+    # leyenda compacta
+    fig.add_annotation(xref="paper", yref="paper", x=0, y=1.09, xanchor="left", showarrow=False,
+                       text="<b>Mapa por categorías:</b> XRPL y XRP se muestran como un único núcleo. Las líneas directas son documentales; las rutas indirectas van al Mapa deductivo.",
+                       bgcolor="rgba(15,23,42,.86)", bordercolor="rgba(255,255,255,.18)", font=dict(size=11,color="#E2E8F0"), borderpad=5)
+    xmins=[b["x0"] for b in box_layout.values()] or [-2]; xmaxs=[b["x1"] for b in box_layout.values()] or [2]
+    fig.update_layout(title=dict(text=title, font=dict(size=22,color="#FFFFFF")), template="plotly_dark", paper_bgcolor="#07111f", plot_bgcolor="#07111f", height=820,
+                      margin=dict(l=20,r=20,t=105,b=45), xaxis=dict(visible=False,range=[min(xmins)-.35,max(xmaxs)+.55]), yaxis=dict(visible=False,range=[-3.95,3.55]),
+                      font=dict(color="#FFFFFF"), clickmode="event+select", dragmode="pan", hoverlabel=dict(bgcolor="#1e293b",font=dict(color="#FFFFFF",size=12)))
+    try:
+        fig.update_layout(datarevision=_get_map_revision_token(conn) if callable(globals().get("_get_map_revision_token")) and conn is not None else "v202",
+                          uirevision=f"rrp_v202_core_map_{route_filter}")
+    except Exception:
+        pass
+    if callable(globals().get("_rrp_v196_fix_hovertexts")):
+        try:
+            fig = _rrp_v196_fix_hovertexts(fig, conn)
+        except Exception:
+            pass
+    return fig
+
+
+# Panel de ayuda deductiva más corto.
+def _rrp_v201_render_deductive_evidence_panel(conn: Optional[sqlite3.Connection]) -> None:
+    paths = _rrp_v202_build_simple_deductive_paths(conn, max_depth=3, limit=80)
+    st.markdown("### 🧠 Validar caminos deductivos")
+    st.caption("Lectura simple: una línea deductiva no dice 'A usa XRPL directamente'. Dice: A toca un conector documentado que a su vez toca XRPL/XRP. Cada tramo se puede reforzar con documentos.")
+    if not paths:
+        st.info("Todavía no hay caminos deductivos hacia XRPL/XRP. Busca entidades y guarda rutas documentales.")
+        return
+    n = st.slider("Caminos a revisar", 5, 50, min(12, len(paths)), 1, key="rrp_v202_deductive_review_n")
+    for i,p in enumerate(paths[:n],1):
+        title=f"{i}. {p['origin']} → {p['hop']} → {RRP_V202_CORE} · {float(p.get('confidence') or 0):.0f}%"
+        with st.expander(title, expanded=i<=4):
+            st.write(p.get("evidence") or "Sin evidencia resumida.")
+            st.markdown("**Búsquedas filtradas para reforzar el camino:**")
+            for label, q in _rrp_v201_doc_queries_for_path(p["origin"], p["hop"], RRP_V202_CORE):
+                st.markdown(f"- [{label}]({_rrp_v201_google_url(q)}) — `{q}`")
+
+
 # Ejecutar main al final real del archivo, con todos los parches cargados.
 if __name__ == "__main__":
     main()
