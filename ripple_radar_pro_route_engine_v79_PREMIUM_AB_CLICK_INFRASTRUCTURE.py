@@ -41487,6 +41487,623 @@ def _rrp_v201_render_deductive_evidence_panel(conn: Optional[sqlite3.Connection]
                 st.markdown(f"- [{label}]({_rrp_v201_google_url(q)}) — `{q}`")
 
 
-# Ejecutar main al final real del archivo, con todos los parches cargados.
+# v204: main se mueve al final real del archivo para que v203/v204 se carguen antes de ejecutar.
+# =============================================================================
+# v203 · UNIVERSAL CASCADE ENGINE + DYNAMIC NODE/ROUTE PERSISTENCE FIX
+# -----------------------------------------------------------------------------
+# Motivo:
+# - Algunas búsquedas (p.ej. Standard Custody, SBI Remit) generaban rutas o seeds
+#   pero la cola de cascada no se alimentaba/procesaba y la UI mostraba "0 pasos".
+# - _rrp_v194_insert_dynamic_route persistía líneas pero no garantizaba que ambos
+#   nodos existieran como nodos dinámicos visibles; por eso el mapa podía perderlos.
+# - El botón de "Buscar + cascada" seguía usando el auto-cascade viejo de 25 pasos
+#   y no el motor v173 hasta agotarse.
+# - Faltaba una red de conocimiento semilla, conservadora, para entidades conocidas
+#   del ecosistema Ripple/XRPL cuando el buscador externo vuelve vacío o ambiguo.
+# =============================================================================
+try:
+    VERSION = "Route Path Intelligence v6.2.3 PRO — Universal Cascade Engine · v203"
+    BUILD_ID = "v203_2026_05_14_UNIVERSAL_CASCADE_ENGINE_FIX"
+    BUILD_NOTE = "Cascada universal hasta agotarse, persistencia real de nodos/rutas y semillas Ripple/XRPL sin depender de parches fijos."
+except Exception:
+    pass
+
+
+def _rrp_v203_norm(x: Any) -> str:
+    try:
+        return _norm_key(x)
+    except Exception:
+        return re.sub(r"\s+", " ", str(x or "").strip().lower())
+
+
+def _rrp_v203_dedupe(seq: Any, limit: int = 50) -> List[str]:
+    out: List[str] = []
+    for x in seq or []:
+        s = str(x or "").strip().replace("https:///", "https://").replace("http:///", "http://")
+        if s and s not in out:
+            out.append(s)
+        if len(out) >= limit:
+            break
+    return out
+
+
+# Entidades conocidas que, si la búsqueda online o caché no aporta rutas, pueden
+# sembrarse con rutas documentales conservadoras. No son pruebas directas a XRPL:
+# son tramos hacia el ecosistema y caminos deductivos por intermediarios.
+RRP_V203_KNOWN_ENTITY_ANCHORS: Dict[str, Dict[str, Any]] = {
+    # Custodia / stablecoin
+    "standard custody": {
+        "entity": "Standard Custody",
+        "routes": [
+            ("Standard Custody", "Ripple", "official_acquisition", 0.90, "Ripple anunció/completó la adquisición de Standard Custody & Trust Company. Tramo documental: Standard Custody → Ripple; no prueba actividad XRPL directa."),
+            ("Standard Custody", "RLUSD", "official_stablecoin_issuer", 0.86, "Standard Custody actúa como pieza regulada/issuer asociada a RLUSD. Tramo documental hacia RLUSD; la vigilancia pública pasa por issuer/currency en XRPL si existe identificador."),
+        ],
+        "urls": [
+            "https://ripple.com/insights/paving-a-compliant-path-forward-ripple-closes-standard-custody-acquisition-and-appoints-jack-mcdonald-as-senior-vice-president-of-stablecoins/",
+            "https://ripple.com/solutions/stablecoin/",
+            "https://ripple.com/legal/stablecoin/",
+        ],
+    },
+    "standard custody trust": "standard custody",
+    "standard custody and trust": "standard custody",
+    "standard custody & trust": "standard custody",
+    "sctc": "standard custody",
+
+    # ODL/RippleNet partners frecuentes ya presentes en el mapa histórico.
+    "sbi remit": {"entity": "SBI Remit", "anchor": "Ripple Payments", "kind": "documented_ripplenet_partner", "confidence": 0.78},
+    "moneytap sbi": {"entity": "MoneyTap / SBI", "anchor": "Ripple Payments", "kind": "documented_ripplenet_partner", "confidence": 0.72},
+    "moneytap": {"entity": "MoneyTap / SBI", "anchor": "Ripple Payments", "kind": "documented_ripplenet_partner", "confidence": 0.72},
+    "santander": {"entity": "Santander", "anchor": "Ripple Payments", "kind": "documented_ripplenet_partner", "confidence": 0.74},
+    "standard chartered": {"entity": "Standard Chartered", "anchor": "Ripple Payments", "kind": "documented_ripplenet_partner", "confidence": 0.72},
+    "pnc bank": {"entity": "PNC Bank", "anchor": "Ripple Payments", "kind": "documented_ripplenet_partner", "confidence": 0.70},
+    "bitso": {"entity": "Bitso (ODL MX)", "anchor": "Ripple Payments ODL", "kind": "documented_odl_partner", "confidence": 0.78},
+    "bitso odl mx": {"entity": "Bitso (ODL MX)", "anchor": "Ripple Payments ODL", "kind": "documented_odl_partner", "confidence": 0.78},
+    "coins ph": {"entity": "Coins.ph (ODL PH)", "anchor": "Ripple Payments ODL", "kind": "documented_odl_partner", "confidence": 0.76},
+    "coinsph": {"entity": "Coins.ph (ODL PH)", "anchor": "Ripple Payments ODL", "kind": "documented_odl_partner", "confidence": 0.76},
+    "tranglo": {"entity": "Tranglo (ODL)", "anchor": "Ripple Payments ODL", "kind": "documented_odl_partner", "confidence": 0.76},
+    "beetech": {"entity": "BeeTech (ODL BR)", "anchor": "Ripple Payments ODL", "kind": "documented_odl_partner", "confidence": 0.72},
+    "cuallix": {"entity": "Cuallix (ODL US-MX)", "anchor": "Ripple Payments ODL", "kind": "documented_odl_partner", "confidence": 0.72},
+    "flashfx": {"entity": "FlashFX (ODL AU)", "anchor": "Ripple Payments ODL", "kind": "documented_odl_partner", "confidence": 0.72},
+    "lianlian pay": {"entity": "LianLian Pay", "anchor": "Ripple Payments", "kind": "documented_ripplenet_partner", "confidence": 0.72},
+    "siam commercial bank": {"entity": "Siam Commercial Bank", "anchor": "Ripple Payments", "kind": "documented_ripplenet_partner", "confidence": 0.72},
+    "cimb": {"entity": "CIMB", "anchor": "Ripple Payments", "kind": "documented_ripplenet_partner", "confidence": 0.70},
+    "transfergo": {"entity": "TransferGo", "anchor": "Ripple Payments", "kind": "documented_ripplenet_partner", "confidence": 0.70},
+    "akbank": {"entity": "Akbank", "anchor": "Ripple Payments", "kind": "documented_ripplenet_partner", "confidence": 0.70},
+    "seb": {"entity": "SEB", "anchor": "Ripple Payments", "kind": "documented_ripplenet_partner", "confidence": 0.70},
+
+    # Infraestructura Ripple/XRPL.
+    "metaco": {"entity": "Custody/Metaco", "anchor": "Ripple Payments", "kind": "documented_ripple_custody", "confidence": 0.74},
+    "custody metaco": {"entity": "Custody/Metaco", "anchor": "Ripple Payments", "kind": "documented_ripple_custody", "confidence": 0.74},
+    "custody/metaco": {"entity": "Custody/Metaco", "anchor": "Ripple Payments", "kind": "documented_ripple_custody", "confidence": 0.74},
+    "hidden road": {"entity": "Hidden Road / Prime", "anchor": "Ripple Payments", "kind": "documented_ripple_prime", "confidence": 0.68},
+    "ripple prime": {"entity": "Hidden Road / Prime", "anchor": "Ripple Payments", "kind": "documented_ripple_prime", "confidence": 0.68},
+    "gtreasury": {"entity": "Ripple Treasury", "anchor": "Ripple Payments", "kind": "documented_ripple_treasury", "confidence": 0.68},
+    "gt treasury": {"entity": "Ripple Treasury", "anchor": "Ripple Payments", "kind": "documented_ripple_treasury", "confidence": 0.68},
+    "treasury": {"entity": "Ripple Treasury", "anchor": "Ripple Payments", "kind": "documented_ripple_treasury", "confidence": 0.68},
+    "ripple treasury": {"entity": "Ripple Treasury", "anchor": "Ripple Payments", "kind": "documented_ripple_treasury", "confidence": 0.68},
+    "ripple cbdc platform": {"entity": "Ripple CBDC Platform", "anchor": "XRPL", "kind": "documented_xrpl_technology_basis", "confidence": 0.74},
+    "cbdc platform": {"entity": "Ripple CBDC Platform", "anchor": "XRPL", "kind": "documented_xrpl_technology_basis", "confidence": 0.72},
+    "ripple payments odl": {"entity": "Ripple Payments ODL", "anchor": "Ripple Payments", "kind": "official_ripple_product", "confidence": 0.76},
+    "odl": {"entity": "Ripple Payments ODL", "anchor": "Ripple Payments", "kind": "official_ripple_product", "confidence": 0.76},
+}
+
+
+def _rrp_v203_known_hint(query: Any) -> Optional[Dict[str, Any]]:
+    k = _rrp_v203_norm(query)
+    if not k:
+        return None
+    # exacto / canonizado
+    if k in RRP_V203_KNOWN_ENTITY_ANCHORS:
+        val = RRP_V203_KNOWN_ENTITY_ANCHORS[k]
+        if isinstance(val, str):
+            val = RRP_V203_KNOWN_ENTITY_ANCHORS.get(val)
+        return dict(val or {}) if isinstance(val, dict) else None
+    # flexible contiene alias
+    for alias, val in RRP_V203_KNOWN_ENTITY_ANCHORS.items():
+        if not isinstance(alias, str):
+            continue
+        ak = _rrp_v203_norm(alias)
+        if ak and (ak == k or ak in k or k in ak):
+            if isinstance(val, str):
+                val = RRP_V203_KNOWN_ENTITY_ANCHORS.get(val)
+            return dict(val or {}) if isinstance(val, dict) else None
+    return None
+
+
+def _rrp_v203_layer_icon(name: Any) -> Tuple[str, str]:
+    n = _canonical_entity_name(name) if callable(globals().get("_canonical_entity_name")) else str(name or "").strip()
+    try:
+        if callable(globals().get("_forced_layer_icon_for_node_name")):
+            res = _forced_layer_icon_for_node_name(n)
+            if isinstance(res, tuple) and len(res) >= 2 and res[0]:
+                return str(res[0]), str(res[1] or "🔎")
+    except Exception:
+        pass
+    try:
+        layer, icon = _infer_layer_icon_from_name(n) if callable(globals().get("_infer_layer_icon_from_name")) else ("Descubierto", "🔎")
+        return layer or "Descubierto", icon or "🔎"
+    except Exception:
+        return "Descubierto", "🔎"
+
+
+def _rrp_v203_upsert_dynamic_node(conn: sqlite3.Connection, name: Any, *, confidence: float = 0.0, summary: str = "", status: str = "documented") -> None:
+    if conn is None:
+        return
+    try:
+        if callable(globals().get("ensure_discovery_tables")):
+            ensure_discovery_tables(conn)
+    except Exception:
+        pass
+    n = _canonical_entity_name(name) if callable(globals().get("_canonical_entity_name")) else str(name or "").strip()
+    if not n or n in {"?", "Descubierto"}:
+        return
+    try:
+        cols = _rrp_v194_table_cols(conn, "dynamic_nodes") if callable(globals().get("_rrp_v194_table_cols")) else {str(x[1]) for x in conn.execute("PRAGMA table_info(dynamic_nodes)").fetchall()}
+    except Exception:
+        cols = set()
+    if not cols:
+        return
+    layer, icon = _rrp_v203_layer_icon(n)
+    now = datetime.now(timezone.utc).isoformat()
+    node_id = _canonical_entity_key(n) if callable(globals().get("_canonical_entity_key")) else _rrp_v203_norm(n)
+    data = {
+        "node_id": node_id, "id": node_id, "node": n, "name": n, "node_name": n, "label": n,
+        "canonical_name": n, "layer": layer, "category": layer, "icon": icon,
+        "confidence": float(confidence or 0.0), "summary": str(summary or "")[:1200],
+        "status": status, "source": "v203_dynamic_node", "created_at": now, "updated_at": now,
+        "last_seen": now,
+    }
+    use = [c for c in data if c in cols]
+    if not use:
+        return
+    try:
+        conn.execute(f"INSERT OR REPLACE INTO dynamic_nodes ({','.join(use)}) VALUES ({','.join('?' for _ in use)})", tuple(data[c] for c in use))
+    except Exception:
+        pass
+
+
+_ORIG_RRP_V194_INSERT_DYNAMIC_ROUTE_V203 = globals().get("_rrp_v194_insert_dynamic_route")
+def _rrp_v194_insert_dynamic_route(conn: sqlite3.Connection, src: str, dst: str, kind: str, confidence: float, evidence: str, urls: Optional[List[str]] = None, status: str = "documented") -> bool:
+    """v203: toda ruta persistida crea/actualiza también sus nodos visibles."""
+    src_c = _canonical_entity_name(src) if callable(globals().get("_canonical_entity_name")) else str(src or "").strip()
+    dst_c = _canonical_entity_name(dst) if callable(globals().get("_canonical_entity_name")) else str(dst or "").strip()
+    ok = False
+    try:
+        if callable(_ORIG_RRP_V194_INSERT_DYNAMIC_ROUTE_V203):
+            ok = bool(_ORIG_RRP_V194_INSERT_DYNAMIC_ROUTE_V203(conn, src_c, dst_c, kind, confidence, evidence, _rrp_v203_dedupe(urls or []), status=status))
+    except Exception:
+        ok = False
+    try:
+        _rrp_v203_upsert_dynamic_node(conn, src_c, confidence=float(confidence or 0.0), summary=str(evidence or "")[:700], status=status)
+        _rrp_v203_upsert_dynamic_node(conn, dst_c, confidence=float(confidence or 0.0), summary=str(evidence or "")[:700], status=status)
+        conn.commit()
+    except Exception:
+        pass
+    return ok
+
+
+def _rrp_v203_route_to_result(src: str, dst: str, kind: str, confidence: float, claim: str, urls: List[str]) -> Dict[str, Any]:
+    return {
+        "to": dst,
+        "target": dst,
+        "evidence_type": kind,
+        "type": kind,
+        "kind": kind,
+        "confidence": confidence,
+        "claim": claim,
+        "status": "documented",
+        "draw_on_map": True,
+        "url": urls[0] if urls else "",
+        "urls": urls,
+    }
+
+
+def _rrp_v203_seed_known_query_result(query: Any) -> Optional[Dict[str, Any]]:
+    hint = _rrp_v203_known_hint(query)
+    if not hint:
+        return None
+    if "routes" in hint:
+        entity = _canonical_entity_name(hint.get("entity") or query)
+        raw_routes = list(hint.get("routes") or [])
+        urls = _rrp_v203_dedupe(hint.get("urls") or [])
+    else:
+        entity = _canonical_entity_name(hint.get("entity") or query)
+        anchor = _canonical_entity_name(hint.get("anchor") or "Ripple Payments")
+        kind = str(hint.get("kind") or "documented_ecosystem_relation")
+        conf = float(hint.get("confidence") or 0.64)
+        claim = f"Semilla documental conservadora v203: {entity} aparece como entidad relacionada con {anchor}. Se crea el tramo {entity} → {anchor}; cualquier llegada a XRPL se muestra como camino deductivo, no como conexión directa de {entity} a XRPL."
+        raw_routes = [(entity, anchor, kind, conf, claim)]
+        urls = _rrp_v203_dedupe(hint.get("urls") or [])
+    route_decisions = []
+    evidence_items = []
+    derived_nodes = []
+    max_conf = 0.0
+    for src, dst, kind, conf, claim in raw_routes:
+        src_c = _canonical_entity_name(src)
+        dst_c = _canonical_entity_name(dst)
+        max_conf = max(max_conf, float(conf or 0.0))
+        route_decisions.append(_rrp_v203_route_to_result(src_c, dst_c, kind, float(conf or 0.0), claim, urls))
+        evidence_items.append({"title": f"{src_c} → {dst_c}", "evidence_type": kind, "claim": claim, "url": urls[0] if urls else "", "node_a": src_c, "node_b": dst_c})
+        if dst_c != entity:
+            derived_nodes.append({"name": dst_c, "reason": f"Tramo documental detectado: {src_c} → {dst_c}", "decision": "investigate"})
+    return {
+        "institution": entity,
+        "query": str(query or entity),
+        "icon": "🔎",
+        "entity_type": "Ecosystem entity / document seed",
+        "layer": _rrp_v203_layer_icon(entity)[0],
+        "connected": True,
+        "confidence": max_conf or 0.64,
+        "summary": f"{entity}: semilla documental v203. El sistema crea tramos verificables hacia nodos Ripple/XRPL relacionados y deja el resto como caminos deductivos hasta XRPL/XRP cuando proceda.",
+        "evidence_items": evidence_items,
+        "route_decisions": route_decisions,
+        "derived_nodes": derived_nodes,
+        "sources": [{"title": "Fuente semilla / búsqueda documental", "url": u, "type": "official_or_context_source"} for u in urls],
+        "_v203_known_seed": True,
+        "_force_cascade_reseed": True,
+    }
+
+
+def _rrp_v203_persist_result(conn: sqlite3.Connection, result: Dict[str, Any], *, parent: str = "", source: str = "initial") -> None:
+    if not isinstance(result, dict):
+        return
+    entity = _canonical_entity_name(result.get("institution") or result.get("query") or "")
+    try:
+        _rrp_v203_upsert_dynamic_node(conn, entity, confidence=float(result.get("confidence") or 0.0), summary=str(result.get("summary") or ""), status="documented")
+    except Exception:
+        pass
+    for rd in result.get("route_decisions") or []:
+        if not isinstance(rd, dict):
+            continue
+        dst = _canonical_entity_name(rd.get("to") or rd.get("target") or rd.get("connects_to") or "")
+        src = _canonical_entity_name(rd.get("from") or rd.get("source") or result.get("institution") or entity)
+        kind = str(rd.get("evidence_type") or rd.get("kind") or rd.get("type") or "documented_route")
+        conf = float(rd.get("confidence") or result.get("confidence") or 0.0)
+        claim = str(rd.get("claim") or rd.get("evidence") or rd.get("reason") or result.get("summary") or "")
+        urls = _rrp_v203_dedupe(rd.get("urls") or ([rd.get("url")] if rd.get("url") else []) or [])
+        _rrp_v194_insert_dynamic_route(conn, src, dst, kind, conf, claim, urls, status="documented")
+        # Caminos deductivos automáticos hacia XRPL/XRP core.
+        try:
+            if callable(globals().get("_rrp_v195_link_anchor_to_xrpl")):
+                _rrp_v195_link_anchor_to_xrpl(conn, dst)
+            if callable(globals().get("_rrp_v195_link_entity_to_anchor")) and src != dst:
+                # Solo para rutas no-core: crea route_path src→dst→XRPL si dst es ancla.
+                if callable(globals().get("_rrp_v195_alias_to_anchor")) and _rrp_v195_alias_to_anchor(dst):
+                    _rrp_v195_link_entity_to_anchor(conn, src, dst, result=result, confidence=min(conf, 0.78))
+        except Exception:
+            pass
+    try:
+        if callable(globals().get("_rrp_v157_save_documents")):
+            _rrp_v157_save_documents(conn, result, parent=parent)
+    except Exception:
+        pass
+    try:
+        _rrp_v156_record_result(result, source=source, parent=parent)
+    except Exception:
+        # fallback: insertar en flujo si el recorder falla por cache/datos antiguos
+        flow = list(st.session_state.get("rrp_simple_flow", []) or [])
+        item = dict(result)
+        item["_simple_source"] = source
+        item["_simple_parent"] = parent
+        flow = [x for x in flow if _canonical_entity_key(x.get("institution") or x.get("query")) != _canonical_entity_key(entity)]
+        flow.append(item)
+        st.session_state["rrp_simple_flow"] = flow[-120:]
+    try:
+        conn.commit()
+    except Exception:
+        pass
+
+
+_ORIG_RRP_V156_RUN_AND_STORE_V203 = globals().get("_rrp_v156_run_and_store")
+def _rrp_v156_run_and_store(conn: sqlite3.Connection, query: str, *, parent: str = "", force_online: bool = False, use_cache: bool = True, source: str = "initial") -> None:
+    qraw = str(query or "").strip()
+    if not qraw:
+        return None
+    seed = _rrp_v203_seed_known_query_result(qraw)
+    if seed:
+        # Persistir semilla antes de llamar al buscador: así aunque el buscador/cache venga vacío,
+        # el flujo, mapa y cascada ya tienen tramos reales para continuar.
+        _rrp_v203_persist_result(conn, seed, parent=parent, source=source)
+    if callable(_ORIG_RRP_V156_RUN_AND_STORE_V203):
+        _ORIG_RRP_V156_RUN_AND_STORE_V203(conn, qraw, parent=parent, force_online=force_online, use_cache=use_cache, source=source)
+    # Si el resultado externo vino sin rutas pero existe semilla, reinsertarla al final para que no
+    # la pise una tarjeta de 0 rutas.
+    try:
+        latest = _rrp_v194_latest_result_for_query(qraw) if callable(globals().get("_rrp_v194_latest_result_for_query")) else None
+        route_count = _rrp_v194_route_count(latest) if callable(globals().get("_rrp_v194_route_count")) else 0
+        if seed and route_count == 0:
+            _rrp_v203_persist_result(conn, seed, parent=parent, source=source)
+    except Exception:
+        if seed:
+            _rrp_v203_persist_result(conn, seed, parent=parent, source=source)
+    # Sembrar watchers/route A-B desde lo guardado.
+    try:
+        if callable(globals().get("_rrp_v171_seed_watch_targets_from_routes")):
+            _rrp_v171_seed_watch_targets_from_routes(conn)
+        if callable(globals().get("_rrp_v175_persist_watch_paths")):
+            _rrp_v175_persist_watch_paths(conn)
+        if callable(globals().get("_rrp_v184_seed_live_watch_from_paths")):
+            _rrp_v184_seed_live_watch_from_paths(conn)
+    except Exception:
+        pass
+    return None
+
+
+def _rrp_v203_process_full_search(conn: sqlite3.Connection, query: str, *, force_online: bool = False, use_cache: bool = True, clear_flow: bool = False) -> Dict[str, Any]:
+    if clear_flow:
+        for k in ("rrp_simple_flow", "rrp_simple_queue", "rrp_simple_seen_keys", "rrp_simple_processed_request_keys"):
+            st.session_state[k] = [] if k in {"rrp_simple_flow", "rrp_simple_queue"} else set()
+    _rrp_v156_run_and_store(conn, query, parent="", force_online=force_online, use_cache=use_cache, source="initial")
+    # Encolar candidatos detectados por la vista unificada antes de procesar.
+    try:
+        data = _rrp_v164_collect_flow(conn) if callable(globals().get("_rrp_v164_collect_flow")) else {"candidates": []}
+        if callable(globals().get("_rrp_v164_enqueue_candidates")):
+            _rrp_v164_enqueue_candidates(data.get("candidates") or [])
+    except Exception:
+        pass
+    if callable(globals().get("_rrp_v173_run_until_exhausted")):
+        stats = _rrp_v173_run_until_exhausted(conn, max_total=120)
+    else:
+        n = _rrp_v157_run_auto_cascade(conn, max_steps=60) if callable(globals().get("_rrp_v157_run_auto_cascade")) else 0
+        stats = {"processed": int(n or 0), "remaining": len(st.session_state.get("rrp_simple_queue", []) or []), "added": 0, "loops": 1}
+    try:
+        if callable(globals().get("_rrp_v164_store_deductive_paths")):
+            _rrp_v164_store_deductive_paths(conn)
+    except Exception:
+        pass
+    return stats
+
+
+# UI final de Discovery: usa el motor v203 hasta agotarse. Evita el mensaje engañoso
+# "0 pasos" cuando sí se han creado rutas/semillas pero no había ramas procesables.
+def render_discovery_engine(conn: sqlite3.Connection) -> None:
+    try:
+        _rrp_v158_prune_static_map_to_xrpl() if callable(globals().get("_rrp_v158_prune_static_map_to_xrpl")) else None
+    except Exception:
+        pass
+    try:
+        _rrp_v158_ensure_document_tables(conn) if callable(globals().get("_rrp_v158_ensure_document_tables")) else None
+    except Exception:
+        pass
+    st.subheader("Discovery Engine — investigación universal Ripple/XRPL")
+    st.caption("Busca cualquier entidad. El motor crea tramos documentales, caminos deductivos hacia XRPL/XRP y targets de vigilancia si aparece un punto público observable.")
+
+    try:
+        if callable(globals().get("_rrp_v158_render_reset_panel")):
+            _rrp_v158_render_reset_panel(conn)
+    except Exception:
+        pass
+
+    query = st.text_input("🔍 Buscar institución, nodo, wallet, activo o relación", value=str(st.session_state.get("rrp_simple_search_input", "") or ""), key="rrp_simple_search_input", placeholder="Ej: Standard Custody, SBI Remit, Ripple, RLUSD, SWIFT Treasury, Banco de la República")
+    try:
+        _render_cache_first_status(conn, query, "discovery")
+    except Exception:
+        pass
+    c1, c2, c3 = st.columns([1.15, 1.15, 1])
+    use_cache = c1.checkbox("💾 Caché primero", value=True, key="v203_use_cache")
+    force_online = c2.checkbox("🌐 Forzar novedades", value=False, key="v203_force_online")
+    clear_flow = c3.checkbox("🧹 Nuevo flujo", value=False, key="v203_new_flow")
+
+    b1, b2 = st.columns(2)
+    if b1.button("🔎 Buscar y guardar rutas", key="v203_search_only", use_container_width=True):
+        if not query.strip():
+            st.warning("Escribe algo para buscar.")
+        else:
+            if clear_flow:
+                for k in ("rrp_simple_flow", "rrp_simple_queue", "rrp_simple_seen_keys", "rrp_simple_processed_request_keys"):
+                    st.session_state[k] = [] if k in {"rrp_simple_flow", "rrp_simple_queue"} else set()
+            with st.spinner(f"Investigando {query.strip()}..."):
+                _rrp_v156_run_and_store(conn, query.strip(), parent="", force_online=force_online, use_cache=use_cache, source="initial")
+            st.success("Búsqueda guardada. Si hay hilos nuevos, aparecerán abajo para continuar.")
+            st.rerun()
+
+    if b2.button("🚀 Buscar + cascada completa", key="v203_search_full_cascade", use_container_width=True):
+        if not query.strip():
+            st.warning("Escribe algo para buscar.")
+        else:
+            with st.spinner(f"Investigando {query.strip()} y todas sus ramas..."):
+                stats = _rrp_v203_process_full_search(conn, query.strip(), force_online=force_online, use_cache=use_cache, clear_flow=clear_flow)
+            p = int(stats.get("processed") or 0)
+            rem = int(stats.get("remaining") or 0)
+            if p == 0 and rem == 0:
+                st.success("Búsqueda procesada: no quedaban ramas nuevas, pero las rutas/semillas detectadas se han guardado y sincronizado con mapa/Route A→B.")
+            else:
+                st.success(f"Cascada procesada: {p} búsqueda(s) · pendientes restantes: {rem}.")
+            st.rerun()
+
+    # Continuación manual si quedan hilos.
+    try:
+        pending = _rrp_v173_pending_threads(conn) if callable(globals().get("_rrp_v173_pending_threads")) else list(st.session_state.get("rrp_simple_queue", []) or [])
+    except Exception:
+        pending = list(st.session_state.get("rrp_simple_queue", []) or [])
+    if pending:
+        with st.container(border=True):
+            st.markdown("### 🔗 Hilos pendientes")
+            st.write(" · ".join([f"{x.get('name')} ← {x.get('parent','')}" for x in pending[:18] if isinstance(x, dict)]))
+            if st.button("🚀 Continuar todos los hilos hasta agotarse", key="v203_continue_all_threads", use_container_width=True):
+                with st.spinner("Procesando cascada completa..."):
+                    stats = _rrp_v173_run_until_exhausted(conn, max_total=120) if callable(globals().get("_rrp_v173_run_until_exhausted")) else {"processed": _rrp_v157_run_auto_cascade(conn, 60), "remaining": 0}
+                st.success(f"Cascada procesada: {int(stats.get('processed') or 0)} · pendientes restantes: {int(stats.get('remaining') or 0)}")
+                st.rerun()
+
+    try:
+        _render_discovery_investigation_flow(conn)
+    except Exception as exc:
+        st.error(f"No pude renderizar el flujo de investigación: {type(exc).__name__}: {exc}")
+
+# =============================================================================
+# v204 · TRUE UNIVERSAL SEARCH CASCADE FIX
+# -----------------------------------------------------------------------------
+# Objetivo:
+# - Que la mejora no dependa de una lista de ejemplos (Ripple, SBI, Standard Custody).
+# - Toda búsqueda sigue este flujo: búsqueda normal -> expansión universal por ecosistema
+#   Ripple/XRPL si no hay rutas -> clasificación dinámica -> cascada completa.
+# - Si aparece conexión con cualquier pieza Ripple/XRPL, se crea tramo documental y
+#   camino deductivo al núcleo XRPL/XRP, sin inventar conexión directa.
+# =============================================================================
+try:
+    VERSION = "Route Path Intelligence v6.2.3 PRO — True Universal Search Cascade · v204"
+    BUILD_ID = "v204_2026_05_14_TRUE_UNIVERSAL_SEARCH_CASCADE_FIX"
+    BUILD_NOTE = "Búsqueda universal: cualquier entidad se intenta conectar por documentos a Ripple/XRPL mediante expansión, cascada y clasificación dinámica, no por parches de nombres concretos."
+except Exception:
+    pass
+
+
+def _rrp_v204_admin_unlimited(conn=None) -> bool:
+    try:
+        if callable(globals().get("_is_admin_unlimited_ai")):
+            return bool(_is_admin_unlimited_ai(conn))
+    except Exception:
+        pass
+    try:
+        return bool(st.session_state.get("admin_authenticated"))
+    except Exception:
+        return False
+
+
+def _rrp_v204_route_count_for_query(query: Any) -> int:
+    try:
+        res = _rrp_v194_latest_result_for_query(str(query or "")) if callable(globals().get("_rrp_v194_latest_result_for_query")) else None
+        return int(_rrp_v194_route_count(res) if callable(globals().get("_rrp_v194_route_count")) else 0)
+    except Exception:
+        return 0
+
+
+def _rrp_v204_existing_route_count_for_entity(conn, entity: Any) -> int:
+    try:
+        if conn is None or not callable(globals().get("_rrp_v156_table_exists")) or not _rrp_v156_table_exists(conn, "dynamic_routes"):
+            return 0
+        cols = _rrp_v194_table_cols(conn, "dynamic_routes") if callable(globals().get("_rrp_v194_table_cols")) else {str(x[1]) for x in conn.execute("PRAGMA table_info(dynamic_routes)").fetchall()}
+        src_col = "src" if "src" in cols else ("source" if "source" in cols else ("from_node" if "from_node" in cols else ""))
+        dst_col = "dst" if "dst" in cols else ("target" if "target" in cols else ("to_node" if "to_node" in cols else ""))
+        if not src_col or not dst_col:
+            return 0
+        ek = _canonical_entity_key(entity) if callable(globals().get("_canonical_entity_key")) else _rrp_v203_norm(entity)
+        n=0
+        for r in conn.execute(f"SELECT {src_col},{dst_col} FROM dynamic_routes LIMIT 2000").fetchall():
+            if (_canonical_entity_key(r[0]) if callable(globals().get("_canonical_entity_key")) else _rrp_v203_norm(r[0])) == ek:
+                n += 1
+            elif (_canonical_entity_key(r[1]) if callable(globals().get("_canonical_entity_key")) else _rrp_v203_norm(r[1])) == ek:
+                n += 1
+        return n
+    except Exception:
+        return 0
+
+
+def _rrp_v204_universal_expanded_queries(query: Any) -> List[str]:
+    """Consultas genéricas para cualquier entidad, no solo las conocidas.
+
+    Se usan solo cuando la búsqueda normal no aporta rutas. Buscan documentos
+    públicos/indexados de relación con Ripple/XRPL y ecosistema asociado.
+    """
+    q = str(query or "").strip()
+    if not q:
+        return []
+    quoted = f'"{q}"'
+    candidates = [
+        f'{quoted} RippleNet OR "Ripple Payments" OR ODL official partner',
+        f'{quoted} "XRP Ledger" OR XRPL OR XRP official',
+        f'{quoted} Ripple customer partner payments cross-border',
+        f'{quoted} site:ripple.com Ripple OR RippleNet OR "XRP Ledger"',
+        f'{quoted} site:xrpl.org OR site:docs.ripple.com XRPL XRP Ledger',
+        f'{quoted} filetype:pdf Ripple OR XRPL OR "XRP Ledger"',
+        f'{quoted} Ripple Treasury GTreasury SWIFT custody Metaco Hidden Road Standard Custody RLUSD',
+    ]
+    # Para usuarios normales no quemar API. Admin puede permitir cascadas más amplias.
+    try:
+        if not _rrp_v204_admin_unlimited(None):
+            return candidates[:2]
+    except Exception:
+        return candidates[:2]
+    return candidates
+
+
+_ORIG_RRP_V156_RUN_AND_STORE_V204 = globals().get("_rrp_v156_run_and_store")
+def _rrp_v156_run_and_store(conn: sqlite3.Connection, query: str, *, parent: str = "", force_online: bool = False, use_cache: bool = True, source: str = "initial") -> None:
+    """v204: búsqueda universal real.
+
+    1) Ejecuta el motor existente.
+    2) Si no encuentra rutas para la entidad, prueba expansiones genéricas.
+    3) Postprocesa cada resultado para detectar relación con cualquier ancla Ripple/XRPL.
+    4) Si encuentra rutas, crea nodos, caminos deductivos y targets de vigilancia.
+    """
+    qraw = str(query or "").strip()
+    if not qraw:
+        return None
+    if callable(_ORIG_RRP_V156_RUN_AND_STORE_V204):
+        _ORIG_RRP_V156_RUN_AND_STORE_V204(conn, qraw, parent=parent, force_online=force_online, use_cache=use_cache, source=source)
+
+    # Si ya hay rutas para esa entidad, no forzar más búsqueda.
+    routes_now = max(_rrp_v204_route_count_for_query(qraw), _rrp_v204_existing_route_count_for_entity(conn, qraw))
+    if routes_now <= 0:
+        guard = set(st.session_state.get("rrp_v204_universal_expanded_done", set()) or set())
+        gk = _canonical_entity_key(qraw) if callable(globals().get("_canonical_entity_key")) else _rrp_v203_norm(qraw)
+        if gk not in guard and source in {"initial", "cascade"}:
+            guard.add(gk)
+            st.session_state["rrp_v204_universal_expanded_done"] = guard
+            for expanded in _rrp_v204_universal_expanded_queries(qraw):
+                try:
+                    if callable(_ORIG_RRP_V156_RUN_AND_STORE_V204):
+                        _ORIG_RRP_V156_RUN_AND_STORE_V204(conn, expanded, parent=parent, force_online=True, use_cache=False, source=source)
+                    res2 = _rrp_v194_latest_result_for_query(expanded) if callable(globals().get("_rrp_v194_latest_result_for_query")) else None
+                    if callable(globals().get("_rrp_v194_postprocess_universal_ripple_anchor")):
+                        _rrp_v194_postprocess_universal_ripple_anchor(conn, qraw, res2)
+                    routes_now = max(_rrp_v204_route_count_for_query(expanded), _rrp_v204_existing_route_count_for_entity(conn, qraw))
+                    if routes_now > 0 and not _rrp_v204_admin_unlimited(conn):
+                        break
+                except Exception:
+                    continue
+    # Sincronizaciones finales comunes.
+    try:
+        if callable(globals().get("_rrp_v171_seed_watch_targets_from_routes")):
+            _rrp_v171_seed_watch_targets_from_routes(conn)
+        if callable(globals().get("_rrp_v175_persist_watch_paths")):
+            _rrp_v175_persist_watch_paths(conn)
+        if callable(globals().get("_rrp_v184_seed_live_watch_from_paths")):
+            _rrp_v184_seed_live_watch_from_paths(conn)
+        if callable(globals().get("_rrp_v164_store_deductive_paths")):
+            _rrp_v164_store_deductive_paths(conn)
+        conn.commit()
+    except Exception:
+        pass
+    return None
+
+
+_ORIG_RRP_V203_PROCESS_FULL_SEARCH_V204 = globals().get("_rrp_v203_process_full_search")
+def _rrp_v203_process_full_search(conn: sqlite3.Connection, query: str, *, force_online: bool = False, use_cache: bool = True, clear_flow: bool = False) -> Dict[str, Any]:
+    """v204: cascada universal hasta agotarse para admin; protegida para usuario normal."""
+    if clear_flow:
+        for k in ("rrp_simple_flow", "rrp_simple_queue", "rrp_simple_seen_keys", "rrp_simple_processed_request_keys", "rrp_v204_universal_expanded_done"):
+            st.session_state[k] = [] if k in {"rrp_simple_flow", "rrp_simple_queue"} else set()
+    _rrp_v156_run_and_store(conn, query, parent="", force_online=force_online, use_cache=use_cache, source="initial")
+    try:
+        data = _rrp_v164_collect_flow(conn) if callable(globals().get("_rrp_v164_collect_flow")) else {"candidates": []}
+        if callable(globals().get("_rrp_v164_enqueue_candidates")):
+            _rrp_v164_enqueue_candidates(data.get("candidates") or [])
+    except Exception:
+        pass
+    try:
+        if callable(globals().get("_rrp_v173_run_until_exhausted")):
+            max_total = 1000000 if _rrp_v204_admin_unlimited(conn) else 120
+            stats = _rrp_v173_run_until_exhausted(conn, max_total=max_total)
+        else:
+            n = _rrp_v157_run_auto_cascade(conn, max_steps=(1000000 if _rrp_v204_admin_unlimited(conn) else 60)) if callable(globals().get("_rrp_v157_run_auto_cascade")) else 0
+            stats = {"processed": int(n or 0), "remaining": len(st.session_state.get("rrp_simple_queue", []) or []), "added": 0, "loops": 1}
+    except Exception as exc:
+        stats = {"processed": 0, "remaining": len(st.session_state.get("rrp_simple_queue", []) or []), "added": 0, "error": str(exc)}
+    try:
+        if callable(globals().get("_rrp_v164_store_deductive_paths")):
+            _rrp_v164_store_deductive_paths(conn)
+        if callable(globals().get("_rrp_v175_persist_watch_paths")):
+            _rrp_v175_persist_watch_paths(conn)
+        if callable(globals().get("_rrp_v184_seed_live_watch_from_paths")):
+            _rrp_v184_seed_live_watch_from_paths(conn)
+        conn.commit()
+    except Exception:
+        pass
+    return stats if isinstance(stats, dict) else {"processed": 0, "remaining": 0, "added": 0}
+
+
+# Ejecutar main al final real: v203 y v204 ya están cargados.
 if __name__ == "__main__":
     main()
