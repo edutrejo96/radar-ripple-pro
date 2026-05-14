@@ -40508,6 +40508,308 @@ def _rrp_v173_pending_threads(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     return out
 
 
+
+# =============================================================================
+# v200 · XRP NATIVE ASSET + MAP CANONICALIZATION + NODE CLICK FALLBACK FIX
+# -----------------------------------------------------------------------------
+# Motivo:
+# - XRP aparecía como "xrp" en la caja "Por investigar" aunque es el activo
+#   nativo de XRPL.
+# - Algunas rutas se guardaban con endpoints en minúsculas/alias (xrp, xrp token)
+#   y el mapa no las cruzaba con el nodo canónico.
+# - El mapa podía mostrar "Verificado" pero el click de Plotly no siempre abría
+#   la ficha en Streamlit Cloud; añadimos un selector fallback bajo el mapa.
+# - Se filtran rutas contaminadas XRP↔Treasury/otros si la evidencia no menciona
+#   XRP de forma explícita. XRP nativo siempre queda anclado a XRPL.
+# =============================================================================
+try:
+    VERSION = "Route Path Intelligence v6.2.3 PRO — XRP Native Asset Map · v200"
+    BUILD_ID = "v200_2026_05_14_XRP_NATIVE_ASSET_MAP_CLICK_FIX"
+    BUILD_NOTE = "XRP se clasifica como activo nativo XRPL, se canonizan rutas/nodos del mapa y se añade selector fallback para abrir fichas."
+except Exception:
+    pass
+
+try:
+    ENTITY_CANONICAL_ALIASES.update({
+        "xrp": "XRP",
+        "xrp token": "XRP",
+        "xrp native": "XRP",
+        "native xrp": "XRP",
+        "xrp native asset": "XRP",
+        "activo nativo xrp": "XRP",
+        "activo nativo de xrpl": "XRP",
+        "xrp asset": "XRP",
+    })
+except Exception:
+    pass
+
+_RRP_V200_ORIG_CANONICAL_ENTITY_NAME = globals().get("_canonical_entity_name")
+def _canonical_entity_name(name: Any) -> str:
+    raw = str(name or "").strip()
+    try:
+        k = _norm_key(raw).replace(" ", "")
+        if k in {"xrp", "xrptoken", "xrpnative", "nativexrp", "xrpnativeasset", "activonativoxrp", "xrpasset"}:
+            return "XRP"
+    except Exception:
+        pass
+    if callable(_RRP_V200_ORIG_CANONICAL_ENTITY_NAME):
+        return _RRP_V200_ORIG_CANONICAL_ENTITY_NAME(name)
+    return re.sub(r"\s+", " ", raw).strip() or "Descubierto"
+
+
+def _rrp_v200_canonical_node_name(name: Any) -> str:
+    """Canoniza nombres para el mapa, especialmente activos nativos/aliases."""
+    try:
+        raw = str(name or "").strip()
+        if not raw:
+            return ""
+        k = _norm_key(raw).replace(" ", "")
+        if k in {"xrp", "xrptoken", "xrpnative", "nativexrp", "xrpnativeasset", "activonativoxrp", "xrpasset"}:
+            return "XRP"
+        return _canonical_display_node(raw)
+    except Exception:
+        return str(name or "").strip()
+
+_RRP_V200_ORIG_CATEGORY_FOR_NODE = globals().get("_rrp_v191_category_for_node")
+def _rrp_v191_category_for_node(name: Any, meta: Optional[Dict[str, Any]] = None) -> str:
+    """v200: XRP es activo nativo del core XRPL, no 'Por investigar'."""
+    try:
+        n = _rrp_v200_canonical_node_name(name or (meta or {}).get("name") or "")
+        if n in {"XRPL", "XRP"}:
+            return "Core XRPL"
+        blob = _rrp_v191_norm_text(" ".join([str(name or ""), str((meta or {}).get("layer") or ""), str((meta or {}).get("summary") or "")])) if callable(globals().get("_rrp_v191_norm_text")) else str(name or "").lower()
+        # Evitar que 'XRP' dentro de 'XRPSCAN' clasifique todo como core: solo por nombre canónico.
+        if n == "XRP":
+            return "Core XRPL"
+    except Exception:
+        pass
+    if callable(_RRP_V200_ORIG_CATEGORY_FOR_NODE):
+        return _RRP_V200_ORIG_CATEGORY_FOR_NODE(name, meta)
+    return "Por investigar"
+
+try:
+    if isinstance(RRP_V191_CATEGORY_META, dict):
+        RRP_V191_CATEGORY_META.setdefault("Core XRPL", {"label": "💧 Core XRPL", "color": "#3CFF9B", "icon": "💧"})
+        RRP_V191_CATEGORY_META["Core XRPL"]["label"] = "💧 Core XRPL / XRP nativo"
+except Exception:
+    pass
+
+_RRP_V200_ORIG_ROUTE_KIND_GROUP = globals().get("_rrp_v191_route_kind_group")
+def _rrp_v191_route_kind_group(kind: Any) -> str:
+    k = str(kind or "").strip().lower()
+    if k in {
+        "native_asset", "documented_ecosystem_anchor", "official_source", "official_docs",
+        "official_protocol_feature", "official_stablecoin_on_xrpl", "official_issuer_documentation",
+        "technical_protocol_dependency", "dynamic_route_evidence", "documented_route",
+        "source_route_expansion", "verified_documentary", "verified", "primary_source",
+        "official_partner", "official_document", "official"
+    }:
+        return "documented"
+    if callable(_RRP_V200_ORIG_ROUTE_KIND_GROUP):
+        return _RRP_V200_ORIG_ROUTE_KIND_GROUP(kind)
+    if "watch" in k or "infer" in k:
+        return "watch"
+    return "other"
+
+
+def _rrp_v200_merge_node_meta(old: Dict[str, Any], new: Dict[str, Any], canonical: str) -> Dict[str, Any]:
+    out = dict(old or {})
+    for kk, vv in dict(new or {}).items():
+        if vv not in (None, "", [], {}):
+            if kk == "confidence":
+                try:
+                    out[kk] = max(float(out.get(kk) or 0.0), float(vv or 0.0))
+                except Exception:
+                    out[kk] = vv
+            else:
+                out.setdefault(kk, vv)
+    out["name"] = canonical
+    if canonical == "XRP":
+        out.update({
+            "layer": "Público",
+            "icon": "✕",
+            "summary": "XRP es el activo nativo de XRP Ledger. Debe estar anclado a XRPL; no es un nodo por investigar.",
+            "confidence": max(float(out.get("confidence") or 0.0), 0.92),
+        })
+    if canonical == "XRPL":
+        out.setdefault("icon", "💧")
+        out["confidence"] = max(float(out.get("confidence") or 0.0), 1.0)
+    return out
+
+
+def _rrp_v200_route_mentions_xrp(route: Any) -> bool:
+    try:
+        txt = " ".join(str(x or "") for x in (list(route) if isinstance(route, (list, tuple)) else [route]))
+        return bool(re.search(r"\bXRP\b|XRP Ledger|XRPL|activo nativo|native asset", txt, flags=re.I))
+    except Exception:
+        return False
+
+
+def _rrp_v200_is_bad_xrp_route(src: str, dst: str, route: Any) -> bool:
+    """Evita rutas XRP↔Treasury/SWIFT/etc. si la evidencia no menciona XRP.
+
+    XRP sí puede conectarse a XRPL y a Ripple Payments cuando la ruta lo menciona.
+    """
+    s = _rrp_v200_canonical_node_name(src)
+    d = _rrp_v200_canonical_node_name(dst)
+    if "XRP" not in {s, d}:
+        return False
+    other = d if s == "XRP" else s
+    if other in {"XRPL", "Ripple Payments", "Ripple Payments ODL"}:
+        return False
+    return not _rrp_v200_route_mentions_xrp(route)
+
+_RRP_V200_ORIG_LOAD_DYNAMIC_MAP_ELEMENTS = globals().get("load_dynamic_map_elements")
+def load_dynamic_map_elements(conn: Optional[sqlite3.Connection] = None):
+    """v200: canoniza nodos/rutas del mapa antes de pintar.
+
+    Corrige alias como xrp→XRP y asegura que XRP quede unido a XRPL.
+    """
+    try:
+        data = _RRP_V200_ORIG_LOAD_DYNAMIC_MAP_ELEMENTS(conn) if callable(_RRP_V200_ORIG_LOAD_DYNAMIC_MAP_ELEMENTS) else ({}, [], [])
+    except Exception:
+        data = ({}, [], [])
+    try:
+        dyn_nodes, dyn_routes, extra = data
+    except Exception:
+        dyn_nodes, dyn_routes, extra = ({}, [], [])
+
+    new_nodes: Dict[str, Dict[str, Any]] = {}
+    xrp_seen = False
+    # Canonizar nodos.
+    try:
+        for raw_name, meta in dict(dyn_nodes or {}).items():
+            canon = _rrp_v200_canonical_node_name(raw_name)
+            if not canon:
+                continue
+            if canon == "XRP":
+                xrp_seen = True
+            new_nodes[canon] = _rrp_v200_merge_node_meta(new_nodes.get(canon, {}), dict(meta or {}), canon)
+    except Exception:
+        new_nodes = dict(dyn_nodes or {})
+
+    new_routes: List[Any] = []
+    seen_routes: Set[str] = set()
+    try:
+        for r in list(dyn_routes or []):
+            if not isinstance(r, (list, tuple)) or len(r) < 2:
+                continue
+            rr = list(r)
+            src = _rrp_v200_canonical_node_name(rr[0])
+            dst = _rrp_v200_canonical_node_name(rr[1])
+            if not src or not dst or src == dst:
+                continue
+            if src == "XRP" or dst == "XRP":
+                xrp_seen = True
+            if _rrp_v200_is_bad_xrp_route(src, dst, rr):
+                continue
+            rr[0], rr[1] = src, dst
+            kind = str(rr[2] if len(rr) > 2 else "")
+            key = f"{_canonical_pair_key(src, dst)}::{kind}"
+            if key in seen_routes:
+                continue
+            seen_routes.add(key)
+            # Asegurar nodos endpoint aunque no estén en dynamic_nodes.
+            for nm in (src, dst):
+                if nm not in new_nodes and nm != "XRPL":
+                    new_nodes[nm] = _rrp_v200_merge_node_meta({}, {"layer": "Descubierto", "icon": "🔎", "confidence": 0.0}, nm)
+            new_routes.append(tuple(rr) if isinstance(r, tuple) else rr)
+    except Exception:
+        new_routes = list(dyn_routes or [])
+
+    # XRP nativo: si aparece en cualquier ruta/nodo, debe verse como activo del core y anclarse a XRPL.
+    try:
+        if xrp_seen:
+            new_nodes["XRP"] = _rrp_v200_merge_node_meta(new_nodes.get("XRP", {}), {}, "XRP")
+            native_route = ("XRP", "XRPL", "native_asset", "public_xrpl_score", "XRP es el activo nativo de XRP Ledger/XRPL.")
+            nk = f"{_canonical_pair_key('XRP','XRPL')}::native_asset"
+            if nk not in seen_routes:
+                new_routes.append(native_route)
+    except Exception:
+        pass
+
+    return new_nodes, new_routes, extra
+
+_RRP_V200_ORIG_NODE_STATUSES = globals().get("_rrp_v191_node_statuses")
+def _rrp_v191_node_statuses(conn: Optional[sqlite3.Connection]) -> Dict[str, str]:
+    raw = _RRP_V200_ORIG_NODE_STATUSES(conn) if callable(_RRP_V200_ORIG_NODE_STATUSES) else {"XRPL": "core"}
+    out: Dict[str, str] = {"XRPL": "core"}
+    priority = {"pending": 0, "discovered": 1, "watch": 2, "verified": 3, "core": 4}
+    for name, status in dict(raw or {}).items():
+        canon = _rrp_v200_canonical_node_name(name)
+        if not canon:
+            continue
+        st = str(status or "pending")
+        if canon == "XRP" and st in {"pending", "discovered"}:
+            st = "verified"
+        if priority.get(st, 0) >= priority.get(out.get(canon, "pending"), 0):
+            out[canon] = st
+    # Si hay prueba/ruta XRP↔XRPL, XRP verificado.
+    try:
+        if conn is not None:
+            rows = conn.execute("SELECT 1 FROM dynamic_routes WHERE (LOWER(src)='xrp' AND LOWER(dst) IN ('xrpl','xrp ledger')) OR (LOWER(dst)='xrp' AND LOWER(src) IN ('xrpl','xrp ledger')) LIMIT 1").fetchall()
+            if rows:
+                out["XRP"] = "verified"
+    except Exception:
+        pass
+    return out
+
+
+def _rrp_v200_map_has_nodes(fig: Any) -> List[str]:
+    nodes: List[str] = []
+    try:
+        for tr in list(getattr(fig, "data", []) or []):
+            if str(getattr(tr, "name", "") or "") == "Nodos clasificados":
+                cd = getattr(tr, "customdata", None)
+                if cd is not None:
+                    for x in list(cd):
+                        n = _rrp_v200_canonical_node_name(x)
+                        if n and n not in nodes:
+                            nodes.append(n)
+    except Exception:
+        pass
+    return nodes
+
+# Fallback de selección: en algunas versiones de Streamlit Cloud el click de Plotly
+# no devuelve selección; el selector permite abrir/focalizar la ficha igualmente.
+_RRP_V200_ORIG_ST_PLOTLY_CHART = getattr(st, "plotly_chart", None) if "st" in globals() else None
+def _rrp_v200_plotly_chart_with_node_picker(*args, **kwargs):
+    result = _RRP_V200_ORIG_ST_PLOTLY_CHART(*args, **kwargs) if callable(_RRP_V200_ORIG_ST_PLOTLY_CHART) else None
+    try:
+        fig = args[0] if args else kwargs.get("figure_or_data")
+        nodes = _rrp_v200_map_has_nodes(fig)
+        if not nodes:
+            return result
+        # Solo para mapas grandes de Radar, no para gráficos pequeños.
+        title = ""
+        try:
+            title = str(fig.layout.title.text or "")
+        except Exception:
+            pass
+        if not any(x in title.lower() for x in ["conexiones", "vigilancia", "mapa"]):
+            return result
+        key_base = str(kwargs.get("key") or hashlib.sha256(title.encode()).hexdigest()[:10])
+        current = str(st.session_state.get("map_focus_node") or "")
+        options = ["— Ver todo —"] + nodes
+        idx = options.index(current) if current in options else 0
+        st.caption("Si el click sobre el nodo no abre ficha, usa este selector de foco del mapa.")
+        chosen = st.selectbox("Abrir/focalizar nodo del mapa", options, index=idx, key=f"rrp_v200_node_picker_{key_base}")
+        if chosen != "— Ver todo —" and chosen != current:
+            st.session_state["map_focus_node"] = chosen
+            st.rerun()
+        if chosen == "— Ver todo —" and current:
+            st.session_state.pop("map_focus_node", None)
+            st.rerun()
+    except Exception:
+        pass
+    return result
+try:
+    if callable(_RRP_V200_ORIG_ST_PLOTLY_CHART):
+        st.plotly_chart = _rrp_v200_plotly_chart_with_node_picker
+except Exception:
+    pass
+
+
 # Ejecutar main al final real del archivo, con todos los parches cargados.
 if __name__ == "__main__":
     main()
