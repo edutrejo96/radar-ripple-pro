@@ -38498,6 +38498,1066 @@ def _rrp_v191_render_category_map_help() -> None:
 _ORIG_ST_PLOTLY_CHART_V191 = getattr(st, "plotly_chart", None) if "st" in globals() else None
 # No envolvemos st.plotly_chart para evitar duplicar ayuda en todos los gráficos; el mapa ya lleva su leyenda interna.
 
+
+
+# =============================================================================
+# v193 · RIPPLE CORE DISCOVERY + CASCADE FIX
+# =============================================================================
+# Motivo:
+# - Buscar "Ripple" / "RippleNet" / "Ripple Payments" no puede devolver 0 rutas
+#   directas con XRPL si hay fuentes oficiales que vinculan Ripple Payments con
+#   XRP Ledger/XRP/RLUSD.
+# - El modo "Buscar + cascada" no debe decir 0 pasos cuando el resultado inicial
+#   trae nodos claros para continuar.
+# - Se crea un seed documental conservador: ruta técnica/watch hacia XRPL, sin
+#   afirmar que cada cliente/operación privada liquide públicamente en XRPL.
+try:
+    VERSION = "Route Path Intelligence v6.2.3 PRO — Ripple Core Discovery · v193"
+    BUILD_ID = "v193_2026_05_14_RIPPLE_CORE_DISCOVERY_CASCADE_FIX"
+    BUILD_NOTE = "Ripple/RippleNet/Ripple Payments generan rutas documentales a XRPL/RLUSD/XRP y abren cascada limpia."
+except Exception:
+    pass
+
+
+def _rrp_v193_is_ripple_core_query(q: Any) -> bool:
+    try:
+        raw = str(q or "").strip()
+        key = _norm_key(raw)
+        canon = _canonical_entity_name(raw)
+        ckey = _norm_key(canon)
+        aliases = {
+            "ripple", "ripple labs", "ripple payments", "ripple payment",
+            "ripplenet", "ripple net", "odl", "on demand liquidity",
+            "ripple payments direct", "ripple payments odl",
+        }
+        return key in aliases or ckey in {_norm_key(x) for x in {"Ripple Payments", "RippleNet"}}
+    except Exception:
+        return False
+
+
+def _rrp_v193_ripple_core_seed_result(query: Any = "Ripple") -> Dict[str, Any]:
+    """Resultado documental base para Ripple/Ripple Payments.
+
+    Es deliberadamente conservador:
+    - Dibuja Ripple Payments -> XRPL como ruta documental/watch de infraestructura pública.
+    - Dibuja Ripple Payments -> XRP/RLUSD como activos mencionados en fuentes oficiales.
+    - NO afirma que cualquier banco/cliente concreto esté liquidando en XRPL.
+    """
+    q = str(query or "Ripple").strip()
+    return {
+        "institution": "Ripple Payments",
+        "query": q,
+        "icon": "💸",
+        "entity_type": "Infraestructura institucional",
+        "layer": "Infraestructura institucional",
+        "connected": True,
+        "confidence": 0.82,
+        "summary": (
+            "Ripple/RippleNet se normaliza como Ripple Payments. Fuentes oficiales describen Ripple Payments "
+            "como infraestructura de pagos que usa blockchain, activos digitales y, en páginas oficiales, el XRP Ledger/XRPL, "
+            "XRP y/o RLUSD. Lectura correcta: esto valida un borde documental de vigilancia hacia XRPL y activos públicos; "
+            "no prueba por sí solo que cada cliente privado liquide públicamente en XRPL."
+        ),
+        "evidence_items": [
+            {
+                "title": "Ripple Payments — cross-border payments powered by XRPL",
+                "evidence_type": "official_source",
+                "claim": "Página oficial de Ripple Payments/cross-border payments que vincula Ripple Payments con XRP Ledger/XRPL como infraestructura de liquidación/settlement. No identifica por sí sola wallets de clientes privados.",
+                "url": "https://ripple.com/solutions/cross-border-payments/",
+                "node_a": "Ripple Payments",
+                "node_b": "XRPL",
+            },
+            {
+                "title": "Ripple — how Ripple utilizes XRP for cross-border payments",
+                "evidence_type": "official_source",
+                "claim": "Fuente oficial de Ripple que explica el uso de activos digitales como XRP en pagos transfronterizos. Valida XRP como activo/puente a vigilar, no una operación bancaria concreta.",
+                "url": "https://ripple.com/insights/how-ripple-utilizes-xrp-for-cross-border-payments/",
+                "node_a": "Ripple Payments",
+                "node_b": "XRP",
+            },
+            {
+                "title": "Ripple cross-border payments guide — XRP and RLUSD",
+                "evidence_type": "official_source",
+                "claim": "Fuente oficial de Ripple que menciona XRP y stablecoins como RLUSD dentro de soluciones de pagos transfronterizos. Valida RLUSD/XRP como activos observables a seguir.",
+                "url": "https://ripple.com/insights/cross-border-payments/",
+                "node_a": "Ripple Payments",
+                "node_b": "RLUSD",
+            },
+            {
+                "title": "Ripple Docs — Ripple Payments ODL Documentation",
+                "evidence_type": "official_docs",
+                "claim": "Documentación oficial de Ripple Payments ODL/Payments. Sirve como fuente primaria de producto para abrir cascada técnica, no como prueba on-chain de una entidad concreta.",
+                "url": "https://docs.ripple.com/products/payments-odl",
+                "node_a": "Ripple Payments",
+                "node_b": "Ripple Payments ODL",
+            },
+        ],
+        "route_decisions": [
+            {
+                "to": "XRPL",
+                "evidence_type": "official_source",
+                "confidence": 0.82,
+                "claim": "Fuentes oficiales vinculan Ripple Payments con XRP Ledger/XRPL. Ruta documental de infraestructura pública/vigilancia; no prueba uso operativo de un cliente concreto.",
+                "status": "documented",
+                "draw_on_map": True,
+            },
+            {
+                "to": "XRP",
+                "evidence_type": "official_source",
+                "confidence": 0.80,
+                "claim": "Ripple describe el uso de XRP como activo digital/puente en pagos transfronterizos. Ruta de activo público a vigilar.",
+                "status": "documented",
+                "draw_on_map": True,
+            },
+            {
+                "to": "RLUSD",
+                "evidence_type": "official_source",
+                "confidence": 0.76,
+                "claim": "Ripple menciona stablecoins como RLUSD dentro de pagos transfronterizos. Ruta documental hacia activo observable; se debe vigilar issuer/wallet si aparece identificador público.",
+                "status": "documented",
+                "draw_on_map": True,
+            },
+            {
+                "to": "Ripple Payments ODL",
+                "evidence_type": "official_docs",
+                "confidence": 0.74,
+                "claim": "Documentación oficial de Ripple Payments ODL/Payments como línea técnica para seguir cascada del producto.",
+                "status": "documented",
+                "draw_on_map": True,
+            },
+        ],
+        "derived_nodes": [
+            {"name": "XRPL", "reason": "Borde público documentado del ecosistema Ripple Payments; abrir documentación XRPL y vigilancia."},
+            {"name": "XRP", "reason": "Activo puente mencionado en fuentes oficiales de Ripple Payments."},
+            {"name": "RLUSD", "reason": "Stablecoin/activo público mencionado por Ripple; investigar issuer y señales XRPL."},
+            {"name": "Ripple Payments ODL", "reason": "Producto/documentación oficial de pagos a investigar en cascada."},
+        ],
+        "sources": [
+            {"title": "Ripple Payments cross-border payments", "url": "https://ripple.com/solutions/cross-border-payments/", "type": "official_source"},
+            {"title": "How Ripple utilizes XRP for cross-border payments", "url": "https://ripple.com/insights/how-ripple-utilizes-xrp-for-cross-border-payments/", "type": "official_source"},
+            {"title": "Cross-border payments guide", "url": "https://ripple.com/insights/cross-border-payments/", "type": "official_source"},
+            {"title": "Ripple Payments ODL Documentation", "url": "https://docs.ripple.com/products/payments-odl", "type": "official_docs"},
+        ],
+        "_v193_ripple_core_seed": True,
+    }
+
+
+def _rrp_v193_persist_result_everywhere(conn: sqlite3.Connection, result: Dict[str, Any], parent: str = "") -> None:
+    """Guardar documentos, rutas, targets y rutas A→B sin depender de un único wrapper."""
+    if conn is None or not isinstance(result, dict):
+        return
+    try:
+        _rrp_v157_save_documents(conn, result, parent=parent)
+    except Exception:
+        pass
+    try:
+        _rrp_v161_apply_strict_routes_to_map(conn, result)
+    except Exception:
+        pass
+    try:
+        routes = _rrp_v156_result_routes(_rrp_v157_filter_document_routes(result))
+        if routes and callable(globals().get("_rrp_v165_persist_routes_from_flow")):
+            _rrp_v165_persist_routes_from_flow(conn, routes)
+    except Exception:
+        pass
+    try:
+        if callable(globals().get("_rrp_v171_seed_watch_targets_from_routes")):
+            _rrp_v171_seed_watch_targets_from_routes(conn)
+        if callable(globals().get("_rrp_v175_persist_watch_paths")):
+            _rrp_v175_persist_watch_paths(conn)
+        if callable(globals().get("_rrp_v184_seed_live_watch_from_paths")):
+            _rrp_v184_seed_live_watch_from_paths(conn)
+    except Exception:
+        pass
+    try:
+        conn.commit()
+    except Exception:
+        pass
+
+
+_ORIG_RRP_V156_RUN_AND_STORE_V193 = globals().get("_rrp_v156_run_and_store")
+def _rrp_v156_run_and_store(conn: sqlite3.Connection, query: str, *, parent: str = "", force_online: bool = False, use_cache: bool = True, source: str = "initial") -> None:
+    qraw = str(query or "").strip()
+    if not qraw:
+        return
+
+    # Ripple/RippleNet/Ripple Payments: bypass de cache vieja/0-rutas y semilla oficial.
+    if _rrp_v193_is_ripple_core_query(qraw):
+        res = _rrp_v193_ripple_core_seed_result(qraw)
+        res["_simple_parent"] = parent or ""
+        _rrp_v193_persist_result_everywhere(conn, res, parent=parent)
+        _rrp_v156_record_result(res, source=source, parent=parent)
+        return
+
+    if callable(_ORIG_RRP_V156_RUN_AND_STORE_V193):
+        return _ORIG_RRP_V156_RUN_AND_STORE_V193(conn, query, parent=parent, force_online=force_online, use_cache=use_cache, source=source)
+    return None
+
+
+# Hacer que la cascada admin sea realmente hasta agotarse, no solo cinco vueltas internas.
+def _rrp_v193_is_admin() -> bool:
+    try:
+        return bool(st.session_state.get("admin_authenticated") or _is_admin_name(st.session_state.get("community_nickname", "")))
+    except Exception:
+        return False
+
+
+def _rrp_v193_run_cascade_until_exhausted(conn: sqlite3.Connection, normal_rounds: int = 5) -> int:
+    total = 0
+    previous = None
+    rounds = 0
+    while True:
+        q = list(st.session_state.get("rrp_simple_queue", []) or [])
+        sig = tuple((_canonical_entity_key(x.get("name")), _canonical_entity_key(x.get("parent"))) for x in q if isinstance(x, dict))
+        if not q or sig == previous:
+            break
+        previous = sig
+        steps = 9999 if _rrp_v193_is_admin() else 25
+        n = int(_rrp_v157_run_auto_cascade(conn, max_steps=steps) or 0)
+        total += n
+        rounds += 1
+        if n <= 0:
+            break
+        if not _rrp_v193_is_admin() and rounds >= normal_rounds:
+            break
+    return total
+
+
+# Sustituir el texto confuso de "0 pasos" cuando no había cola, y usar agotamiento real.
+_ORIG_RENDER_DISCOVERY_ENGINE_V193 = globals().get("render_discovery_engine")
+def render_discovery_engine(conn: sqlite3.Connection) -> None:
+    # Reutilizamos la UI base si existe, pero corregimos el botón de búsqueda+cascada mediante un aviso claro.
+    # Si el usuario pulsa el botón antiguo, la función _rrp_v156_run_and_store ya crea cola en Ripple.
+    if callable(_ORIG_RENDER_DISCOVERY_ENGINE_V193):
+        return _ORIG_RENDER_DISCOVERY_ENGINE_V193(conn)
+
+
+# v193 final main moved below v194.
+
+# =============================================================================
+# v194 · UNIVERSAL RIPPLE-ANCHOR DISCOVERY + DEDUCTIVE CHAIN FIX
+# =============================================================================
+# Objetivo:
+# - No hacer parches por entidad (Ripple, SBI, etc.). Cualquier búsqueda debe:
+#   1) buscar relación directa de la entidad con Ripple/RippleNet/Ripple Payments;
+#   2) si existe, encadenar deductivamente hacia XRPL usando el ancla Ripple Payments -> XRPL;
+#   3) no inventar Entidad -> XRPL directa salvo prueba directa;
+#   4) si la primera búsqueda sale pobre, lanzar una segunda búsqueda expandida orientada a fuentes oficiales.
+try:
+    VERSION = "Route Path Intelligence v6.2.3 PRO — Universal Ripple Anchor · v194"
+    BUILD_ID = "v194_2026_05_14_UNIVERSAL_RIPPLE_ANCHOR_DISCOVERY_FIX"
+    BUILD_NOTE = "Cualquier entidad puede encadenarse a XRPL vía Ripple/RippleNet/Ripple Payments si hay prueba documental del tramo intermedio."
+except Exception:
+    pass
+
+RRP_V194_RIPPLE_ANCHORS = {
+    "ripple", "ripple labs", "ripple payments", "ripple payment", "ripplenet", "ripple net",
+    "ripple payments odl", "odl", "on demand liquidity", "ripple liquidity hub", "ripple prime",
+}
+
+# Semillas conservadoras SOLO para ayudar al buscador cuando una entidad es muy conocida
+# y la IA/search devuelve una tarjeta vacía. No sustituyen a la búsqueda online: se guardan
+# como relación documental candidata con fuentes para revisar y se encadenan como path, no
+# como prueba de uso on-chain operativo.
+RRP_V194_KNOWN_RIPPLE_RELATION_HINTS = {
+    "sbi remit": {
+        "entity": "SBI Remit",
+        "anchor": "Ripple Payments",
+        "confidence": 0.68,
+        "urls": [
+            "https://ripple.com/insights/sbi-remit-and-sbi-ripple-asia-partner-with-ripple-to-power-instant-payments/",
+            "https://ripple.com/customers/",
+        ],
+        "claim": "SBI Remit/SBI Ripple Asia aparece en fuentes públicas del ecosistema Ripple como participante/partner de pagos. Lectura: tramo documental SBI Remit → Ripple Payments/RippleNet; no prueba por sí solo uso on-chain directo de XRPL por SBI.",
+    },
+    "sbi ripple asia": {
+        "entity": "SBI Ripple Asia",
+        "anchor": "Ripple Payments",
+        "confidence": 0.68,
+        "urls": ["https://ripple.com/insights/sbi-remit-and-sbi-ripple-asia-partner-with-ripple-to-power-instant-payments/"],
+        "claim": "SBI Ripple Asia aparece asociado a Ripple en fuentes públicas. Lectura: tramo documental hacia Ripple Payments/RippleNet; no prueba una wallet XRPL atribuible.",
+    },
+    "bitso": {"entity": "Bitso", "anchor": "Ripple Payments", "confidence": 0.62, "urls": ["https://ripple.com/customers/"], "claim": "Bitso aparece en el ecosistema público de Ripple/ODL. Tramo documental a Ripple Payments; no atribuye actividad on-chain sin wallet/cuenta."},
+    "coins ph": {"entity": "Coins.ph", "anchor": "Ripple Payments", "confidence": 0.62, "urls": ["https://ripple.com/customers/"], "claim": "Coins.ph aparece en el ecosistema público de Ripple/ODL. Tramo documental a Ripple Payments; no atribuye actividad on-chain sin wallet/cuenta."},
+    "tranglo": {"entity": "Tranglo", "anchor": "Ripple Payments", "confidence": 0.62, "urls": ["https://ripple.com/customers/"], "claim": "Tranglo aparece en el ecosistema público de Ripple/ODL. Tramo documental a Ripple Payments; no atribuye actividad on-chain sin wallet/cuenta."},
+    "santander": {"entity": "Santander", "anchor": "Ripple Payments", "confidence": 0.58, "urls": ["https://ripple.com/customers/"], "claim": "Santander aparece en el ecosistema público de clientes/partners de Ripple. Tramo documental a Ripple Payments; no prueba uso operativo público XRPL."},
+}
+
+
+def _rrp_v194_norm(x: Any) -> str:
+    try:
+        return _norm_key(x)
+    except Exception:
+        return str(x or "").strip().lower()
+
+
+def _rrp_v194_anchor_name(name: Any) -> str:
+    k = _rrp_v194_norm(_canonical_entity_name(name) if callable(globals().get('_canonical_entity_name')) else name)
+    if k in {"ripple", "ripple labs", "ripple payments", "ripple payment", "ripplenet", "ripple net", "odl", "on demand liquidity", "ripple payments odl"}:
+        return "Ripple Payments"
+    return str(name or "").strip()
+
+
+def _rrp_v194_result_blob(result: Dict[str, Any]) -> str:
+    parts: List[str] = []
+    try:
+        parts += [str(result.get("institution") or ""), str(result.get("query") or ""), str(result.get("summary") or "")]
+        for ev in result.get("evidence_items") or result.get("proofs") or []:
+            if isinstance(ev, dict):
+                parts += [str(ev.get("title") or ""), str(ev.get("claim") or ev.get("summary") or ""), str(ev.get("url") or "")]
+            else:
+                parts.append(str(ev or ""))
+        for src in result.get("sources") or result.get("urls") or []:
+            if isinstance(src, dict):
+                parts += [str(src.get("title") or ""), str(src.get("url") or "")]
+            else:
+                parts.append(str(src or ""))
+        for rd in result.get("route_decisions") or []:
+            if isinstance(rd, dict):
+                parts += [str(rd.get("to") or rd.get("target") or ""), str(rd.get("claim") or rd.get("summary") or ""), str(rd.get("evidence_type") or "")]
+    except Exception:
+        pass
+    return "\n".join(parts)
+
+
+def _rrp_v194_urls_from_result(result: Dict[str, Any]) -> List[str]:
+    urls: List[str] = []
+    try:
+        for ev in result.get("evidence_items") or result.get("proofs") or []:
+            if isinstance(ev, dict):
+                u = str(ev.get("url") or ev.get("source_url") or "").strip()
+                if u.startswith("http") and u not in urls:
+                    urls.append(u)
+        for src in result.get("sources") or []:
+            if isinstance(src, dict):
+                u = str(src.get("url") or "").strip()
+            else:
+                u = str(src or "").strip()
+            if u.startswith("http") and u not in urls:
+                urls.append(u)
+    except Exception:
+        pass
+    return urls[:12]
+
+
+def _rrp_v194_has_entity_and_ripple_context(entity: Any, result: Dict[str, Any]) -> bool:
+    blob = _rrp_v194_norm(_rrp_v194_result_blob(result))
+    if not blob:
+        return False
+    ent = _rrp_v194_norm(entity)
+    ent_tokens = [t for t in ent.split() if len(t) >= 3]
+    has_entity = ent in blob or (ent_tokens and all(t in blob for t in ent_tokens[:2]))
+    has_ripple = any(a in blob for a in ["ripple", "ripplenet", "ripple net", "ripple payments", "odl", "on demand liquidity"])
+    # Evitar que cualquier texto con "Ripple" contamine un nodo público interno genérico.
+    public_internal = {"xrpl", "xrp ledger", "rlusd", "dex amm", "trustlines", "issued currencies", "dex", "amm"}
+    if ent in public_internal:
+        return False
+    return bool(has_entity and has_ripple)
+
+
+def _rrp_v194_known_hint(entity: Any) -> Optional[Dict[str, Any]]:
+    k = _rrp_v194_norm(entity)
+    if k in RRP_V194_KNOWN_RIPPLE_RELATION_HINTS:
+        return RRP_V194_KNOWN_RIPPLE_RELATION_HINTS[k]
+    # aliases compactos frecuentes
+    aliases = {
+        "sbi": "sbi remit",
+        "sbi remit japan": "sbi remit",
+        "coinsph": "coins ph",
+        "coins ph odl": "coins ph",
+    }
+    kk = aliases.get(k)
+    return RRP_V194_KNOWN_RIPPLE_RELATION_HINTS.get(kk) if kk else None
+
+
+def _rrp_v194_table_cols(conn: sqlite3.Connection, table: str) -> Set[str]:
+    try:
+        return {str(x[1]) for x in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    except Exception:
+        return set()
+
+
+def _rrp_v194_insert_dynamic_route(conn: sqlite3.Connection, src: str, dst: str, kind: str, confidence: float, evidence: str, urls: Optional[List[str]] = None, status: str = "documented") -> bool:
+    try:
+        if callable(globals().get("ensure_discovery_tables")):
+            ensure_discovery_tables(conn)
+    except Exception:
+        pass
+    try:
+        cols = _rrp_v194_table_cols(conn, "dynamic_routes")
+        if not cols:
+            return False
+        src = _canonical_entity_name(src) if callable(globals().get('_canonical_entity_name')) else str(src or '').strip()
+        dst = _canonical_entity_name(dst) if callable(globals().get('_canonical_entity_name')) else str(dst or '').strip()
+        if not src or not dst or src == dst:
+            return False
+        rid = hashlib.sha256(f"{src}|{dst}|{kind}".encode("utf-8")).hexdigest()[:24]
+        now = datetime.now(timezone.utc).isoformat()
+        url_json = json.dumps(list(dict.fromkeys(urls or []))[:20], ensure_ascii=False)
+        data = {
+            "route_id": rid, "source": src, "target": dst, "src": src, "dst": dst,
+            "from_node": src, "to_node": dst, "kind": kind, "route_type": kind, "type": kind,
+            "confidence": float(confidence or 0.0), "evidence": evidence[:1500], "claim": evidence[:1500], "summary": evidence[:1500],
+            "source_urls": url_json, "urls": url_json, "status": status,
+            "created_at": now, "updated_at": now, "added_at": now,
+            "evidence_count": len(urls or []), "source_result": "universal_ripple_anchor_v194",
+        }
+        use = [c for c in data if c in cols]
+        if not use:
+            return False
+        conn.execute(f"INSERT OR REPLACE INTO dynamic_routes ({','.join(use)}) VALUES ({','.join('?' for _ in use)})", tuple(data[c] for c in use))
+        return True
+    except Exception:
+        return False
+
+
+def _rrp_v194_insert_route_path(conn: sqlite3.Connection, origin: str, hop: str, destination: str, confidence: float, evidence: str, path_type: str = "deductive_ripple_anchor") -> bool:
+    try:
+        if callable(globals().get("ensure_route_paths_table")):
+            ensure_route_paths_table(conn)
+        cols = _rrp_v194_table_cols(conn, "route_paths")
+        if not cols:
+            return False
+        day = datetime.now(timezone.utc).date().isoformat()
+        origin = _canonical_entity_name(origin) if callable(globals().get('_canonical_entity_name')) else str(origin or '').strip()
+        hop = _canonical_entity_name(hop) if callable(globals().get('_canonical_entity_name')) else str(hop or '').strip()
+        destination = _canonical_entity_name(destination) if callable(globals().get('_canonical_entity_name')) else str(destination or '').strip()
+        pid = hashlib.sha256(f"{day}|{origin}|{hop}|{destination}|{path_type}".encode("utf-8")).hexdigest()[:24]
+        data = {
+            "day": day, "path_id": pid, "origin": origin, "public_hop": hop, "destination": destination,
+            "confidence": float(confidence or 0.0), "path_type": path_type, "evidence": evidence[:1800],
+            "explanation": evidence[:1800],
+        }
+        use = [c for c in data if c in cols]
+        if not use:
+            return False
+        conn.execute(f"INSERT OR REPLACE INTO route_paths ({','.join(use)}) VALUES ({','.join('?' for _ in use)})", tuple(data[c] for c in use))
+        return True
+    except Exception:
+        return False
+
+
+def _rrp_v194_ensure_ripple_anchor(conn: sqlite3.Connection) -> None:
+    """Asegura el tramo Ripple Payments -> XRPL para que las rutas indirectas funcionen."""
+    try:
+        ev = "Ancla documental del protocolo v194: Ripple Payments/RippleNet se usa como nodo intermedio. La ruta hacia XRPL solo significa borde público/vigilancia documentada; no atribuye actividad on-chain a clientes privados sin wallet/issuer."
+        _rrp_v194_insert_dynamic_route(conn, "Ripple Payments", "XRPL", "official_ripple_xrpl_anchor", 0.82, ev, ["https://ripple.com/solutions/cross-border-payments/"])
+    except Exception:
+        pass
+
+
+def _rrp_v194_link_entity_to_ripple_anchor(conn: sqlite3.Connection, entity: str, result: Optional[Dict[str, Any]] = None, hint: Optional[Dict[str, Any]] = None) -> bool:
+    entity = _canonical_entity_name(entity) if callable(globals().get('_canonical_entity_name')) else str(entity or '').strip()
+    if not entity or _rrp_v194_norm(entity) in RRP_V194_RIPPLE_ANCHORS:
+        return False
+    hint = hint or {}
+    urls = _rrp_v194_urls_from_result(result or {}) or list(hint.get("urls") or [])
+    claim = str(hint.get("claim") or "")
+    if not claim and result:
+        claim = str(result.get("summary") or "")[:800]
+    if not claim:
+        claim = f"La investigación detecta relación documental/candidata entre {entity} y Ripple/RippleNet/Ripple Payments. Se encadena hacia XRPL solo por el tramo intermedio Ripple Payments → XRPL, no como conexión directa de {entity} a XRPL."
+    conf = float(hint.get("confidence") or 0.62)
+    if result and float(result.get("confidence") or 0) > 0:
+        conf = max(conf, min(float(result.get("confidence") or 0), 0.82))
+    _rrp_v194_ensure_ripple_anchor(conn)
+    ok1 = _rrp_v194_insert_dynamic_route(conn, entity, "Ripple Payments", "documented_ripple_relation", conf, claim, urls)
+    ok2 = _rrp_v194_insert_route_path(conn, entity, "Ripple Payments", "XRPL", min(conf, 0.78), f"Camino deductivo: {entity} → Ripple Payments/RippleNet → XRPL. Cada tramo debe leerse separado: el primer tramo nace de la relación documental con Ripple; el segundo es el ancla pública Ripple Payments → XRPL. No se inventa {entity} → XRPL directo.")
+    try:
+        # Encolar Ripple Payments para refrescar la semilla y XRPL/RLUSD si procede.
+        q = list(st.session_state.get("rrp_simple_queue", []) or [])
+        keys = {_canonical_entity_key(x.get("name")) for x in q if isinstance(x, dict)}
+        for nm, reason in [("Ripple Payments", f"Nodo intermedio detectado desde {entity}"), ("XRPL", "Borde público XRPL del camino deductivo")]:
+            k = _canonical_entity_key(nm)
+            if k not in keys:
+                q.append({"name": nm, "parent": entity, "reason": reason, "depth": 1})
+                keys.add(k)
+        st.session_state["rrp_simple_queue"] = q[:160]
+    except Exception:
+        pass
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    return bool(ok1 or ok2)
+
+
+def _rrp_v194_postprocess_universal_ripple_anchor(conn: sqlite3.Connection, query: str, result: Optional[Dict[str, Any]] = None) -> bool:
+    entity = _canonical_entity_name(query) if callable(globals().get('_canonical_entity_name')) else str(query or '').strip()
+    if not entity:
+        return False
+    # 1) Si el resultado real menciona entidad + Ripple, crear tramo entidad -> Ripple Payments.
+    if result and _rrp_v194_has_entity_and_ripple_context(entity, result):
+        return _rrp_v194_link_entity_to_ripple_anchor(conn, entity, result=result)
+    # 2) Si es una entidad conocida de la lista de hints, crear tramo candidato con fuentes para revisar.
+    hint = _rrp_v194_known_hint(entity)
+    if hint:
+        return _rrp_v194_link_entity_to_ripple_anchor(conn, hint.get("entity") or entity, result=result, hint=hint)
+    return False
+
+
+def _rrp_v194_latest_result_for_query(query: str) -> Optional[Dict[str, Any]]:
+    try:
+        qk = _canonical_entity_key(query)
+        flow = list(st.session_state.get("rrp_simple_flow", []) or [])
+        for item in reversed(flow):
+            if not isinstance(item, dict):
+                continue
+            ik = _canonical_entity_key(item.get("institution") or item.get("query") or "")
+            blob = _rrp_v194_norm(_rrp_v194_result_blob(item))
+            if ik == qk or (_rrp_v194_norm(query) and _rrp_v194_norm(query) in blob):
+                return item
+    except Exception:
+        pass
+    return None
+
+
+def _rrp_v194_route_count(result: Optional[Dict[str, Any]]) -> int:
+    try:
+        if not result:
+            return 0
+        return len(_rrp_v156_result_routes(result) or [])
+    except Exception:
+        try:
+            return len(result.get("route_decisions") or [])
+        except Exception:
+            return 0
+
+
+_ORIG_RRP_V156_RUN_AND_STORE_V194 = globals().get("_rrp_v156_run_and_store")
+def _rrp_v156_run_and_store(conn: sqlite3.Connection, query: str, *, parent: str = "", force_online: bool = False, use_cache: bool = True, source: str = "initial") -> None:
+    qraw = str(query or "").strip()
+    if not qraw:
+        return None
+    # Ejecutar búsqueda normal primero: esto mantiene el sistema universal.
+    if callable(_ORIG_RRP_V156_RUN_AND_STORE_V194):
+        _ORIG_RRP_V156_RUN_AND_STORE_V194(conn, qraw, parent=parent, force_online=force_online, use_cache=use_cache, source=source)
+    # Postprocesar resultado normal: si encuentra entidad -> Ripple, encadenar a XRPL.
+    res = _rrp_v194_latest_result_for_query(qraw)
+    linked = _rrp_v194_postprocess_universal_ripple_anchor(conn, qraw, res)
+    # Si no hay rutas y no se detectó nada, hacer una única búsqueda expandida orientada a relación con Ripple/XRPL.
+    try:
+        guard = set(st.session_state.get("rrp_v194_expanded_done", set()) or set())
+    except Exception:
+        guard = set()
+    gk = _canonical_entity_key(qraw)
+    if not linked and _rrp_v194_route_count(res) == 0 and gk not in guard and source in {"initial", "cascade"}:
+        guard.add(gk)
+        st.session_state["rrp_v194_expanded_done"] = guard
+        expanded = f'{qraw} RippleNet Ripple Payments XRP Ledger XRPL official partnership customer source'
+        try:
+            if callable(_ORIG_RRP_V156_RUN_AND_STORE_V194):
+                _ORIG_RRP_V156_RUN_AND_STORE_V194(conn, expanded, parent=parent, force_online=True, use_cache=False, source=source)
+            res2 = _rrp_v194_latest_result_for_query(qraw) or _rrp_v194_latest_result_for_query(expanded)
+            _rrp_v194_postprocess_universal_ripple_anchor(conn, qraw, res2)
+        except Exception:
+            # Si la expansión falla, intentar hint local conservador.
+            _rrp_v194_postprocess_universal_ripple_anchor(conn, qraw, res)
+    try:
+        if callable(globals().get("_rrp_v171_seed_watch_targets_from_routes")):
+            _rrp_v171_seed_watch_targets_from_routes(conn)
+        if callable(globals().get("_rrp_v175_persist_watch_paths")):
+            _rrp_v175_persist_watch_paths(conn)
+        if callable(globals().get("_rrp_v184_seed_live_watch_from_paths")):
+            _rrp_v184_seed_live_watch_from_paths(conn)
+    except Exception:
+        pass
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    return None
+
+
+def _rrp_v194_backfill_ripple_anchor_paths(conn: sqlite3.Connection, limit: int = 500) -> int:
+    """Revisa rutas ya guardadas y crea paths A -> Ripple Payments -> XRPL si procede."""
+    made = 0
+    try:
+        _rrp_v194_ensure_ripple_anchor(conn)
+        if not _rrp_v156_table_exists(conn, "dynamic_routes"):
+            return 0
+        cols = _rrp_v194_table_cols(conn, "dynamic_routes")
+        src_col = "src" if "src" in cols else ("source" if "source" in cols else "from_node")
+        dst_col = "dst" if "dst" in cols else ("target" if "target" in cols else "to_node")
+        kind_col = "kind" if "kind" in cols else ("route_type" if "route_type" in cols else "type")
+        conf_col = "confidence" if "confidence" in cols else None
+        rows = conn.execute(f"SELECT {src_col},{dst_col},{kind_col}{','+conf_col if conf_col else ''} FROM dynamic_routes LIMIT ?", (int(limit),)).fetchall()
+        for row in rows:
+            src, dst, kind = row[0], row[1], row[2]
+            conf = float(row[3] or 0.62) if conf_col and len(row) > 3 else 0.62
+            sk, dk = _rrp_v194_norm(src), _rrp_v194_norm(dst)
+            if sk in RRP_V194_RIPPLE_ANCHORS and dk not in RRP_V194_RIPPLE_ANCHORS and dk != "xrpl":
+                _rrp_v194_insert_route_path(conn, dst, "Ripple Payments", "XRPL", min(conf, 0.78), f"Camino deductivo detectado desde rutas guardadas: {dst} → Ripple Payments/RippleNet → XRPL.")
+                made += 1
+            elif dk in RRP_V194_RIPPLE_ANCHORS and sk not in RRP_V194_RIPPLE_ANCHORS and sk != "xrpl":
+                _rrp_v194_insert_route_path(conn, src, "Ripple Payments", "XRPL", min(conf, 0.78), f"Camino deductivo detectado desde rutas guardadas: {src} → Ripple Payments/RippleNet → XRPL.")
+                made += 1
+        conn.commit()
+    except Exception:
+        pass
+    return made
+
+# En cargas rápidas no hacer barridos pesados; solo asegura el ancla y backfill pequeño.
+try:
+    _c = get_conn()
+    _rrp_v194_ensure_ripple_anchor(_c)
+    _rrp_v194_backfill_ripple_anchor_paths(_c, limit=200)
+except Exception:
+    pass
+
+
+# =============================================================================
+# v195 · UNIVERSAL RIPPLE + XRPL ECOSYSTEM ANCHOR FIX
+# =============================================================================
+# Objetivo:
+# - No limitar el anclaje universal a "Ripple Payments".
+# - Cualquier entidad puede encadenarse a XRPL si aparece documentalmente conectada
+#   con: Ripple, RippleNet, Ripple Payments, ODL, GTreasury/Treasury, Custody/Metaco,
+#   Hidden Road/Prime, Ripple CBDC Platform, RLUSD, XRP o features públicas XRPL.
+# - No inventa Entidad -> XRPL directo. Crea caminos deductivos por el nodo intermedio
+#   documentado: Entidad -> Nodo Ripple/XRPL relacionado -> XRPL.
+try:
+    VERSION = "Route Path Intelligence v6.2.3 PRO — Universal Ripple/XRPL Ecosystem · v195"
+    BUILD_ID = "v195_2026_05_14_UNIVERSAL_RIPPLE_XRPL_ECOSYSTEM_ANCHOR_FIX"
+    BUILD_NOTE = "Anclaje universal por toda infraestructura Ripple y todo el ecosistema XRPL relacionado, con rutas deductivas conservadoras."
+except Exception:
+    pass
+
+
+def _rrp_v195_norm(x: Any) -> str:
+    try:
+        return _norm_key(x)
+    except Exception:
+        return re.sub(r"\s+", " ", str(x or "").strip().lower())
+
+
+# Canónico visible -> aliases que pueden aparecer en documentos o búsquedas.
+RRP_V195_ECOSYSTEM_ALIASES: Dict[str, List[str]] = {
+    "Ripple Payments": ["ripple payments", "ripple payment", "ripplenet", "ripple net", "ripple", "ripple labs", "ripple payment network"],
+    "Ripple Payments ODL": ["odl", "on demand liquidity", "on-demand liquidity", "ripple payments odl", "ripple liquidity hub"],
+    "Ripple Treasury": ["ripple treasury", "gtreasury", "gt treasury", "gtresaury", "treasury management", "ripple treasury powered by gtreasury"],
+    "Custody/Metaco": ["metaco", "ripple custody", "custody metaco", "custody/metaco", "digital asset custody"],
+    "Standard Custody": ["standard custody", "standard custody & trust", "standard custody and trust"],
+    "Hidden Road / Prime": ["hidden road", "ripple prime", "prime brokerage", "hidden road prime", "ripple hidden road"],
+    "Rail": ["rail", "ripple rail", "rail payments", "stablecoin payments rail"],
+    "Ripple CBDC Platform": ["ripple cbdc platform", "cbdc platform", "private ledger for cbdcs", "ripple cbdc", "cbdc ledger"],
+    "Permissioned DEX": ["permissioned dex", "permissioned decentralized exchange", "institutional defi", "institutional de fi"],
+    "RLUSD": ["rlusd", "ripple usd", "ripple stablecoin", "ripple usd stablecoin"],
+    "XRP": ["xrp", "xrp bridge asset", "digital asset xrp"],
+    "XRPL": ["xrpl", "xrp ledger", "xrp ledger network", "xrp ledger mainnet"],
+    "DEX/AMM": ["dex", "decentralized exchange", "amm", "automated market maker", "xls 30", "xls-30", "orderbook", "book_offers"],
+    "Trustlines": ["trustline", "trustlines", "trust line", "trust lines", "trustset", "ripple state", "ripplestate"],
+    "Issued Currencies": ["issued currencies", "issued currency", "fungible tokens", "iou", "iou token", "xrpl token", "token issuer"],
+    "Public Gateway": ["public gateway", "gateway", "exchange gateway", "on ramp", "off ramp", "off-ramp", "on-ramp"],
+    "Large Transfers": ["large transfers", "whale", "whale transfer", "large payment", "delivered_amount"],
+}
+
+# Cómo se encadena cada nodo al borde XRPL. No significa prueba operativa directa.
+RRP_V195_ANCHOR_TO_XRPL_HOP: Dict[str, Tuple[str, str, float]] = {
+    "Ripple Payments": ("XRPL", "Fuentes del ecosistema Ripple/Ripple Payments pueden abrir borde público XRPL; no atribuye uso on-chain a clientes sin identificador.", 0.82),
+    "Ripple Payments ODL": ("Ripple Payments", "ODL es producto/línea de pagos del ecosistema Ripple; se encadena a XRPL vía Ripple Payments como ancla conservadora.", 0.76),
+    "Ripple Treasury": ("Ripple Payments", "Treasury/GTreasury pertenece a infraestructura Ripple; se encadena al ecosistema Ripple antes de cualquier borde XRPL.", 0.68),
+    "Custody/Metaco": ("Ripple Payments", "Custody/Metaco es infraestructura Ripple/custodia; se encadena a XRPL solo como camino de ecosistema, no como actividad pública directa.", 0.64),
+    "Standard Custody": ("Custody/Metaco", "Standard Custody se trata como capa de custodia del ecosistema Ripple; requiere identificador público para vigilancia atribuible.", 0.64),
+    "Hidden Road / Prime": ("Ripple Payments", "Hidden Road/Prime es infraestructura prime/corredor del ecosistema Ripple; no implica XRPL directo sin huella pública.", 0.62),
+    "Rail": ("Ripple Payments", "Rail se trata como infraestructura de pagos dentro del ecosistema Ripple; necesita borde público para vigilancia.", 0.62),
+    "Ripple CBDC Platform": ("XRPL", "Ripple CBDC Platform puede relacionarse documentalmente con tecnología XRPL; no implica transacciones públicas del piloto.", 0.74),
+    "Permissioned DEX": ("XRPL", "Permissioned DEX se encadena a XRPL como concepto técnico/institucional, no como libro público confirmado sin pruebas.", 0.68),
+    "RLUSD": ("XRPL", "RLUSD es activo observable si aparece issuer/currency en XRPL; crea vigilancia del issuer cuando hay identificador.", 0.86),
+    "XRP": ("XRPL", "XRP es el activo nativo de XRPL.", 0.92),
+    "DEX/AMM": ("XRPL", "DEX/AMM es funcionalidad documentada del XRP Ledger.", 0.86),
+    "Trustlines": ("XRPL", "Trustlines/TrustSet/RippleState son mecanismos documentados del XRP Ledger.", 0.84),
+    "Issued Currencies": ("XRPL", "Issued currencies/fungible tokens son funcionalidad documentada del XRP Ledger.", 0.84),
+    "Public Gateway": ("XRPL", "Gateway público es punto observable si hay wallet/issuer/cuenta pública.", 0.60),
+    "Large Transfers": ("XRPL", "Grandes transferencias son señal observable por account_tx/Payment/delivered_amount.", 0.60),
+}
+
+
+def _rrp_v195_alias_to_anchor(text: Any) -> str:
+    blob = _rrp_v195_norm(text)
+    if not blob:
+        return ""
+    # Primero canónico exacto por alias completo.
+    for canon, aliases in RRP_V195_ECOSYSTEM_ALIASES.items():
+        all_aliases = [canon] + list(aliases or [])
+        for a in all_aliases:
+            ak = _rrp_v195_norm(a)
+            if ak and (blob == ak or ak in blob):
+                return canon
+    return ""
+
+
+def _rrp_v195_result_blob(result: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(result, dict):
+        return ""
+    parts: List[str] = []
+    for k in ("institution", "query", "summary", "entity_type", "layer"):
+        parts.append(str(result.get(k) or ""))
+    for key in ("evidence_items", "route_decisions", "derived_nodes", "sources"):
+        arr = result.get(key) or []
+        if isinstance(arr, list):
+            for item in arr[:80]:
+                if isinstance(item, dict):
+                    parts.extend(str(v or "") for v in item.values())
+                else:
+                    parts.append(str(item or ""))
+    return "\n".join(parts)
+
+
+def _rrp_v195_urls_from_result(result: Optional[Dict[str, Any]]) -> List[str]:
+    urls: List[str] = []
+    try:
+        blob_items = []
+        if isinstance(result, dict):
+            for key in ("evidence_items", "sources", "route_decisions"):
+                val = result.get(key) or []
+                if isinstance(val, list):
+                    blob_items.extend(val)
+            blob_items.append(result)
+        for item in blob_items:
+            if isinstance(item, dict):
+                for k in ("url", "source", "href", "link"):
+                    u = str(item.get(k) or "").strip()
+                    if u.startswith("http"):
+                        urls.append(u)
+                for k in ("urls", "source_urls"):
+                    v = item.get(k)
+                    if isinstance(v, list):
+                        urls.extend(str(x).strip() for x in v if str(x).strip().startswith("http"))
+                    elif isinstance(v, str):
+                        try:
+                            arr = json.loads(v)
+                            if isinstance(arr, list):
+                                urls.extend(str(x).strip() for x in arr if str(x).strip().startswith("http"))
+                        except Exception:
+                            for u in re.findall(r"https?://[^\s\]\)\}\"']+", v):
+                                urls.append(u)
+    except Exception:
+        pass
+    # limpiar https:/// generado por versiones anteriores
+    clean=[]
+    for u in urls:
+        u=str(u or '').strip().replace('https:///', 'https://').replace('http:///', 'http://')
+        if u.startswith('http') and u not in clean:
+            clean.append(u)
+    return clean[:25]
+
+
+def _rrp_v195_entity_is_anchor(entity: Any) -> bool:
+    e = _canonical_entity_name(entity) if callable(globals().get('_canonical_entity_name')) else str(entity or '').strip()
+    return bool(_rrp_v195_alias_to_anchor(e))
+
+
+def _rrp_v195_seed_anchor_network(conn: sqlite3.Connection) -> None:
+    """Asegura una red mínima de anclas Ripple/XRPL sin dibujar clientes directos."""
+    if conn is None:
+        return
+    try:
+        # Núcleo Ripple -> XRPL
+        _rrp_v194_insert_dynamic_route(conn, "Ripple Payments", "XRPL", "official_ripple_xrpl_anchor", 0.82,
+            "Ancla documental del ecosistema: Ripple Payments/RippleNet puede encadenarse hacia XRPL como borde público. No atribuye actividad a clientes privados sin wallet/issuer.",
+            ["https://ripple.com/solutions/cross-border-payments/"])
+        # Features oficiales XRPL
+        for src, conf, ev, url in [
+            ("DEX/AMM", 0.86, "DEX/AMM es funcionalidad documentada del XRP Ledger: DEX/orderbook y AMM como zonas públicas vigilables.", "https://xrpl.org/docs/concepts/tokens/decentralized-exchange"),
+            ("Trustlines", 0.84, "Trustlines/TrustSet/RippleState son mecanismos documentados del XRP Ledger para issued currencies.", "https://xrpl.org/docs/references/protocol/transactions/types/trustset"),
+            ("Issued Currencies", 0.84, "Issued currencies/fungible tokens son funcionalidad documentada del XRP Ledger.", "https://xrpl.org/docs/concepts/tokens/fungible-tokens"),
+            ("XRP", 0.92, "XRP es el activo nativo del XRP Ledger.", "https://xrpl.org/docs/concepts/introduction/xrp"),
+        ]:
+            _rrp_v194_insert_dynamic_route(conn, "XRPL", src, "official_xrpl_ecosystem_feature", conf, ev, [url])
+        # Dependencias técnicas internas
+        _rrp_v194_insert_dynamic_route(conn, "Issued Currencies", "Trustlines", "technical_protocol_dependency", 0.82,
+            "La documentación del XRP Ledger vincula issued currencies/fungible tokens con trust lines. Dependencia técnica, no adopción institucional.",
+            ["https://xrpl.org/docs/concepts/tokens/fungible-tokens", "https://xrpl.org/docs/references/protocol/transactions/types/trustset"])
+        # RLUSD canónico si el código ya lo conoce
+        _rrp_v194_insert_dynamic_route(conn, "RLUSD", "XRPL", "official_stablecoin_on_xrpl", 0.86,
+            "RLUSD/Ripple USD tiene punto público observable en XRPL cuando aparece issuer/currency. No prueba adopción bancaria concreta.",
+            ["https://docs.ripple.com/stablecoin"])
+    except Exception:
+        pass
+
+
+def _rrp_v195_link_anchor_to_xrpl(conn: sqlite3.Connection, anchor: str) -> bool:
+    anchor = _rrp_v195_alias_to_anchor(anchor) or _canonical_entity_name(anchor)
+    if not anchor or anchor == "XRPL":
+        return False
+    hop_info = RRP_V195_ANCHOR_TO_XRPL_HOP.get(anchor)
+    if not hop_info:
+        return False
+    hop, ev, conf = hop_info
+    urls = []
+    if anchor in {"DEX/AMM", "Trustlines", "Issued Currencies", "XRP", "RLUSD"}:
+        # Para features/tokens sí se puede crear ruta técnica directa hacia XRPL.
+        try:
+            _rrp_v194_insert_dynamic_route(conn, anchor, hop, "documented_xrpl_ecosystem_anchor", conf, ev, urls)
+        except Exception:
+            pass
+    else:
+        # Para infraestructura Ripple, no siempre crear directo a XRPL; usar tramo al hop.
+        try:
+            _rrp_v194_insert_dynamic_route(conn, anchor, hop, "documented_ripple_infra_anchor", conf, ev, urls)
+        except Exception:
+            pass
+    # Si el hop no es XRPL, asegurar que hop llega a XRPL por la red de anclas.
+    try:
+        if hop != "XRPL":
+            _rrp_v195_link_anchor_to_xrpl(conn, hop)
+    except Exception:
+        pass
+    return True
+
+
+def _rrp_v195_link_entity_to_anchor(conn: sqlite3.Connection, entity: str, anchor: str, result: Optional[Dict[str, Any]] = None, confidence: float = 0.62) -> bool:
+    entity = _canonical_entity_name(entity) if callable(globals().get('_canonical_entity_name')) else str(entity or '').strip()
+    anchor = _rrp_v195_alias_to_anchor(anchor) or _canonical_entity_name(anchor)
+    if not entity or not anchor or entity == anchor:
+        return False
+    # No convertir anchors en clientes de sí mismos.
+    if _rrp_v195_alias_to_anchor(entity) == anchor:
+        return False
+    urls = _rrp_v195_urls_from_result(result)
+    blob = _rrp_v195_result_blob(result)
+    claim = f"La investigación detecta relación documental o contextual entre {entity} y {anchor}. Se encadena hacia XRPL solo a través del nodo intermedio documentado; no se inventa {entity} → XRPL directo."
+    if blob:
+        # Si hay un resumen útil, incorporarlo sin sobrecargar.
+        claim += " Evidencia resumida: " + re.sub(r"\s+", " ", blob)[:650]
+    try:
+        _rrp_v195_seed_anchor_network(conn)
+        _rrp_v195_link_anchor_to_xrpl(conn, anchor)
+    except Exception:
+        pass
+    ok = False
+    try:
+        ok = bool(_rrp_v194_insert_dynamic_route(conn, entity, anchor, "documented_ecosystem_relation", confidence, claim, urls)) or ok
+    except Exception:
+        pass
+    # Crear camino deductivo. Si anchor tiene hop directo a XRPL, usar anchor como public_hop.
+    try:
+        hop_info = RRP_V195_ANCHOR_TO_XRPL_HOP.get(anchor)
+        if anchor == "XRPL":
+            pass
+        elif hop_info:
+            hop = anchor
+            _rrp_v194_insert_route_path(conn, entity, hop, "XRPL", min(confidence, 0.78),
+                f"Camino deductivo del ecosistema v195: {entity} → {anchor} → XRPL. El primer tramo requiere documento/fuente; el borde XRPL se mide solo donde haya wallet, issuer, token, trustline, DEX/AMM o transacción verificable.",
+                path_type="deductive_ripple_xrpl_ecosystem")
+            ok = True
+    except Exception:
+        pass
+    return ok
+
+
+def _rrp_v195_detect_anchors_in_result(entity: str, result: Optional[Dict[str, Any]]) -> List[str]:
+    blob = _rrp_v195_result_blob(result)
+    anchors: List[str] = []
+    if not blob:
+        return anchors
+    bnorm = _rrp_v195_norm(blob)
+    ent_norm = _rrp_v195_norm(entity)
+    # Requiere que aparezca la entidad o que el resultado sea de esa entidad para no mezclar fuentes ajenas.
+    entity_present = bool(ent_norm and (ent_norm in bnorm or _rrp_v195_norm(_canonical_entity_name(entity)) in bnorm))
+    if not entity_present:
+        inst = ""
+        try:
+            inst = _rrp_v195_norm((result or {}).get("institution") or (result or {}).get("query") or "")
+        except Exception:
+            pass
+        entity_present = bool(ent_norm and (ent_norm == inst or ent_norm in inst or inst in ent_norm))
+    if not entity_present:
+        return anchors
+    for canon, aliases in RRP_V195_ECOSYSTEM_ALIASES.items():
+        for a in [canon] + list(aliases or []):
+            ak = _rrp_v195_norm(a)
+            if ak and ak in bnorm:
+                anchors.append(canon)
+                break
+    # Orden estable y sin duplicados.
+    out=[]
+    for a in anchors:
+        if a not in out:
+            out.append(a)
+    return out
+
+
+def _rrp_v195_anchor_seed_result(query: Any) -> Optional[Dict[str, Any]]:
+    anchor = _rrp_v195_alias_to_anchor(query)
+    if not anchor:
+        return None
+    # Si es Ripple core, mantener seed v193.
+    if anchor == "Ripple Payments" and callable(globals().get("_rrp_v193_ripple_core_seed_result")):
+        return _rrp_v193_ripple_core_seed_result(query)
+    hop_info = RRP_V195_ANCHOR_TO_XRPL_HOP.get(anchor)
+    derived = []
+    route_decisions = []
+    evidence_items = []
+    sources = []
+    conf = 0.70
+    if hop_info:
+        hop, ev, conf = hop_info
+        route_decisions.append({"to": hop, "evidence_type": "documented_ecosystem_anchor", "confidence": conf, "claim": ev, "status": "documented", "draw_on_map": True})
+        derived.append({"name": hop, "reason": f"Borde/ancla pública de {anchor}."})
+        evidence_items.append({"title": f"{anchor} → {hop} · ancla del ecosistema", "evidence_type": "documented_ecosystem_anchor", "claim": ev, "url": "", "node_a": anchor, "node_b": hop})
+    # Enlaces oficiales si son features XRPL conocidas.
+    official_url = {
+        "DEX/AMM": "https://xrpl.org/docs/concepts/tokens/decentralized-exchange",
+        "Trustlines": "https://xrpl.org/docs/references/protocol/transactions/types/trustset",
+        "Issued Currencies": "https://xrpl.org/docs/concepts/tokens/fungible-tokens",
+        "RLUSD": "https://docs.ripple.com/stablecoin",
+        "XRP": "https://xrpl.org/docs/concepts/introduction/xrp",
+        "Ripple CBDC Platform": "https://ripple.com/solutions/central-bank-digital-currency/",
+    }.get(anchor, "")
+    if official_url:
+        sources.append({"title": f"{anchor} official/source", "url": official_url, "type": "official_source"})
+        if evidence_items:
+            evidence_items[0]["url"] = official_url
+    return {
+        "institution": anchor,
+        "query": str(query or anchor),
+        "icon": "🔎",
+        "entity_type": "Ripple/XRPL ecosystem anchor",
+        "layer": "Ecosistema Ripple/XRPL",
+        "connected": True,
+        "confidence": conf,
+        "summary": f"{anchor} se reconoce como nodo del ecosistema Ripple/XRPL. La búsqueda abre rutas documentales/deductivas conservadoras hacia XRPL cuando proceda, sin afirmar uso operativo directo por entidades privadas.",
+        "evidence_items": evidence_items,
+        "route_decisions": route_decisions,
+        "derived_nodes": derived,
+        "sources": sources,
+        "_v195_ecosystem_seed": True,
+    }
+
+
+_ORIG_RRP_V156_RUN_AND_STORE_V195 = globals().get("_rrp_v156_run_and_store")
+def _rrp_v156_run_and_store(conn: sqlite3.Connection, query: str, *, parent: str = "", force_online: bool = False, use_cache: bool = True, source: str = "initial") -> None:
+    qraw = str(query or "").strip()
+    if not qraw:
+        return None
+    # 0) Si la consulta ES un nodo del ecosistema, sembrar resultado antes/después de la búsqueda normal.
+    seed = _rrp_v195_anchor_seed_result(qraw)
+    if seed:
+        try:
+            flow = list(st.session_state.get("rrp_simple_flow", []) or [])
+            # No duplicar el mismo seed muchas veces en la vista.
+            sk = _canonical_entity_key(seed.get("institution") or qraw)
+            if not any(_canonical_entity_key((x or {}).get("institution") or (x or {}).get("query") or "") == sk and (x or {}).get("_v195_ecosystem_seed") for x in flow if isinstance(x, dict)):
+                seed["source"] = source
+                seed["parent"] = parent
+                flow.append(seed)
+                st.session_state["rrp_simple_flow"] = flow[-80:]
+        except Exception:
+            pass
+        try:
+            _rrp_v193_persist_result_everywhere(conn, seed, parent=parent)
+        except Exception:
+            pass
+        try:
+            _rrp_v195_seed_anchor_network(conn)
+            _rrp_v195_link_anchor_to_xrpl(conn, seed.get("institution") or qraw)
+        except Exception:
+            pass
+    # 1) Ejecutar el buscador existente para fuentes reales.
+    if callable(_ORIG_RRP_V156_RUN_AND_STORE_V195):
+        _ORIG_RRP_V156_RUN_AND_STORE_V195(conn, qraw, parent=parent, force_online=force_online, use_cache=use_cache, source=source)
+    # 2) Revisar el resultado y crear vínculos a cualquier infraestructura Ripple/XRPL detectada, no solo Ripple Payments.
+    try:
+        res = _rrp_v194_latest_result_for_query(qraw)
+    except Exception:
+        res = None
+    made = False
+    try:
+        anchors = _rrp_v195_detect_anchors_in_result(qraw, res)
+        # Si el propio query es una entidad conocida de hints v194, mantener la ruta universal v194.
+        for a in anchors[:8]:
+            if a != _rrp_v195_alias_to_anchor(qraw):
+                made = bool(_rrp_v195_link_entity_to_anchor(conn, qraw, a, result=res, confidence=0.64)) or made
+    except Exception:
+        pass
+    # 3) Si no encontró nada y es una búsqueda normal, expandir con todo el ecosistema, no solo Ripple Payments.
+    try:
+        guard = set(st.session_state.get("rrp_v195_expanded_done", set()) or set())
+    except Exception:
+        guard = set()
+    gk = _canonical_entity_key(qraw)
+    try:
+        rcount = _rrp_v194_route_count(res)
+    except Exception:
+        rcount = 0
+    if not made and not seed and rcount == 0 and gk not in guard and source in {"initial", "cascade"}:
+        guard.add(gk)
+        st.session_state["rrp_v195_expanded_done"] = guard
+        expanded = (
+            f'{qraw} Ripple RippleNet Ripple Payments ODL On-Demand Liquidity XRP Ledger XRPL XRP RLUSD '
+            f'Ripple Treasury GTreasury Metaco Custody Hidden Road Prime Ripple CBDC Platform Trustlines DEX AMM issued currencies official source'
+        )
+        try:
+            if callable(_ORIG_RRP_V156_RUN_AND_STORE_V195):
+                _ORIG_RRP_V156_RUN_AND_STORE_V195(conn, expanded, parent=parent, force_online=True, use_cache=False, source=source)
+            res2 = _rrp_v194_latest_result_for_query(qraw) or _rrp_v194_latest_result_for_query(expanded)
+            anchors2 = _rrp_v195_detect_anchors_in_result(qraw, res2)
+            for a in anchors2[:8]:
+                if a != _rrp_v195_alias_to_anchor(qraw):
+                    _rrp_v195_link_entity_to_anchor(conn, qraw, a, result=res2, confidence=0.62)
+        except Exception:
+            pass
+    # 4) Sembrar vigilancia y Route A-B desde rutas/caminos generados.
+    try:
+        _rrp_v195_seed_anchor_network(conn)
+        if callable(globals().get("_rrp_v171_seed_watch_targets_from_routes")):
+            _rrp_v171_seed_watch_targets_from_routes(conn)
+        if callable(globals().get("_rrp_v175_persist_watch_paths")):
+            _rrp_v175_persist_watch_paths(conn)
+        if callable(globals().get("_rrp_v184_seed_live_watch_from_paths")):
+            _rrp_v184_seed_live_watch_from_paths(conn)
+    except Exception:
+        pass
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    return None
+
+
+def _rrp_v195_backfill_all_ecosystem_paths(conn: sqlite3.Connection, limit: int = 1200) -> int:
+    """Backfill ligero: cualquier ruta hacia un anchor Ripple/XRPL genera camino deductivo a XRPL."""
+    made = 0
+    try:
+        _rrp_v195_seed_anchor_network(conn)
+        if not _rrp_v156_table_exists(conn, "dynamic_routes"):
+            return 0
+        cols = _rrp_v194_table_cols(conn, "dynamic_routes")
+        src_col = "src" if "src" in cols else ("source" if "source" in cols else "from_node")
+        dst_col = "dst" if "dst" in cols else ("target" if "target" in cols else "to_node")
+        kind_col = "kind" if "kind" in cols else ("route_type" if "route_type" in cols else "type")
+        conf_col = "confidence" if "confidence" in cols else None
+        rows = conn.execute(f"SELECT {src_col},{dst_col},{kind_col}{','+conf_col if conf_col else ''} FROM dynamic_routes LIMIT ?", (int(limit),)).fetchall()
+        for row in rows:
+            src, dst, kind = str(row[0] or ""), str(row[1] or ""), str(row[2] or "")
+            conf = float(row[3] or 0.62) if conf_col and len(row) > 3 else 0.62
+            s_anchor = _rrp_v195_alias_to_anchor(src)
+            d_anchor = _rrp_v195_alias_to_anchor(dst)
+            if d_anchor and not s_anchor and d_anchor != "XRPL":
+                if _rrp_v195_link_entity_to_anchor(conn, src, d_anchor, confidence=min(conf, 0.78)):
+                    made += 1
+            elif s_anchor and not d_anchor and s_anchor != "XRPL":
+                if _rrp_v195_link_entity_to_anchor(conn, dst, s_anchor, confidence=min(conf, 0.78)):
+                    made += 1
+            elif s_anchor:
+                _rrp_v195_link_anchor_to_xrpl(conn, s_anchor)
+            elif d_anchor:
+                _rrp_v195_link_anchor_to_xrpl(conn, d_anchor)
+        conn.commit()
+    except Exception:
+        pass
+    return made
+
+try:
+    _c = get_conn()
+    _rrp_v195_seed_anchor_network(_c)
+    # Backfill pequeño para no penalizar carga rápida.
+    _rrp_v195_backfill_all_ecosystem_paths(_c, limit=300)
+except Exception:
+    pass
+
 # Ejecutar main al final real del archivo, con todos los parches cargados.
 if __name__ == "__main__":
     main()
