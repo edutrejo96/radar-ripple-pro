@@ -22153,6 +22153,7 @@ def main() -> None:
             "Vista del mapa",
             [
                 "🔗 Conexiones confirmadas",
+                "🧠 Mapa deductivo",
                 "👁 Vigilancia / inferidas",
                 "🗺 Mapa completo",
             ],
@@ -22166,6 +22167,13 @@ def main() -> None:
                 make_map(row, title="Conexiones confirmadas", route_filter="confirmed", **_map_kwargs),
                 width="stretch", on_select="rerun", selection_mode="points", key=f"radar_map_conn_{_map_rev}_{focused or 'all'}",
             )
+        elif _map_view.startswith("🧠"):
+            st.caption("Mapa deductivo: caminos A→B→XRPL calculados desde route_paths. Las líneas deductivas NO son conexiones directas; cada tramo debe verificarse con documentos públicos/oficiales.")
+            sel = st.plotly_chart(
+                _rrp_v201_make_deductive_map(conn),
+                width="stretch", on_select="rerun", selection_mode="points", key=f"radar_map_deductive_{_map_rev}_{focused or 'all'}",
+            )
+            _rrp_v201_render_deductive_evidence_panel(conn)
         elif _map_view.startswith("👁"):
             st.caption("Vigilancia e inferencias: rutas técnicas, dependencias del protocolo y caminos observables. No prueban adopción institucional; muestran dónde debe mirar el radar.")
             sel = st.plotly_chart(
@@ -40808,6 +40816,198 @@ try:
         st.plotly_chart = _rrp_v200_plotly_chart_with_node_picker
 except Exception:
     pass
+
+
+# =============================================================================
+# v201 · Mapa deductivo + verificación documental filtrada
+# =============================================================================
+RRP_V201_DOC_DOMAINS = [
+    "ripple.com", "docs.ripple.com", "xrpl.org", "xrplf.org",
+    "swift.com", "bis.org", "imf.org", "worldbank.org", "sec.gov",
+    "federalreserve.gov", "ecb.europa.eu", "europa.eu", "bankofengland.co.uk",
+    "mas.gov.sg", "pbc.gov.cn", "boj.or.jp", "bis.org/cpmi",
+]
+
+
+def _rrp_v201_clean_url(url: Any) -> str:
+    u = str(url or "").strip()
+    if not u:
+        return ""
+    u = re.sub(r"^https?:/{3,}", "https://", u, flags=re.I)
+    u = re.sub(r"^(?!(?:https?|ftp)://)", "https://", u) if re.match(r"^(?:www\.|[a-z0-9.-]+\.[a-z]{2,})(?:/|$)", u, flags=re.I) else u
+    u = u.replace("https://https://", "https://").replace("http://https://", "https://")
+    return u
+
+
+def _rrp_v201_extract_urls(*texts: Any) -> List[str]:
+    urls: List[str] = []
+    for t in texts:
+        blob = str(t or "")
+        for m in re.findall(r"https?://[^\s\)\]\}\<\>\"']+", blob):
+            u = _rrp_v201_clean_url(m.rstrip(".,;"))
+            if u and u not in urls:
+                urls.append(u)
+    return urls[:12]
+
+
+def _rrp_v201_google_url(query: str) -> str:
+    try:
+        return "https://www.google.com/search?q=" + _url_quote(query)
+    except Exception:
+        from urllib.parse import quote
+        return "https://www.google.com/search?q=" + quote(query)
+
+
+def _rrp_v201_doc_queries_for_path(origin: Any, hop: Any, destination: Any) -> List[Tuple[str, str]]:
+    """Consultas de búsqueda documental pública/filtrada por operadores.
+
+    No busca ni recomienda material privado/robado: solo documentos públicos indexados,
+    fuentes oficiales, PDFs, filings y documentación técnica.
+    """
+    o = str(origin or "").strip()
+    h = str(hop or "").strip()
+    d = str(destination or "").strip()
+    terms = [x for x in [o, h, d] if x and x.lower() not in {"watch", "external gateway / interoperability layer"}]
+    quoted = " ".join(f'"{t}"' for t in terms[:3])
+    xrpl_terms = '("XRPL" OR "XRP Ledger" OR "Ripple" OR "RippleNet" OR "Ripple Payments")'
+    qs: List[Tuple[str, str]] = []
+    if quoted:
+        qs.append(("PDFs públicos", f'{quoted} {xrpl_terms} filetype:pdf'))
+        qs.append(("PDFs con ruta", f'{quoted} ("partnership" OR "partner" OR "case study" OR "pilot" OR "integration" OR "issuer") filetype:pdf'))
+        qs.append(("Ripple oficial", f'site:ripple.com {quoted}'))
+        qs.append(("Docs Ripple/XRPL", f'(site:docs.ripple.com OR site:xrpl.org) {quoted}'))
+        qs.append(("Filings/regulatorios", f'{quoted} (site:sec.gov OR site:bis.org OR site:imf.org OR site:worldbank.org)'))
+        qs.append(("URLs con PDF", f'{quoted} inurl:pdf'))
+        qs.append(("Título documental", f'intitle:"{terms[0]}" {" ".join(terms[1:])} {xrpl_terms}'))
+    return qs[:8]
+
+
+def _rrp_v201_fetch_route_paths(conn: Optional[sqlite3.Connection], limit: int = 250) -> List[Dict[str, Any]]:
+    if conn is None:
+        return []
+    try:
+        if callable(globals().get("ensure_route_paths_table")):
+            ensure_route_paths_table(conn)
+    except Exception:
+        pass
+    try:
+        rows = conn.execute(
+            """
+            SELECT origin, public_hop, destination, confidence, path_type, evidence, explanation, day, path_id
+            FROM route_paths
+            ORDER BY COALESCE(confidence,0) DESC, day DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+        out = []
+        for r in rows:
+            out.append({
+                "origin": str(r[0] or ""), "hop": str(r[1] or ""), "destination": str(r[2] or ""),
+                "confidence": float(r[3] or 0.0), "path_type": str(r[4] or "deductive_path"),
+                "evidence": str(r[5] or ""), "explanation": str(r[6] or ""),
+                "day": str(r[7] or ""), "path_id": str(r[8] or ""),
+            })
+        # Deduplicar por tripleta canónica.
+        seen = set(); clean=[]
+        for p in out:
+            key = (_canonical_entity_key(p["origin"]), _canonical_entity_key(p["hop"]), _canonical_entity_key(p["destination"]))
+            if key in seen:
+                continue
+            seen.add(key); clean.append(p)
+        return clean
+    except Exception:
+        return []
+
+
+def _rrp_v201_make_deductive_map(conn: Optional[sqlite3.Connection]) -> go.Figure:
+    """Mapa dedicado a caminos deductivos A→punto público→B/XRPL."""
+    paths = _rrp_v201_fetch_route_paths(conn, 300)
+    fig = go.Figure()
+    fig.update_layout(
+        title="Mapa deductivo · caminos verificables hacia XRPL / puntos públicos",
+        paper_bgcolor="#07111F", plot_bgcolor="#07111F", font=dict(color="#E2E8F0"),
+        height=760, margin=dict(l=20, r=20, t=55, b=20),
+        xaxis=dict(visible=False, range=[-0.8, 2.8]), yaxis=dict(visible=False),
+        showlegend=False,
+    )
+    # Cajas de carriles.
+    lanes = [(-0.65, 0.0, 0.35, "Origen / entidad"), (0.65, 1.0, 1.35, "Punto público / intermedio"), (1.65, 2.0, 2.35, "Destino / XRPL")]
+    for x0, xc, x1, label in lanes:
+        fig.add_shape(type="rect", x0=x0, x1=x1, y0=-1, y1=max(5, len(paths)*0.46+1),
+                      line=dict(color="rgba(56,189,248,0.55)", width=1.2),
+                      fillcolor="rgba(15,23,42,0.40)", layer="below")
+        fig.add_annotation(x=xc, y=max(5, len(paths)*0.46+1)+0.18, text=f"<b>{html.escape(label)}</b>", showarrow=False,
+                           font=dict(size=11, color="#E2E8F0"), bgcolor="rgba(7,17,31,.85)")
+    if not paths:
+        fig.add_annotation(x=1, y=2.5, text="Sin caminos deductivos guardados todavía.<br>Busca una entidad, guarda rutas documentales y vuelve a este mapa.", showarrow=False, font=dict(size=14, color="#94A3B8"))
+        return fig
+    y_positions = list(reversed([i*0.46 for i in range(len(paths))]))
+    node_points = {"x": [], "y": [], "text": [], "color": [], "size": [], "custom": []}
+    edge_x=[]; edge_y=[]; edge_text=[]
+    for idx, p in enumerate(paths):
+        y = y_positions[idx]
+        o = p["origin"] or "?"; h = p["hop"] or "Punto público"; d = p["destination"] or "XRPL"
+        conf = max(0, min(100, float(p.get("confidence") or 0.0)*100 if float(p.get("confidence") or 0.0) <= 1.0 else float(p.get("confidence") or 0.0)))
+        evidence = html.escape((p.get("evidence") or p.get("explanation") or "")[:420])
+        color = "#22C55E" if conf >= 80 else "#38BDF8" if conf >= 60 else "#F59E0B"
+        # edges two segments with hover.
+        for xa, xb in [(0,1),(1,2)]:
+            edge_x += [xa, xb, None]; edge_y += [y, y, None]
+        edge_text.append(f"{html.escape(o)} → {html.escape(h)} → {html.escape(d)}<br>Confianza: {conf:.0f}%<br>{evidence}")
+        # nodes.
+        for x, name, sz in [(0,o,18),(1,h,16),(2,d,18)]:
+            node_points["x"].append(x); node_points["y"].append(y); node_points["text"].append(name)
+            node_points["color"].append("#3CFF9B" if _canonical_entity_key(name) in {_canonical_entity_key("XRPL"), _canonical_entity_key("XRP")} else color)
+            node_points["size"].append(sz); node_points["custom"].append(name)
+    fig.add_trace(go.Scatter(x=edge_x, y=edge_y, mode="lines", line=dict(color="rgba(34,197,94,.48)", width=2.6), hoverinfo="skip"))
+    fig.add_trace(go.Scatter(
+        x=node_points["x"], y=node_points["y"], mode="markers+text",
+        marker=dict(size=node_points["size"], color=node_points["color"], line=dict(color="#E2E8F0", width=1.3)),
+        text=[f"<b>{html.escape(str(t))}</b>" for t in node_points["text"]], textposition="middle right",
+        customdata=node_points["custom"], hovertemplate="%{customdata}<extra></extra>", name="Nodos deductivos",
+    ))
+    return fig
+
+
+def _rrp_v201_render_deductive_evidence_panel(conn: Optional[sqlite3.Connection]) -> None:
+    paths = _rrp_v201_fetch_route_paths(conn, 80)
+    st.markdown("### 🧠 Validación de líneas deductivas")
+    st.caption("Las líneas deductivas sirven para mostrar caminos probables. No son prueba directa: cada tramo debe reforzarse con documentos públicos/oficiales o huellas on-chain.")
+    if not paths:
+        st.info("Todavía no hay caminos deductivos guardados. Usa Descubrimientos para crear rutas documentales y vuelve a este mapa.")
+        return
+    max_items = st.slider("Líneas deductivas a revisar", 5, 50, min(12, len(paths)), 1, key="rrp_v201_deductive_review_n")
+    for i, p in enumerate(paths[:max_items], 1):
+        title = f"{i}. {p['origin']} → {p['hop']} → {p['destination']} · {float(p.get('confidence') or 0)*100 if float(p.get('confidence') or 0) <= 1 else float(p.get('confidence') or 0):.0f}%"
+        with st.expander(title, expanded=i <= 3):
+            ev = p.get("evidence") or p.get("explanation") or "Sin evidencia resumida."
+            st.write(ev)
+            urls = _rrp_v201_extract_urls(ev, p.get("explanation"))
+            if urls:
+                st.markdown("**Fuentes ya detectadas:**")
+                for u in urls:
+                    st.markdown(f"- [Abrir fuente]({_rrp_v201_clean_url(u)})")
+            else:
+                st.caption("Sin URL fija asociada todavía; usa las búsquedas filtradas para reforzar esta línea.")
+            st.markdown("**Búsquedas documentales filtradas públicas:**")
+            for label, q in _rrp_v201_doc_queries_for_path(p["origin"], p["hop"], p["destination"]):
+                st.markdown(f"- [{label}]({_rrp_v201_google_url(q)}) — `{q}`")
+    with st.expander("📚 Protocolo recomendado de búsqueda documental filtrada", expanded=False):
+        st.markdown(
+            """
+**Objetivo:** reforzar una línea deductiva sin inventar conexión directa.
+
+1. Primero busca documentos oficiales: `site:ripple.com`, `site:xrpl.org`, `site:docs.ripple.com`, bancos centrales, BIS, IMF, SEC/filings.
+2. Después PDFs públicos: `filetype:pdf`, `inurl:pdf`, `intitle:` y frases exactas entre comillas.
+3. Separa resultados:
+   - **Oficial/documental:** puede validar tramo.
+   - **Secundario:** solo contexto.
+   - **Rumor/red social:** no valida ruta.
+4. Una línea deductiva se convierte en fuerte solo cuando cada tramo tiene fuente clara.
+5. No usar documentos privados, credenciales, material robado ni filtraciones no verificables. El radar debe trabajar con fuentes públicas/indexadas y auditables.
+            """
+        )
 
 
 # Ejecutar main al final real del archivo, con todos los parches cargados.
