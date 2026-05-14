@@ -21994,15 +21994,12 @@ def main() -> None:
         st_autorefresh(interval=REFRESH_SECONDS * 1000, key="rrp_advanced_refresh")
 
     conn = get_conn()
+    # v190: arranque rápido. Las tareas pesadas de limpieza/reclasificación no se ejecutan
+    # en cada rerun de Streamlit; solo una vez por sesión o bajo demanda desde Diagnóstico/Admin.
     bootstrap_demo(conn)
     ensure_discovery_tables(conn)
     ensure_sanitizer_tables(conn)
-    purge_legacy_preconfigured_routes(conn)
-    _ensure_static_verifications(conn)   # pre-poblar verificaciones de nodos estáticos
-    normalize_static_aliases_in_db(conn)  # v106: absorbe alias fijos como GTreasury dentro de Treasury
-    reclassify_all_dynamic_nodes(conn)
-    normalize_static_aliases_in_db(conn)  # segunda pasada tras reclasificar nodos legacy
-    bootstrap_static_node_routes(conn)
+    _rrp_v190_fast_startup_maintenance(conn)
     _heartbeat(conn, "idle")
 
     if not render_public_entry_gate(conn):
@@ -22136,76 +22133,38 @@ def main() -> None:
         else:
             st.caption("Haz clic en cualquier nodo del mapa para ver solo sus rutas.")
 
-        tab_conn, tab_surv, tab_all = st.tabs([
-            "🔗 " + _t("Conexiones confirmadas + obligatorias"),
-            "👁 " + _t("Vigilancia / inferidas"),
-            "🗺 " + _t("Mapa completo"),
-        ])
-
-        _map_rev = _get_map_revision_token(conn)
-        _map_kwargs = dict(
-            watched=watched_wallets if not watched_wallets.empty else None,
-            conn=conn, focus_node=focused,
+        # v190: antes st.tabs renderizaba los 3 mapas a la vez en cada rerun.
+        # Eso triplicaba make_map(), load_dynamic_map_elements(), Plotly y filtros.
+        # Ahora solo se pinta la vista elegida; el resto no se calcula hasta seleccionarlo.
+        _map_view = st.radio(
+            "Vista del mapa",
+            [
+                "🔗 Conexiones confirmadas",
+                "👁 Vigilancia / inferidas",
+                "🗺 Mapa completo",
+            ],
+            horizontal=True,
+            key="rrp_v190_single_map_view",
         )
-
-        _focus_hint = f"🔍 Filtrando: **{focused}** — haz click en otro nodo para cambiar, o en el mismo para deseleccionar" if focused else "👆 Haz click en cualquier nodo para ver solo sus conexiones"
-        st.caption(_focus_hint)
-        st.caption(f"🧬 Revisión de mapa: `{_map_rev}` · las 3 vistas leen las mismas rutas/nodos/pruebas guardadas.")
-
-        # v125: el click de Plotly depende del navegador/Streamlit Cloud. Mantenemos el click,
-        # pero añadimos un fallback compacto y plegable para que el foco SIEMPRE funcione.
-        with st.expander("🔎 Foco fiable de nodo (solo si el click del mapa no responde)", expanded=False):
-            try:
-                _dyn_nodes_for_focus, _, _ = load_dynamic_map_elements(conn)
-                _focus_nodes = sorted({*NODES.keys(), *_dyn_nodes_for_focus.keys()})
-            except Exception:
-                _focus_nodes = sorted(NODES.keys())
-            _current_focus_idx = 0
-            _focus_options = ["— ver todo —"] + _focus_nodes
-            if focused in _focus_nodes:
-                _current_focus_idx = _focus_options.index(focused)
-            _picked_focus = st.selectbox(
-                "Abrir ficha y filtrar mapa por nodo",
-                _focus_options,
-                index=_current_focus_idx,
-                key="map_focus_node_select_v125",
-            )
-            if _picked_focus == "— ver todo —" and focused:
-                if st.button("🧭 Quitar foco", key="map_focus_select_clear_v125", use_container_width=True):
-                    st.session_state.pop("map_focus_node", None)
-                    st.rerun()
-            elif _picked_focus != "— ver todo —" and _picked_focus != focused:
-                if st.button("🔍 Abrir este nodo", key="map_focus_select_apply_v125", use_container_width=True):
-                    st.session_state["map_focus_node"] = _picked_focus
-                    st.rerun()
-
-        with tab_conn:
-            st.caption("Rutas verificadas + core interno XRPL/Ripple + cualquier conexión con evidencia guardada. Si la evidencia es poca, aparece en naranja como “evidencia débil”, no como certeza fuerte.")
+        sel = None
+        if _map_view.startswith("🔗"):
+            st.caption("Rutas verificadas + cualquier conexión con evidencia guardada. Si la evidencia es poca, aparece como evidencia débil, no como certeza fuerte.")
             sel = st.plotly_chart(
-                make_map(row, title="Conexiones confirmadas + obligatorias", route_filter="confirmed", **_map_kwargs),
+                make_map(row, title="Conexiones confirmadas", route_filter="confirmed", **_map_kwargs),
                 width="stretch", on_select="rerun", selection_mode="points", key=f"radar_map_conn_{_map_rev}_{focused or 'all'}",
             )
-
-        with tab_surv:
+        elif _map_view.startswith("👁"):
             st.caption("Vigilancia e inferencias: rutas técnicas, dependencias del protocolo y caminos observables. No prueban adopción institucional; muestran dónde debe mirar el radar.")
-            sel_surv = st.plotly_chart(
+            sel = st.plotly_chart(
                 make_map(row, title="Vigilancia e inferencias", route_filter="surveillance", **_map_kwargs),
                 width="stretch", on_select="rerun", selection_mode="points", key=f"radar_map_surv_{_map_rev}_{focused or 'all'}",
             )
-            pts_surv = _rrp_plotly_points(sel_surv)
-            if pts_surv:
-                sel = sel_surv  # solo sobreescribir si vigilancia tiene selección propia
-
-        with tab_all:
+        else:
             st.caption("Vista completa: todas las rutas superpuestas. Útil para ver la densidad total del ecosistema.")
-            sel_all = st.plotly_chart(
+            sel = st.plotly_chart(
                 make_map(row, route_filter="all", **_map_kwargs),
                 width="stretch", on_select="rerun", selection_mode="points", key=f"radar_map_all_{_map_rev}_{focused or 'all'}",
             )
-            # Permitir selección también desde el mapa completo
-            pts_all = _rrp_plotly_points(sel_all)
-            if pts_all and not _rrp_plotly_points(sel):
-                sel = sel_all
         # Procesar click — customdata puede volver como lista o string.
         # IMPORTANTE: Streamlit preserva la selección entre reruns.
         # Solo actuamos si el nodo clickado es DIFERENTE al foco actual
@@ -35199,14 +35158,9 @@ def get_conn() -> sqlite3.Connection:
         pass
     return conn
 
-try:
-    c = get_conn()
-    if callable(globals().get("_rrp_v171_seed_watch_targets_from_routes")):
-        _rrp_v171_seed_watch_targets_from_routes(c)
-    if callable(globals().get("_rrp_v175_persist_watch_paths")):
-        _rrp_v175_persist_watch_paths(c)
-except Exception:
-    pass
+# v190: eliminado arranque pesado automático. Antes aquí se abría SQLite y se
+# sembraban targets/rutas en import; en Streamlit eso ocurre en cada rerun y
+# ralentiza mucho la app. Ahora se ejecuta bajo demanda desde _rrp_v190_fast_startup_maintenance().
 
 
 
@@ -37439,8 +37393,8 @@ def _rrp_v187_prepare_rlusd_issuer_canonical() -> None:
 # - Si no puede clasificarse, no se pierde: queda como "Nodo por investigar".
 # - Si trae identificador público, se convierte en target vigilable sin inventar relación.
 
-BUILD_ID = "v188_2026_05_14_DYNAMIC_NODE_ONTOLOGY_FIX"
-BUILD_NOTE = "Ontología dinámica: cualquier nodo nuevo se clasifica por tipo real y no cae en cajones fijos"
+BUILD_ID = "v190_2026_05_14_FAST_LOAD_STARTUP_FIX"
+BUILD_NOTE = "Carga rápida: mantenimiento pesado bajo demanda, caché de mapa por rerun y arranque sin re-clasificar todo"
 
 RRP_V188_GENERIC_BAD_NAMES = {
     "", "?", "none", "nan", "source", "sources", "fuente", "fuentes", "verified", "watch",
@@ -37870,16 +37824,667 @@ def _rrp_v188_prepare_dynamic_ontology() -> None:
     except Exception:
         pass
 
-try:
-    _rrp_v186_prepare_clean_dynamic_map()
-    _rrp_v187_prepare_rlusd_issuer_canonical()
-    _rrp_v188_prepare_dynamic_ontology()
-except Exception:
-    pass
+
+# =============================================================================
+# v190 · FAST LOAD / STARTUP PERFORMANCE FIX
+# -----------------------------------------------------------------------------
+# Problema detectado:
+# - En cada rerun Streamlit se ejecutaban reclasificaciones globales, escaneos de
+#   rutas, limpieza de legacy y seed de targets. Con muchas rutas/fuentes eso hace
+#   que toda la app tarde mucho en cargar antes incluso de pintar la pantalla.
+# Solución:
+# - Mantenimiento pesado solo una vez por sesión / TTL.
+# - Mapa dinámico cacheado durante el rerun y por revisión de SQLite.
+# - Preparaciones v186/v187/v188 dejan de ejecutarse dos veces en arranque.
+# - Botón admin/manual para forzar reparación completa cuando haga falta.
+# =============================================================================
+
+BUILD_ID = "v190_2026_05_14_FAST_LOAD_STARTUP_FIX"
+BUILD_NOTE = "Carga rápida: mantenimiento pesado bajo demanda, caché de mapa por revisión y sin re-clasificar todo en cada rerun"
+VERSION = "Route Path Intelligence v6.2.3 PRO — XRPL Core · Fast Load v190"
+
+RRP_V190_STARTUP_TTL_SECONDS = 900
+RRP_V190_MAP_CACHE_TTL_SECONDS = 20
+
+
+def _rrp_v190_now() -> float:
+    try:
+        return float(_time.time())
+    except Exception:
+        import time
+        return float(time.time())
+
+
+def _rrp_v190_db_counts(conn: sqlite3.Connection) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    for t in ["dynamic_nodes", "dynamic_routes", "connection_proofs", "route_paths", "onchain_watch_targets"]:
+        try:
+            out[t] = int(conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] or 0)
+        except Exception:
+            out[t] = 0
+    return out
+
+
+def _rrp_v190_fast_startup_maintenance(conn: sqlite3.Connection, force: bool = False) -> Dict[str, Any]:
+    """Mantenimiento barato por defecto.
+
+    No ejecuta reclassify_all_dynamic_nodes ni escaneos de cientos de filas en cada
+    rerun. Eso se deja para acciones manuales o una vez cada TTL.
+    """
+    result: Dict[str, Any] = {"mode": "fast", "ran_heavy": False}
+    try:
+        ensure_discovery_tables(conn)
+    except Exception:
+        pass
+    try:
+        ensure_sanitizer_tables(conn)
+    except Exception:
+        pass
+
+    ss = getattr(st, "session_state", {}) if "st" in globals() else {}
+    now = _rrp_v190_now()
+    last = float(ss.get("rrp_v190_last_heavy_maintenance", 0) or 0) if hasattr(ss, "get") else 0.0
+    should_heavy = bool(force or not ss.get("rrp_v190_booted_once") or (now - last > RRP_V190_STARTUP_TTL_SECONDS)) if hasattr(ss, "get") else bool(force)
+
+    if not should_heavy:
+        result["reason"] = "cached_session"
+        return result
+
+    # Ejecutar solo tareas realmente necesarias y acotadas.
+    try:
+        purge_legacy_preconfigured_routes(conn)
+    except Exception:
+        pass
+    # Importante: NO bootstrap_static_node_routes. El mapa debe nacer limpio/documental.
+    # Importante: NO _ensure_static_verifications en cada arranque; ensucia y consume.
+    try:
+        normalize_static_aliases_in_db(conn)
+    except Exception:
+        pass
+    # Reclasificación dinámica ligera: usa la versión v188, pero solo una vez por TTL.
+    try:
+        if callable(globals().get("_rrp_v188_reclassify_existing_nodes")):
+            _rrp_v188_reclassify_existing_nodes(conn)
+    except Exception:
+        pass
+    try:
+        if callable(globals().get("_rrp_v171_seed_watch_targets_from_routes")):
+            _rrp_v171_seed_watch_targets_from_routes(conn)
+    except Exception:
+        pass
+
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    if hasattr(ss, "__setitem__"):
+        ss["rrp_v190_booted_once"] = True
+        ss["rrp_v190_last_heavy_maintenance"] = now
+    result["ran_heavy"] = True
+    result["counts"] = _rrp_v190_db_counts(conn)
+    return result
+
+
+# Cachear elementos dinámicos del mapa para no leer/reclasificar 4-8 veces en el mismo rerun.
+_ORIG_LOAD_DYNAMIC_MAP_ELEMENTS_V190 = globals().get("load_dynamic_map_elements")
+def load_dynamic_map_elements(conn: Optional[sqlite3.Connection] = None):
+    try:
+        c = conn or get_conn()
+        try:
+            rev = _get_map_revision_token(c) if callable(globals().get("_get_map_revision_token")) else "no_rev"
+        except Exception:
+            rev = "no_rev"
+        key = (str(DB_PATH), str(rev), int(_rrp_v190_now() // RRP_V190_MAP_CACHE_TTL_SECONDS))
+        ss = getattr(st, "session_state", None) if "st" in globals() else None
+        if ss is not None:
+            cached = ss.get("rrp_v190_dynamic_map_cache")
+            if isinstance(cached, dict) and cached.get("key") == key:
+                return cached.get("data", ({}, [], []))
+        if callable(_ORIG_LOAD_DYNAMIC_MAP_ELEMENTS_V190):
+            data = _ORIG_LOAD_DYNAMIC_MAP_ELEMENTS_V190(c)
+        else:
+            data = ({}, [], [])
+        if ss is not None:
+            ss["rrp_v190_dynamic_map_cache"] = {"key": key, "data": data}
+        return data
+    except Exception:
+        return ({}, [], [])
+
+
+# Reemplazar reclasificación global pesada por una función TTL-safe si alguna parte vieja la llama.
+_ORIG_RECLASSIFY_ALL_DYNAMIC_NODES_V190 = globals().get("reclassify_all_dynamic_nodes")
+def reclassify_all_dynamic_nodes(conn: sqlite3.Connection, force: bool = False) -> Dict[str, Any]:
+    ss = getattr(st, "session_state", {}) if "st" in globals() else {}
+    now = _rrp_v190_now()
+    last = float(ss.get("rrp_v190_last_reclassify_all", 0) or 0) if hasattr(ss, "get") else 0.0
+    if not force and hasattr(ss, "get") and ss.get("rrp_v190_reclassify_done") and (now - last < RRP_V190_STARTUP_TTL_SECONDS):
+        return {"skipped": True, "reason": "v190_cache"}
+    out: Dict[str, Any] = {"skipped": False}
+    try:
+        if callable(globals().get("_rrp_v188_reclassify_existing_nodes")):
+            out.update(_rrp_v188_reclassify_existing_nodes(conn))
+        elif callable(_ORIG_RECLASSIFY_ALL_DYNAMIC_NODES_V190):
+            r = _ORIG_RECLASSIFY_ALL_DYNAMIC_NODES_V190(conn)
+            if isinstance(r, dict):
+                out.update(r)
+    except Exception as exc:
+        out["error"] = str(exc)
+    try:
+        ss["rrp_v190_reclassify_done"] = True
+        ss["rrp_v190_last_reclassify_all"] = now
+    except Exception:
+        pass
+    return out
+
+
+# Evitar preparaciones pesadas automáticas antiguas. Quedan disponibles bajo demanda.
+def _rrp_v190_manual_full_repair(conn: sqlite3.Connection) -> Dict[str, Any]:
+    stats: Dict[str, Any] = {"started": datetime.now(timezone.utc).isoformat()}
+    for name in [
+        "_rrp_v186_prepare_clean_dynamic_map",
+        "_rrp_v187_prepare_rlusd_issuer_canonical",
+        "_rrp_v188_prepare_dynamic_ontology",
+    ]:
+        try:
+            fn = globals().get(name)
+            if callable(fn):
+                fn()
+                stats[name] = "ok"
+        except Exception as exc:
+            stats[name] = f"error: {exc}"
+    try:
+        reclassify_all_dynamic_nodes(conn, force=True)
+        stats["reclassify"] = "ok"
+    except Exception as exc:
+        stats["reclassify"] = f"error: {exc}"
+    try:
+        if callable(globals().get("_rrp_v171_seed_watch_targets_from_routes")):
+            _rrp_v171_seed_watch_targets_from_routes(conn)
+            stats["watch_targets"] = "ok"
+    except Exception as exc:
+        stats["watch_targets"] = f"error: {exc}"
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    stats["finished"] = datetime.now(timezone.utc).isoformat()
+    return stats
+
+
+# Diagnóstico ligero en sidebar/Diagnóstico si quieres ver si está en modo rápido.
+def _rrp_v190_render_speed_panel(conn: sqlite3.Connection) -> None:
+    try:
+        with st.expander("⚡ Rendimiento / carga rápida v190", expanded=False):
+            c = _rrp_v190_db_counts(conn)
+            st.caption(f"Nodos: {c.get('dynamic_nodes',0)} · Rutas: {c.get('dynamic_routes',0)} · Pruebas: {c.get('connection_proofs',0)} · Paths: {c.get('route_paths',0)} · Targets: {c.get('onchain_watch_targets',0)}")
+            st.caption("El mantenimiento pesado ya no corre en cada recarga. Úsalo solo si ves nodos mal clasificados o rutas antiguas.")
+            if st.button("🛠 Reparación completa ahora", key="rrp_v190_manual_repair_btn"):
+                with st.spinner("Reparando/clasificando una vez…"):
+                    stats = _rrp_v190_manual_full_repair(conn)
+                st.success("Reparación completa terminada.")
+                st.json(stats)
+                st.rerun()
+    except Exception:
+        pass
+
+# Inyectar panel de rendimiento dentro de Diagnóstico si existe render original.
+_ORIG_RENDER_DIAGNOSTICS_V190 = globals().get("render_diagnostics")
+def render_diagnostics(conn: sqlite3.Connection, *args, **kwargs):
+    if callable(_ORIG_RENDER_DIAGNOSTICS_V190):
+        try:
+            _ORIG_RENDER_DIAGNOSTICS_V190(conn, *args, **kwargs)
+        except TypeError:
+            _ORIG_RENDER_DIAGNOSTICS_V190(conn)
+    _rrp_v190_render_speed_panel(conn)
+
+
+
+
+# =============================================================================
+# v191 · DYNAMIC CATEGORY MAP + NODE STATUS COLORS FIX
+# -----------------------------------------------------------------------------
+# Problema: los nodos descubiertos/verificados se dibujaban con el mismo color de
+# capa y muchas cajas fijas heredadas no reflejaban la clasificación real.
+# Solución: mapa por categorías dinámicas, recuadros solo si hay nodos reales,
+# color/contorno por estado (verificado, watch activo, descubierto, pendiente).
+# =============================================================================
+
+BUILD_ID = "v191_2026_05_14_DYNAMIC_CATEGORY_MAP_COLORS_FIX"
+BUILD_NOTE = "Mapa dinámico por categorías: cajas según tipo real de nodo y colores por estado/verificación"
+VERSION = "Route Path Intelligence v6.2.3 PRO — XRPL Core · Dynamic Category Map v191"
+
+RRP_V191_STATUS_COLORS = {
+    "verified": "#22C55E",      # verde fuerte
+    "watch": "#38BDF8",         # azul vivo
+    "discovered": "#F59E0B",    # ámbar
+    "pending": "#94A3B8",       # gris azulado
+    "core": "#3CFF9B",          # verde XRPL
+}
+
+RRP_V191_CATEGORY_META = {
+    "Core XRPL": {"label": "💧 Core XRPL", "color": "#3CFF9B", "icon": "💧"},
+    "XRPL público / observabilidad": {"label": "📡 XRPL público / observabilidad", "color": "#38BDF8", "icon": "📡"},
+    "Wallets / issuers públicos": {"label": "👛 Wallets / issuers públicos", "color": "#22D3EE", "icon": "👛"},
+    "Stablecoins / fiat tokenizado": {"label": "🪙 Stablecoins / fiat tokenizado", "color": "#34D399", "icon": "🪙"},
+    "Tokens / RWA / activos": {"label": "🏦 Tokens / RWA / activos", "color": "#A78BFA", "icon": "🏦"},
+    "Infraestructura institucional": {"label": "🛤 Infraestructura institucional", "color": "#F59E0B", "icon": "🛤"},
+    "Instituciones / Gobierno / CBDC": {"label": "🏛 Instituciones / Gobierno / CBDC", "color": "#FCD34D", "icon": "🏛"},
+    "Puentes / oráculos / datos": {"label": "🌉 Puentes / oráculos / datos", "color": "#FB7185", "icon": "🌉"},
+    "Por investigar": {"label": "🔎 Por investigar", "color": "#94A3B8", "icon": "🔎"},
+}
+
+RRP_V191_CATEGORY_ORDER = [
+    "Core XRPL",
+    "XRPL público / observabilidad",
+    "Wallets / issuers públicos",
+    "Stablecoins / fiat tokenizado",
+    "Tokens / RWA / activos",
+    "Infraestructura institucional",
+    "Instituciones / Gobierno / CBDC",
+    "Puentes / oráculos / datos",
+    "Por investigar",
+]
+
+
+def _rrp_v191_norm_text(x: Any) -> str:
+    try:
+        return _norm_key(x)
+    except Exception:
+        return str(x or "").strip().lower()
+
+
+def _rrp_v191_category_for_node(name: Any, meta: Optional[Dict[str, Any]] = None) -> str:
+    """Clasificación visual dinámica. No depende de cajas fijas antiguas."""
+    meta = dict(meta or {})
+    n_raw = str(name or "").strip()
+    layer_raw = str(meta.get("layer") or "")
+    blob = _rrp_v191_norm_text(" ".join([n_raw, layer_raw, str(meta.get("summary") or ""), str(meta.get("source_url") or "")]))
+
+    if _rrp_v191_norm_text(n_raw) in {"xrpl", "xrp ledger"}:
+        return "Core XRPL"
+
+    # Direcciones públicas y emisores.
+    if re.search(r"\br[1-9A-HJ-NP-Za-km-z]{25,34}\b", n_raw) or "walletxrpl" in blob or "issuer" in blob or "emisor" in blob:
+        return "Wallets / issuers públicos"
+    if re.search(r"\b0x[a-fA-F0-9]{40}\b", n_raw) or "evm wallet" in blob or "stellar wallet" in blob or "tron wallet" in blob:
+        return "Wallets / issuers públicos"
+
+    # Activos monetarios/tokenizados.
+    if any(k in blob for k in ["rlusd", "usdc", "usdt", "eurc", "pyusd", "stablecoin", "stablecoins", "fiat tokenizado", "tokenized fiat", "issued currency", "issued currencies"]):
+        return "Stablecoins / fiat tokenizado"
+    if any(k in blob for k in ["rwa", "tokenized asset", "tokenised asset", "tokenized fund", "fondo tokenizado", "treasury tokenized", "tokenized treasury", "buidl", "bond tokenized", "real world asset"]):
+        return "Tokens / RWA / activos"
+
+    # Zonas públicas XRPL/observabilidad.
+    if any(k in blob for k in ["dex", "amm", "orderbook", "order book", "trustline", "trustlines", "trust line", "ripplestate", "large transfer", "large transfers", "clusters", "public gateway", "issued currencies", "fungible tokens", "payment", "payments", "onchain", "on chain"]):
+        return "XRPL público / observabilidad"
+
+    # Infraestructura/rails/institucional privado.
+    if any(k in blob for k in ["ripplenet", "ripple payments", "ripple payment", "ripple cbdc platform", "treasury", "gtreasury", "swift", "fednow", "fedwire", "sepa", "ach", "iso 20022", "rail", "payment rail", "custody", "metaco", "hidden road", "prime brokerage", "clearing", "dtcc", "nscc", "settlement"]):
+        return "Infraestructura institucional"
+
+    # Gobierno/bancos/CBDC/reguladores.
+    if any(k in blob for k in ["central bank", "banco central", "cbdc", "mdbc", "government", "gobierno", "regulator", "regulador", "ministerio", "mintic", "federal reserve", "european central bank", "people s bank", "pboc", "bank of", "banco de"]):
+        return "Instituciones / Gobierno / CBDC"
+
+    # Interoperabilidad/datos/oráculos.
+    if any(k in blob for k in ["wormhole", "axelar", "layerzero", "ccip", "chainlink", "oracle", "proof of reserve", "interoperability", "interoperabilidad", "bridge", "puente", "data provider", "analytics"]):
+        return "Puentes / oráculos / datos"
+
+    # Si la ontología v188 sabe algo, usar su capa como pista secundaria.
+    lay = _rrp_v191_norm_text(layer_raw)
+    if lay in {"walletxrpl", "issuerxrpl", "wallet", "issuer"}:
+        return "Wallets / issuers públicos"
+    if lay in {"stablecoins", "stablecoin", "fiat tokenizado"}:
+        return "Stablecoins / fiat tokenizado"
+    if lay in {"tokenizacionrwa", "assetmgmt"}:
+        return "Tokens / RWA / activos"
+    if lay in {"privado", "ripple", "redprivada", "clearing", "proveedor", "iso20022"}:
+        return "Infraestructura institucional"
+    if lay in {"cbdc", "gobierno", "banca am", "banca eu", "banca ap"}:
+        return "Instituciones / Gobierno / CBDC"
+    if lay in {"puente", "dataoracles"}:
+        return "Puentes / oráculos / datos"
+    return "Por investigar"
+
+
+def _rrp_v191_node_statuses(conn: Optional[sqlite3.Connection]) -> Dict[str, str]:
+    """Estado visual por nodo: verified > watch > discovered > pending."""
+    statuses: Dict[str, str] = {"XRPL": "core"}
+    if conn is None:
+        return statuses
+    try:
+        ensure_discovery_tables(conn)
+    except Exception:
+        pass
+    # Nodos descubiertos.
+    try:
+        for (name,) in conn.execute("SELECT name FROM dynamic_nodes").fetchall():
+            nm = str(name or "").strip()
+            if nm:
+                statuses.setdefault(nm, "discovered")
+    except Exception:
+        pass
+    # Targets de vigilancia vivos.
+    try:
+        if callable(globals().get("_rrp_v171_ensure_watch_tables")):
+            _rrp_v171_ensure_watch_tables(conn)
+        for src, dst, subject, status in conn.execute("SELECT src,dst,subject,status FROM onchain_watch_targets WHERE COALESCE(status,'active')!='ignore'").fetchall():
+            for nm in [src, dst, subject]:
+                nm = str(nm or "").strip()
+                if nm and statuses.get(nm) not in {"verified", "core"}:
+                    statuses[nm] = "watch"
+    except Exception:
+        pass
+    # Connection proofs verificadas.
+    try:
+        for a, b, conf in conn.execute("SELECT node_a,node_b,confidence FROM connection_proofs WHERE COALESCE(sanitizer_status,'active')!='quarantined'").fetchall():
+            if float(conf or 0) >= 0.60:
+                for nm in [a, b]:
+                    nm = str(nm or "").strip()
+                    if nm and statuses.get(nm) != "core":
+                        statuses[nm] = "verified"
+    except Exception:
+        pass
+    # Verificaciones manuales.
+    try:
+        for node, connected in conn.execute("SELECT node,connected FROM node_verifications").fetchall():
+            if int(connected or 0) == 1:
+                nm = str(node or "").strip()
+                if nm and statuses.get(nm) != "core":
+                    statuses[nm] = "verified"
+    except Exception:
+        pass
+    return statuses
+
+
+def _rrp_v191_status_label(status: str) -> str:
+    return {
+        "core": "Núcleo XRPL",
+        "verified": "Verificado / con prueba",
+        "watch": "Vigilancia activa",
+        "discovered": "Descubierto pendiente",
+        "pending": "Pendiente",
+    }.get(str(status or "pending"), "Pendiente")
+
+
+def _rrp_v191_route_kind_group(kind: Any) -> str:
+    k = str(kind or "").strip().lower()
+    if k in {"verified", "official", "official_protocol_feature", "official_stablecoin_on_xrpl", "official_issuer_documentation", "technical_protocol_dependency", "dynamic_route_evidence", "documented_route", "source_route_expansion", "verified_documentary", "primary_source", "official_partner", "official_document"}:
+        return "documented"
+    if "watch" in k or "infer" in k or k in {"onchain_watch", "public_trace_watch", "stablecoin_watch", "transitive_watch", "deductive_watch", "candidate", "review"}:
+        return "watch"
+    return "other"
+
+
+def _rrp_v191_box_layout(categories: List[str]) -> Dict[str, Dict[str, float]]:
+    order = [c for c in RRP_V191_CATEGORY_ORDER if c in set(categories)]
+    # Si hay categorías no previstas, al final.
+    order += [c for c in categories if c not in order]
+    layout: Dict[str, Dict[str, float]] = {}
+    x0 = -8.6
+    w = 1.7
+    gap = 0.20
+    for i, cat in enumerate(order):
+        left = x0 + i * (w + gap)
+        layout[cat] = {"x0": left, "x1": left + w, "y0": -3.25, "y1": 3.05, "xc": left + w / 2}
+    return layout
+
+
+def _rrp_v191_reposition_nodes_for_category_map(all_nodes: Dict[str, Dict[str, Any]], conn: Optional[sqlite3.Connection]) -> Dict[str, Dict[str, Any]]:
+    """Devuelve copia de nodos con pos calculada por categoría dinámica."""
+    nodes = {str(k): dict(v or {}) for k, v in dict(all_nodes or {}).items() if str(k or "").strip()}
+    # Asegurar XRPL aunque el mapa venga vacío.
+    nodes.setdefault("XRPL", {"pos": (0, 0), "layer": "Público", "icon": "💧", "confidence": 1.0, "summary": "Núcleo público XRPL"})
+    for nm, meta in nodes.items():
+        cat = _rrp_v191_category_for_node(nm, meta)
+        meta["rrp_category"] = cat
+        meta["layer"] = cat
+        if not meta.get("icon") or meta.get("icon") in {"?", "•", "🔎"}:
+            meta["icon"] = RRP_V191_CATEGORY_META.get(cat, {}).get("icon", "🔎")
+
+    cats = []
+    for meta in nodes.values():
+        c = meta.get("rrp_category") or "Por investigar"
+        if c not in cats:
+            cats.append(c)
+    layout = _rrp_v191_box_layout(cats)
+    by_cat: Dict[str, List[str]] = defaultdict(list)
+    for nm, meta in nodes.items():
+        by_cat[str(meta.get("rrp_category") or "Por investigar")].append(nm)
+    for cat, names in by_cat.items():
+        names.sort(key=lambda n: (0 if n == "XRPL" else 1, n.lower()))
+        box = layout.get(cat) or {"xc": 0.0, "y1": 3.0}
+        max_per_col = 7
+        for i, nm in enumerate(names):
+            col = i // max_per_col
+            row = i % max_per_col
+            x = float(box["xc"]) + (col * 0.34)
+            y = float(box["y1"]) - 0.72 - row * 0.74
+            nodes[nm]["pos"] = (x, y)
+    return nodes
+
+
+_ORIG_MAKE_MAP_V191 = globals().get("make_map")
+def make_map(row: pd.Series,
+             title: str = "Mapa dinámico: nodos clasificados por categoría y estado",
+             watched: Optional[pd.DataFrame] = None,
+             conn: Optional[sqlite3.Connection] = None,
+             focus_node: Optional[str] = None,
+             route_filter: str = "all") -> go.Figure:
+    """Mapa v191: cajas dinámicas por categoría + color/contorno por estado real."""
+    fig = go.Figure()
+    focus_node = str(focus_node).strip() if focus_node else None
+
+    try:
+        dyn_nodes, dyn_routes, _ = load_dynamic_map_elements(conn) if conn is not None else ({}, [], [])
+    except Exception:
+        dyn_nodes, dyn_routes = ({}, [])
+
+    base_nodes = dict(NODES or {})
+    # El mapa limpio debe tener XRPL como único núcleo fijo. Si quedan fijos viejos, se ignoran salvo XRPL.
+    if "XRPL" in base_nodes:
+        base_nodes = {"XRPL": base_nodes["XRPL"]}
+    else:
+        base_nodes = {"XRPL": {"pos": (0, 0), "layer": "Público", "icon": "💧", "confidence": 1.0}}
+
+    all_nodes = {**base_nodes, **dict(dyn_nodes or {})}
+    all_nodes = _rrp_v191_reposition_nodes_for_category_map(all_nodes, conn)
+    statuses = _rrp_v191_node_statuses(conn)
+
+    # Rutas: solo las que tienen extremos en nodos actuales.
+    all_routes = list(dyn_routes or [])
+    # Fallback por connection_proofs: si la prueba existe, debe verse como ruta documental.
+    try:
+        if conn is not None:
+            for a, b, pdata, conf in conn.execute("SELECT node_a,node_b,proof_data,confidence FROM connection_proofs WHERE COALESCE(sanitizer_status,'active')!='quarantined'").fetchall():
+                if a and b:
+                    label = "Documental guardada"
+                    try:
+                        pdx = json.loads(pdata or "{}")
+                        label = str(pdx.get("title") or pdx.get("claim") or pdx.get("summary") or label)
+                    except Exception:
+                        pass
+                    all_routes.append((str(a), str(b), "verified", "institutional_route_score", label))
+    except Exception:
+        pass
+
+    # Filtrar rutas por mapa.
+    if route_filter == "confirmed":
+        all_routes = [r for r in all_routes if _rrp_v191_route_kind_group(r[2]) == "documented"]
+    elif route_filter == "surveillance":
+        all_routes = [r for r in all_routes if _rrp_v191_route_kind_group(r[2]) in {"watch", "documented"}]
+
+    # En foco: quedarnos con rutas directas del nodo.
+    if focus_node:
+        all_routes = [r for r in all_routes if str(r[0]).strip() == focus_node or str(r[1]).strip() == focus_node]
+        keep = {focus_node}
+        for r in all_routes:
+            keep.add(str(r[0]).strip()); keep.add(str(r[1]).strip())
+        all_nodes = {k: v for k, v in all_nodes.items() if k in keep}
+        all_nodes = _rrp_v191_reposition_nodes_for_category_map(all_nodes, conn)
+
+    # Categorías pobladas y cajas.
+    cats = []
+    for meta in all_nodes.values():
+        c = str(meta.get("rrp_category") or _rrp_v191_category_for_node("", meta))
+        if c not in cats:
+            cats.append(c)
+    box_layout = _rrp_v191_box_layout(cats)
+    for cat, box in box_layout.items():
+        m = RRP_V191_CATEGORY_META.get(cat, {"label": cat, "color": "#94A3B8"})
+        col = str(m.get("color") or "#94A3B8")
+        fig.add_shape(
+            type="rect", x0=box["x0"], y0=box["y0"], x1=box["x1"], y1=box["y1"],
+            line=dict(color=col, width=1.5), fillcolor="rgba(15,23,42,0.42)", layer="below"
+        )
+        fig.add_annotation(
+            x=(box["x0"] + box["x1"]) / 2, y=box["y1"] + 0.08,
+            text=f"<b>{html.escape(str(m.get('label') or cat))}</b>",
+            showarrow=False, font=dict(size=10, color="#FFFFFF"),
+            bgcolor="rgba(7,17,31,0.86)", bordercolor=col, borderwidth=1, borderpad=4,
+        )
+
+    # Rutas.
+    route_seen = set()
+    for r in all_routes:
+        try:
+            src, dst, kind, signal, label = r[:5]
+        except Exception:
+            continue
+        src = str(src or "").strip(); dst = str(dst or "").strip(); kind = str(kind or "").strip()
+        if not src or not dst or src not in all_nodes or dst not in all_nodes:
+            continue
+        key = tuple(sorted([src, dst])) + (kind,)
+        if key in route_seen:
+            continue
+        route_seen.add(key)
+        x0, y0 = all_nodes[src]["pos"]; x1, y1 = all_nodes[dst]["pos"]
+        group = _rrp_v191_route_kind_group(kind)
+        if group == "documented":
+            color = "#22C55E"; dash = "solid"; width = 3.1
+        elif group == "watch":
+            color = "#38BDF8"; dash = "dot"; width = 2.4
+        else:
+            color = "#94A3B8"; dash = "dash"; width = 1.8
+        mx, my = (x0 + x1) / 2, (y0 + y1) / 2
+        curve = 0.10 if y1 >= y0 else -0.10
+        fig.add_trace(go.Scatter(
+            x=[x0, mx, x1], y=[y0, my + curve, y1], mode="lines",
+            line=dict(width=width, color=color, dash=dash), showlegend=False,
+            hoverinfo="text",
+            hovertext=(f"<b>{html.escape(src)} → {html.escape(dst)}</b><br>"
+                       f"Tipo: {html.escape(kind)}<br>Estado visual: {group}<br>"
+                       f"{html.escape(str(label or 'Ruta'))}"),
+            hoverlabel=dict(bgcolor="#1e293b", font=dict(color="#FFFFFF", size=12), bordercolor=color),
+        ))
+        fig.add_annotation(x=x1, y=y1, ax=mx, ay=my + curve,
+                           xref="x", yref="y", axref="x", ayref="y",
+                           showarrow=True, arrowhead=3, arrowsize=0.9,
+                           arrowwidth=max(1, width / 2.4), arrowcolor=color)
+
+    # Nodos.
+    xs=[]; ys=[]; texts=[]; marker_colors=[]; sizes=[]; line_colors=[]; line_widths=[]; hovers=[]; custom=[]
+    for name, meta in all_nodes.items():
+        x, y = meta.get("pos", (0, 0))
+        cat = str(meta.get("rrp_category") or _rrp_v191_category_for_node(name, meta))
+        status = statuses.get(name, "discovered" if name != "XRPL" else "core")
+        cat_col = str(RRP_V191_CATEGORY_META.get(cat, {}).get("color") or "#94A3B8")
+        status_col = RRP_V191_STATUS_COLORS.get(status, "#94A3B8")
+        icon = str(meta.get("icon") or RRP_V191_CATEGORY_META.get(cat, {}).get("icon") or "🔎")
+        conf = float(meta.get("confidence") or 0.0) if str(meta.get("confidence") or "").replace('.','',1).isdigit() else 0.0
+        xs.append(x); ys.append(y); custom.append(name)
+        texts.append(f"{icon}<br>{html.escape(name)}")
+        marker_colors.append(cat_col)
+        line_colors.append(status_col)
+        line_widths.append(5.0 if status in {"verified", "core"} else 3.0 if status == "watch" else 2.0)
+        sizes.append(68 if name == "XRPL" else 54 if status == "verified" else 49 if status == "watch" else 44)
+        hovers.append(
+            f"<b>{html.escape(name)}</b><br>"
+            f"Categoría: {html.escape(cat)}<br>"
+            f"Estado: {_rrp_v191_status_label(status)}<br>"
+            f"Confianza: {conf*100:.0f}%<br>"
+            f"{html.escape(str(meta.get('summary') or '')[:280])}<br>"
+            f"<i>Click para abrir/focalizar este nodo</i>"
+        )
+
+    if xs:
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode="markers+text",
+            marker=dict(size=sizes, color=marker_colors, opacity=0.96,
+                        line=dict(width=line_widths, color=line_colors)),
+            text=texts, textposition="middle center",
+            textfont=dict(size=8, color="#FFFFFF", family="Arial Black"),
+            customdata=custom, hoverinfo="text", hovertext=hovers,
+            name="Nodos clasificados", showlegend=False,
+            hoverlabel=dict(bgcolor="#1e293b", font=dict(color="#FFFFFF", size=12), bordercolor="#5AD7FF"),
+        ))
+
+    # Leyenda visual de estados.
+    legend_items = [
+        ("core", "Núcleo"), ("verified", "Verificado"), ("watch", "Vigilancia"), ("discovered", "Descubierto"), ("pending", "Pendiente")
+    ]
+    lx0 = min([b["x0"] for b in box_layout.values()] or [-8.6])
+    ly = -3.62
+    for i, (stt, lab) in enumerate(legend_items):
+        col = RRP_V191_STATUS_COLORS.get(stt, "#94A3B8")
+        fig.add_trace(go.Scatter(x=[lx0 + i*1.35], y=[ly], mode="markers+text",
+                                 marker=dict(size=18, color="#0F172A", line=dict(color=col, width=4)),
+                                 text=[lab], textposition="middle right", textfont=dict(size=10, color="#E2E8F0"),
+                                 hoverinfo="skip", showlegend=False))
+
+    if focus_node:
+        fig.add_annotation(xref="paper", yref="paper", x=0.0, y=1.08, xanchor="left",
+                           text=f"<b>🔍 Foco:</b> {html.escape(focus_node)} · rutas directas visibles",
+                           showarrow=False, bgcolor="rgba(14,165,233,0.75)", bordercolor="#5AD7FF",
+                           font=dict(size=12, color="#FFFFFF"), borderpad=5)
+    else:
+        fig.add_annotation(xref="paper", yref="paper", x=0.0, y=1.08, xanchor="left",
+                           text=("<b>🗂 Mapa por categorías dinámicas:</b> "
+                                 "cada nodo se coloca por tipo real; el borde indica estado "
+                                 "(verde verificado, azul vigilancia, ámbar descubierto, gris pendiente)."),
+                           showarrow=False, bgcolor="rgba(15,23,42,0.86)", bordercolor="rgba(255,255,255,0.18)",
+                           font=dict(size=11, color="#E2E8F0"), borderpad=5)
+
+    xmins = [b["x0"] for b in box_layout.values()] or [-9]
+    xmaxs = [b["x1"] for b in box_layout.values()] or [9]
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=22, color="#FFFFFF")),
+        template="plotly_dark", paper_bgcolor="#07111f", plot_bgcolor="#07111f",
+        height=820, margin=dict(l=20, r=20, t=105, b=45),
+        xaxis=dict(visible=False, range=[min(xmins)-0.35, max(xmaxs)+0.55]),
+        yaxis=dict(visible=False, range=[-3.95, 3.55]),
+        font=dict(color="#FFFFFF"), clickmode="event+select", dragmode="pan",
+        hoverlabel=dict(bgcolor="#1e293b", font=dict(color="#FFFFFF", size=12)),
+    )
+    try:
+        rev = _get_map_revision_token(conn) if conn is not None and callable(globals().get("_get_map_revision_token")) else "static"
+        fig.update_layout(datarevision=rev, uirevision=f"rrp_v191_category_map_{route_filter}_{rev}")
+    except Exception:
+        pass
+    return fig
+
+
+def _rrp_v191_render_category_map_help() -> None:
+    try:
+        st.markdown("""
+<div style='border:1px solid rgba(56,189,248,.35);border-radius:14px;padding:12px 14px;background:rgba(15,23,42,.72);margin:.35rem 0 .85rem 0'>
+  <b>🗂 Mapa dinámico v191</b><br>
+  Los recuadros ya no son cajas fijas heredadas: se crean según las categorías reales de los nodos descubiertos.
+  El <b>color del relleno</b> indica la categoría; el <b>borde</b> indica el estado:
+  <span style='color:#22C55E;font-weight:800'>verde = verificado</span>,
+  <span style='color:#38BDF8;font-weight:800'>azul = vigilancia viva</span>,
+  <span style='color:#F59E0B;font-weight:800'>ámbar = descubierto</span>,
+  <span style='color:#94A3B8;font-weight:800'>gris = pendiente</span>.
+</div>
+""", unsafe_allow_html=True)
+    except Exception:
+        pass
+
+# Insertar ayuda visual justo antes del mapa si main/render la llama desde una pestaña.
+_ORIG_ST_PLOTLY_CHART_V191 = getattr(st, "plotly_chart", None) if "st" in globals() else None
+# No envolvemos st.plotly_chart para evitar duplicar ayuda en todos los gráficos; el mapa ya lleva su leyenda interna.
 
 # Ejecutar main al final real del archivo, con todos los parches cargados.
 if __name__ == "__main__":
-    _rrp_v186_prepare_clean_dynamic_map()
-    _rrp_v187_prepare_rlusd_issuer_canonical()
-    _rrp_v188_prepare_dynamic_ontology()
     main()
