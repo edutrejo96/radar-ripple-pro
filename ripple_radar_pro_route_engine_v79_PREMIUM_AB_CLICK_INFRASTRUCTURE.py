@@ -22133,6 +22133,19 @@ def main() -> None:
         else:
             st.caption("Haz clic en cualquier nodo del mapa para ver solo sus rutas.")
 
+        # v192: kwargs locales del renderizador rápido de mapas.
+        # En v190/v191 se llamaba make_map(..., **_map_kwargs) pero esas
+        # variables no estaban definidas dentro de main(), provocando NameError.
+        try:
+            _map_rev = _get_map_revision_token(conn) if callable(globals().get("_get_map_revision_token")) else str(int(_time.time()))
+        except Exception:
+            _map_rev = str(int(_time.time()))
+        _map_kwargs = {
+            "watched": watched_wallets if "watched_wallets" in locals() else None,
+            "conn": conn,
+            "focus_node": focused,
+        }
+
         # v190: antes st.tabs renderizaba los 3 mapas a la vez en cada rerun.
         # Eso triplicaba make_map(), load_dynamic_map_elements(), Plotly y filtros.
         # Ahora solo se pinta la vista elegida; el resto no se calcula hasta seleccionarlo.
@@ -38049,9 +38062,9 @@ def render_diagnostics(conn: sqlite3.Connection, *args, **kwargs):
 # color/contorno por estado (verificado, watch activo, descubierto, pendiente).
 # =============================================================================
 
-BUILD_ID = "v191_2026_05_14_DYNAMIC_CATEGORY_MAP_COLORS_FIX"
-BUILD_NOTE = "Mapa dinámico por categorías: cajas según tipo real de nodo y colores por estado/verificación"
-VERSION = "Route Path Intelligence v6.2.3 PRO — XRPL Core · Dynamic Category Map v191"
+BUILD_ID = "v192_2026_05_14_MAP_KWARGS_RUNTIME_FIX"
+BUILD_NOTE = "Fix runtime: define kwargs/revision for fast single-map renderer + dynamic category colors"
+VERSION = "Route Path Intelligence v6.2.3 PRO — XRPL Core · Dynamic Category Map v192"
 
 RRP_V191_STATUS_COLORS = {
     "verified": "#22C55E",      # verde fuerte
